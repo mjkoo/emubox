@@ -1,5 +1,10 @@
 # Design section 4: base system. Boot, graphics, audio, power, no sleep.
-{ lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 {
   boot = {
     loader.systemd-boot = {
@@ -36,8 +41,27 @@
     enable = true;
     alsa.enable = true;
     pulse.enable = true;
-    # TODO(design 4): pin the HDMI sink as default.
+    # HDMI is the default sink by declaration: WirePlumber has no "default
+    # sink by name" setting, so the HDMI sink's session priority is raised
+    # above every other ALSA sink (they default to 600-1000; 1500 is the
+    # ceiling WirePlumber advises), and restoring a remembered choice is off
+    # so a fresh root or a re-plugged cable cannot route audio elsewhere.
+    wireplumber.extraConfig."51-emubox-hdmi-default" = {
+      "monitor.alsa.rules" = [
+        {
+          matches = [ { "node.name" = "~alsa_output.pci-.*hdmi.*"; } ];
+          actions.update-props."priority.session" = 1500;
+        }
+      ];
+      "wireplumber.settings"."node.restore-default-targets" = false;
+    };
   };
+
+  # Bounded and persistent: /var/log is on the persisted list.
+  services.journald.extraConfig = ''
+    SystemMaxUse=256M
+    MaxRetentionSec=1month
+  '';
 
   zramSwap.enable = true;
   services.fstrim.enable = true;
@@ -55,8 +79,35 @@
   };
   systemd.settings.Manager.RuntimeWatchdogSec = "30s";
 
-  networking.networkmanager.enable = true;
-  # TODO(design 4): declared WiFi connection with the PSK from secrets.
+  networking.networkmanager = {
+    enable = true;
+    # The family WiFi as a declared profile. The SSID and PSK are
+    # substituted at service start from the sops-rendered env file, so the
+    # generated .nmconnection lives on /run and neither value is in the
+    # store. Wired links need no profile: NetworkManager's default DHCP
+    # handling covers the install and any later cable.
+    ensureProfiles = {
+      environmentFiles = [ config.sops.templates."wifi.env".path ];
+      profiles.family-wifi = {
+        connection = {
+          id = "family-wifi";
+          type = "wifi";
+          autoconnect = true;
+        };
+        wifi = {
+          mode = "infrastructure";
+          ssid = "$WIFI_SSID";
+        };
+        wifi-security = {
+          key-mgmt = "wpa-psk";
+          psk = "$WIFI_PSK";
+        };
+        ipv4.method = "auto";
+        ipv6.method = "auto";
+      };
+    };
+  };
+  # On, with nothing opened: every service that listens binds to loopback.
   networking.firewall.enable = true;
 
   nix = {

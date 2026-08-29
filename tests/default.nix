@@ -37,6 +37,10 @@ let
   # Python literal from a Nix value (strings, lists and attrsets only).
   py = builtins.toJSON;
 
+  # The search path WirePlumber's user service reads its config from; the
+  # nixpkgs module passes config packages through XDG_DATA_DIRS.
+  wireplumberDataDirs = lib.splitString ":" config.systemd.user.services.wireplumber.environment.XDG_DATA_DIRS;
+
   # Where a declared secret lands and with what owner and mode, as
   # modules/secrets declares it.
   secretFacts =
@@ -62,6 +66,21 @@ in
   # a dangling link into /persist and sshd's key generation would fail on
   # every run. sshd is loopback-only and nothing here asserts on it.
   services.openssh.enable = lib.mkForce false;
+
+  # Nothing listens on the LAN: the firewall opens no port on any interface.
+  # Checked at evaluation, so a module that opens one fails the build.
+  assertions = [
+    {
+      assertion =
+        with config.networking.firewall;
+        allowedTCPPorts == [ ]
+        && allowedUDPPorts == [ ]
+        && allowedTCPPortRanges == [ ]
+        && allowedUDPPortRanges == [ ]
+        && interfaces == { };
+      message = "networking.firewall opens a port; the emubox firewall must open none (networking spec)";
+    }
+  ];
 
   disko.tests.extraChecks = ''
     # The harness itself only waits for local-fs.target; every boot phase
@@ -175,5 +194,64 @@ in
         machine.wait_until_tty_matches("2", "Password: ")
         machine.send_chars(${py values.password} + "\n")
         machine.wait_until_tty_matches("2", r"admin@.*\$")
+
+    # --- networking: the declaration is proven -------------------------------
+
+    with subtest("family-wifi is listed, with the SSID and PSK from the test secret"):
+        machine.wait_for_unit("NetworkManager-ensure-profiles.service")
+        machine.succeed("nmcli connection show family-wifi")
+        conn = machine.succeed(
+            "cat /run/NetworkManager/system-connections/family-wifi.nmconnection"
+        )
+        assert "ssid=" + ${py values.ssid} in conn.replace(" ", ""), conn
+        assert "psk=" + ${py values.psk} in conn.replace(" ", ""), conn
+
+    with subtest("Nothing listens on the LAN"):
+        def local_address(line):
+            # ss -H columns: State Recv-Q Send-Q Local-Address:Port Peer ...
+            return line.split()[3]
+
+        def is_loopback(addr):
+            return addr.startswith("127.") or addr.startswith("[::1]:")
+
+        for line in machine.succeed("ss -ltnH").splitlines():
+            assert is_loopback(local_address(line)), f"TCP listener on the LAN: {line}"
+        for line in machine.succeed("ss -lunH").splitlines():
+            addr = local_address(line)
+            # The DHCP clients (v4: 68, v6: 546) are the one allowed exception.
+            if addr.rsplit(":", 1)[1] in ("68", "546"):
+                continue
+            assert is_loopback(addr), f"UDP listener on the LAN: {line}"
+
+    # --- base-system ---------------------------------------------------------
+
+    with subtest("WirePlumber HDMI-default fragment is on the daemon's config path"):
+        fragment = "wireplumber/wireplumber.conf.d/51-emubox-hdmi-default.conf"
+        found = [
+            d for d in ${py wireplumberDataDirs}
+            if machine.execute(f"test -e {d}/{fragment}")[0] == 0
+        ]
+        assert found, "fragment not found on XDG_DATA_DIRS"
+        content = machine.succeed(f"cat {found[0]}/{fragment}")
+        assert "priority.session" in content and "node.restore-default-targets" in content, content
+
+    with subtest("Hygiene timers are active and swap is memory-backed"):
+        machine.succeed("systemctl is-active nix-gc.timer nix-optimise.timer fstrim.timer")
+        swap = machine.succeed("swapon --show=NAME --noheadings")
+        assert "zram" in swap, swap
+
+    with subtest("Runtime watchdog is 30 s"):
+        assert machine.succeed("systemctl show -p RuntimeWatchdogUSec --value").strip() == "30s"
+
+    with subtest("Suspend is refused"):
+        machine.fail("systemctl suspend")
+
+    with subtest("Time zone is America/New_York"):
+        assert machine.succeed("timedatectl show -p Timezone --value").strip() == "America/New_York"
+
+    with subtest("journald is size-capped and time-capped"):
+        conf = machine.succeed("systemd-analyze cat-config systemd/journald.conf")
+        assert "SystemMaxUse=256M" in conf, conf
+        assert "MaxRetentionSec=1month" in conf, conf
   '';
 }

@@ -1,12 +1,20 @@
 # Design section 11: Plasma 6 for the admin, mode switch, recovery specialisation.
-{ lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 {
   services.desktopManager.plasma6.enable = true;
 
   users.users.admin = {
     isNormalUser = true;
     extraGroups = [ "wheel" ];
-    # TODO(design 4): hashedPasswordFile from secrets; SSH key below.
+    # The hash lives in the secrets file and is decrypted before users are
+    # created (modules/secrets), so a fresh root gets the password at boot.
+    hashedPasswordFile = config.sops.secrets.admin_password_hash.path;
+    # TODO(design 12): the admin's SSH public key for the tunnel.
     openssh.authorizedKeys.keys = [ ];
   };
   security.sudo.wheelNeedsPassword = false;

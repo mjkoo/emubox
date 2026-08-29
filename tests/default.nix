@@ -36,8 +36,33 @@ let
 
   # Python literal from a Nix value (strings, lists and attrsets only).
   py = builtins.toJSON;
+
+  # Where a declared secret lands and with what owner and mode, as
+  # modules/secrets declares it.
+  secretFacts =
+    name:
+    let
+      s = config.sops.secrets.${name};
+    in
+    {
+      inherit (s) path mode;
+      owner = if s.owner != null then s.owner else "root";
+    };
 in
 {
+  # Test secrets (design D7): the committed test host key decrypts
+  # secrets/test.yaml, which holds the values from values.nix. Both mkForce,
+  # because modules/secrets defines the same options for the box and a plain
+  # definition would conflict or merge the real key path back in.
+  # sops.age.keyFile stays null.
+  sops.defaultSopsFile = lib.mkForce ../secrets/test.yaml;
+  sops.age.sshKeyPaths = lib.mkForce [ ./test_host_ed25519_key ];
+
+  # No host key is injected in the VM, so /etc/ssh/ssh_host_ed25519_key is
+  # a dangling link into /persist and sshd's key generation would fail on
+  # every run. sshd is loopback-only and nothing here asserts on it.
+  services.openssh.enable = lib.mkForce false;
+
   disko.tests.extraChecks = ''
     # The harness itself only waits for local-fs.target; every boot phase
     # starts by waiting for multi-user.target.
@@ -121,5 +146,34 @@ in
 
     with subtest("After a power cut the root is wiped and no repair prompt held the boot"):
         machine.fail("test -e /root/marker")
+
+    # --- secrets: decrypt in the VM ------------------------------------------
+    # Expected content is compared in Python, never through a guest-shell
+    # grep: the yescrypt hash's `$` fragments would expand there and match
+    # vacuously. The store is not grepped from inside the VM; that is the
+    # builder-side closure-no-secrets check.
+
+    with subtest("Secrets exist on the runtime path with the declared mode and content"):
+        for secret, value in [
+            (${py (secretFacts "admin_password_hash")}, ${py values.hash}),
+            (${py (secretFacts "wifi_ssid")}, ${py values.ssid}),
+            (${py (secretFacts "wifi_psk")}, ${py values.psk}),
+        ]:
+            path = secret["path"]
+            assert path.startswith("/run/secrets"), path
+            out = machine.succeed(f"stat -c '%a %U' {path}").strip()
+            expected = f"{int(secret['mode'], 8):o} {secret['owner']}"
+            assert out == expected, f"{path}: {out!r} != {expected!r}"
+            assert machine.succeed(f"cat {path}").strip() == value, path
+
+    with subtest("admin logs in on tty2 with the test password"):
+        # tty1 is the SDDM autologin's Wayland compositor, so switching VTs
+        # needs the ctrl-alt chord; a bare alt-f2 goes to the compositor.
+        machine.send_key("ctrl-alt-f2")
+        machine.wait_until_tty_matches("2", "login: ")
+        machine.send_chars("admin\n")
+        machine.wait_until_tty_matches("2", "Password: ")
+        machine.send_chars(${py values.password} + "\n")
+        machine.wait_until_tty_matches("2", r"admin@.*\$")
   '';
 }

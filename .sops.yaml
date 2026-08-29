@@ -1,12 +1,27 @@
-# TODO(secrets): fill both recipients, then `sops secrets/secrets.yaml`.
-#   admin: age-keygen, or ssh-to-age < ~/.ssh/id_ed25519.pub
-#   host:  ssh-to-age < /persist/etc/ssh/ssh_host_ed25519_key.pub (on the box)
+# Recipients and creation rules for the two sops files under secrets/.
+#
+# sops uses the first rule whose path_regex matches, so each rule names its
+# file exactly; a broad `secrets/.*` would encrypt test.yaml to the box's
+# recipients.
+#
+#   admin:  the admin's age key, ~/.config/sops/age/keys.txt on the admin's
+#           machine (age-keygen; the default location sops reads)
+#   emubox: the box's pre-generated SSH host key converted with ssh-to-age
+#           (`ssh-to-age < ~/.config/emubox/ssh_host_ed25519_key.pub`); the
+#           install places the key under /persist (README, Install)
+#   test:   the committed VM test host key, `ssh-to-age <
+#           tests/test_host_ed25519_key.pub`; recipient of test.yaml only
 keys:
-  - &admin age1PLACEHOLDER_ADMIN
-  - &emubox age1PLACEHOLDER_HOST
+  - &admin age1cqqyucxj533q5npzwtdpkr84ywkn3xanggslr8v6jrntxe9n7ffq4wgzfl
+  - &emubox age1lpgz7ezh7rv9nfz7q2rgjylx7m20yzd7ufdf6c6rwqt9q0ywt4essm65xk
+  - &test age18gtj77ujq3708wrrfsj4eyxv0sq96t76q9s0v8tvfggl69jhhyns60g09l
 creation_rules:
   - path_regex: secrets/secrets\.yaml$
     key_groups:
       - age:
           - *admin
           - *emubox
+  - path_regex: secrets/test\.yaml$
+    key_groups:
+      - age:
+          - *test

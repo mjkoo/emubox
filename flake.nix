@@ -1,0 +1,107 @@
+{
+  description = "emubox: a NixOS retro-emulation appliance for a Beelink EQ14";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    nixos-hardware.url = "github:NixOS/nixos-hardware";
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    impermanence.url = "github:nix-community/impermanence";
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs =
+    {
+      self,
+      nixpkgs,
+      ...
+    }@inputs:
+    let
+      inherit (nixpkgs) lib;
+      forAllSystems = lib.genAttrs lib.systems.flakeExposed;
+      pkgsFor = system: nixpkgs.legacyPackages.${system};
+      # The one target the appliance builds for.
+      hostSystem = "x86_64-linux";
+      # Emulator cores such as libretro-snes9x are unfree-redistributable.
+      nixpkgsConfig.allowUnfree = true;
+      # nixpkgs as the host and the VM test see it: overlay applied, unfree on.
+      pkgsHost = import nixpkgs {
+        system = hostSystem;
+        overlays = [ self.overlays.default ];
+        config = nixpkgsConfig;
+      };
+    in
+    {
+      # Vendored packages (ES-DE, freeimage, DuckStation) live in pkgs/ and are
+      # exposed both as an overlay and as flake packages so CI can push them to
+      # the public binary cache on their own, without the system closure.
+      overlays.default = import ./overlays { inherit inputs; };
+
+      packages = forAllSystems (system: import ./pkgs { pkgs = pkgsFor system; });
+
+      # Everything that is not tied to the physical disk: importable by the VM
+      # test and by a future second host. Consumers supply a nixpkgs with
+      # `overlays.default` applied (the VM test framework makes nodes'
+      # nixpkgs.* read-only, so the module cannot set it itself).
+      nixosModules.emubox = {
+        imports = [
+          inputs.impermanence.nixosModules.impermanence
+          inputs.sops-nix.nixosModules.sops
+          ./modules
+        ];
+      };
+
+      nixosConfigurations.emubox = lib.nixosSystem {
+        specialArgs = { inherit inputs; };
+        modules = [
+          {
+            nixpkgs.overlays = [ self.overlays.default ];
+            nixpkgs.config = nixpkgsConfig;
+          }
+          inputs.disko.nixosModules.disko
+          self.nixosModules.emubox
+          ./hosts/emubox
+        ];
+      };
+
+      checks.${hostSystem} = {
+        toplevel = self.nixosConfigurations.emubox.config.system.build.toplevel;
+        vm = import ./tests {
+          pkgs = pkgsHost;
+          inherit self;
+        };
+      };
+
+      formatter = forAllSystems (system: (pkgsFor system).nixfmt-tree);
+
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        {
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              just
+              # secrets
+              sops
+              age
+              ssh-to-age
+              # install and deploy
+              nixos-anywhere
+              nixos-rebuild-ng
+              # CI lint
+              actionlint
+              shellcheck
+              zizmor
+            ];
+          };
+        }
+      );
+    };
+}

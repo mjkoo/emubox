@@ -1,0 +1,12 @@
+# TODO(secrets): fill both recipients, then `sops secrets/secrets.yaml`.
+#   admin: age-keygen, or ssh-to-age < ~/.ssh/id_ed25519.pub
+#   host:  ssh-to-age < /persist/etc/ssh/ssh_host_ed25519_key.pub (on the box)
+keys:
+  - &admin age1PLACEHOLDER_ADMIN
+  - &emubox age1PLACEHOLDER_HOST
+creation_rules:
+  - path_regex: secrets/secrets\.yaml$
+    key_groups:
+      - age:
+          - *admin
+          - *emubox

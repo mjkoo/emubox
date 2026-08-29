@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  nix:
+    name: Nix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          # flake inputs fetched through the GitHub API hit rate limits without it
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # No-account cache on the GitHub Actions cache API. Swap for
+      # cachix/cachix-action once the public cache for pkgs/ exists (design 12.4).
+      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+        with:
+          use-flakehub: false
+          diagnostic-endpoint: ""
+
+      - name: Format check
+        run: nix fmt -- --ci
+
+      - name: Flake check
+        run: nix flake check
+
+      - name: Build host closure
+        run: nix build .#nixosConfigurations.emubox.config.system.build.toplevel --no-link
+
+  # TODO(design 12.4): on success, fast-forward `release` and push pkgs/ to Cachix.

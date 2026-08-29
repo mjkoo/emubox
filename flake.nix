@@ -69,13 +69,24 @@
         ];
       };
 
-      checks.${hostSystem} = {
-        toplevel = self.nixosConfigurations.emubox.config.system.build.toplevel;
-        vm = import ./tests {
-          pkgs = pkgsHost;
-          inherit self;
+      checks.${hostSystem} =
+        let
+          # The host configuration extended with the test module: the VM
+          # test installs and boots its toplevel, and the closure check greps
+          # that same toplevel, so a test override reaches both.
+          testHost = self.nixosConfigurations.emubox.extendModules { modules = [ ./tests ]; };
+        in
+        {
+          toplevel = self.nixosConfigurations.emubox.config.system.build.toplevel;
+          # disko's install test: format the real layout, install, boot
+          # through the boot loader, then run tests/default.nix's checks.
+          vm = testHost.config.system.build.installTest;
+          # No test secret value in any store path of the test closure.
+          closure-no-secrets = import ./tests/closure-no-secrets.nix {
+            pkgs = pkgsHost;
+            toplevel = testHost.config.system.build.toplevel;
+          };
         };
-      };
 
       formatter = forAllSystems (system: (pkgsFor system).nixfmt-tree);
 

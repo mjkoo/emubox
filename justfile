@@ -6,8 +6,9 @@ host := "emubox"
 age_key := env("SOPS_AGE_KEY_FILE", home_directory() / ".config/sops/age/keys.txt")
 
 # The box's pre-generated SSH host key: kept outside git, backed up with the
-# age key, injected into /persist by `just install`.
-host_key := home_directory() / ".config/emubox/ssh_host_ed25519_key"
+# age key, injected into /persist by `just install`. EMUBOX_HOST_KEY
+# overrides the path for both `host-key` and `install`.
+host_key := env("EMUBOX_HOST_KEY", home_directory() / ".config/emubox/ssh_host_ed25519_key")
 
 default:
     @just --list
@@ -24,9 +25,11 @@ fmt-check:
 flake-check:
     nix flake check
 
-# Evaluate the host closure without building it (works on macOS)
+# Evaluate the host closure and both x86_64-linux checks without building (works on macOS)
 eval:
     nix eval --raw .#nixosConfigurations.{{host}}.config.system.build.toplevel.drvPath
+    nix eval --raw .#checks.x86_64-linux.vm.drvPath
+    nix eval --raw .#checks.x86_64-linux.closure-no-secrets.drvPath
 
 # Build the host closure (needs an x86_64-linux builder)
 build:
@@ -49,7 +52,8 @@ lint-actions:
     actionlint
     zizmor .github/workflows
 
-# What CI runs
+# Everything that can run on this machine: what CI runs (formatting, flake
+# check, evaluation) plus the workflow lint
 check-all: fmt-check flake-check eval lint-actions
 
 # Edit the box's secrets (admin age key)
@@ -70,21 +74,35 @@ host-key path=host_key:
     set -euo pipefail
     if [ ! -e {{quote(path)}} ]; then
         mkdir -p "$(dirname {{quote(path)}})"
-        ssh-keygen -t ed25519 -N "" -C "emubox host key" -f {{quote(path)}}
+        ssh-keygen -q -t ed25519 -N "" -C "emubox host key" -f {{quote(path)}}
+    fi
+    if [ ! -e {{quote(path)}}.pub ]; then
+        ssh-keygen -y -f {{quote(path)}} > {{quote(path)}}.pub
     fi
     echo "age recipient for .sops.yaml (&emubox): $(ssh-to-age < {{quote(path)}}.pub)"
 
 # Install the box over Ethernet: partition, install, inject the host key, reboot
-install target key=host_key:
+# (extra arguments go to nixos-anywhere, e.g. `just install <box> --build-on remote`)
+install target *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ ! -e {{quote(key)}} ]; then
-        echo "no host key at {{key}}; run: just host-key" >&2
+    key={{quote(host_key)}}
+    for f in "$key" "$key.pub"; do
+        if [ ! -e "$f" ]; then
+            echo "no host key at $f; run: just host-key" >&2
+            exit 1
+        fi
+    done
+    # Refuse to install placeholder secrets. Decrypting into a variable
+    # first makes a missing admin key a loud failure, not a skipped check.
+    plain="$(SOPS_AGE_KEY_FILE={{quote(age_key)}} sops decrypt secrets/secrets.yaml)"
+    if grep -q REPLACE-BEFORE-INSTALL <<< "$plain"; then
+        echo "secrets/secrets.yaml still holds placeholders; run: just secrets-edit" >&2
         exit 1
     fi
     staging="$(mktemp -d)"
     trap 'rm -rf "$staging"' EXIT
     install -d -m 755 "$staging/persist/etc/ssh"
-    install -m 600 {{quote(key)}} "$staging/persist/etc/ssh/ssh_host_ed25519_key"
-    install -m 644 {{quote(key)}}.pub "$staging/persist/etc/ssh/ssh_host_ed25519_key.pub"
-    nixos-anywhere --flake .#{{host}} --extra-files "$staging" "root@{{target}}"
+    install -m 600 "$key" "$staging/persist/etc/ssh/ssh_host_ed25519_key"
+    install -m 644 "$key.pub" "$staging/persist/etc/ssh/ssh_host_ed25519_key.pub"
+    nixos-anywhere --flake .#{{host}} --extra-files "$staging" {{args}} "root@{{target}}"

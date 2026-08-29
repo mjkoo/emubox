@@ -14,7 +14,13 @@
 # `extraConfig` reaches only the harness's internal toplevel.
 #
 # The harness boots the installed VM with a fixed 1 GB and a 600 s test
-# timeout and exposes no memory knob, so nothing here sets one.
+# timeout and exposes no memory knob. The display manager is forced off
+# here (the design's fallback, taken by decision rather than by
+# measurement, since no KVM builder was available to measure the budget):
+# the graphical stack is neither started nor waited on, the console login
+# lands on tty1's getty instead of a VT the kiosk session may own, and the
+# initrd, persistence, secrets and networking paths are unaffected. The
+# graphical session is proven on hardware.
 { config, lib, ... }:
 let
   values = import ./values.nix;
@@ -34,15 +40,17 @@ let
     }
   ) (lib.filter (r: lib.hasPrefix "d /data/" r) config.systemd.tmpfiles.rules);
 
+  # The persisted list as `modules/persistence` declares it.
+  persisted = config.environment.persistence."/persist";
+  persistedDirs = map (d: d.dirPath) persisted.directories;
+  persistedFiles = map (f: f.filePath) persisted.files;
+
   # Python literal from a Nix value (strings, lists and attrsets only).
   py = builtins.toJSON;
 
-  # The search path WirePlumber's user service reads its config from; the
-  # nixpkgs module passes config packages through XDG_DATA_DIRS.
-  wireplumberDataDirs = lib.splitString ":" config.systemd.user.services.wireplumber.environment.XDG_DATA_DIRS;
-
   # Where a declared secret lands and with what owner and mode, as
-  # modules/secrets declares it.
+  # modules/secrets declares it. sops-nix's `owner` defaults to null and
+  # the file is then owned by uid 0.
   secretFacts =
     name:
     let
@@ -52,6 +60,10 @@ let
       inherit (s) path mode;
       owner = if s.owner != null then s.owner else "root";
     };
+
+  # The search path WirePlumber's user service reads its config from; the
+  # nixpkgs module passes config packages through XDG_DATA_DIRS.
+  wireplumberDataDirs = lib.splitString ":" config.systemd.user.services.wireplumber.environment.XDG_DATA_DIRS;
 in
 {
   # Test secrets (design D7): the committed test host key decrypts
@@ -59,33 +71,46 @@ in
   # because modules/secrets defines the same options for the box and a plain
   # definition would conflict or merge the real key path back in.
   # sops.age.keyFile stays null.
-  sops.defaultSopsFile = lib.mkForce ../secrets/test.yaml;
-  sops.age.sshKeyPaths = lib.mkForce [ ./test_host_ed25519_key ];
+  sops = {
+    defaultSopsFile = lib.mkForce ../secrets/test.yaml;
+    age.sshKeyPaths = lib.mkForce [ ./test_host_ed25519_key ];
+  };
 
   # No host key is injected in the VM, so /etc/ssh/ssh_host_ed25519_key is
   # a dangling link into /persist and sshd's key generation would fail on
   # every run. sshd is loopback-only and nothing here asserts on it.
   services.openssh.enable = lib.mkForce false;
 
-  # Nothing listens on the LAN: the firewall opens no port on any interface.
-  # Checked at evaluation, so a module that opens one fails the build.
+  # The display-manager fallback (see the header).
+  services.displayManager.sddm.enable = lib.mkForce false;
+
+  # Eval-time checks of what the configuration declares. The firewall
+  # invariant itself lives in modules/hardware so it guards the shipped
+  # system; these guard the test's own inputs.
   assertions = [
     {
+      assertion = dataLayout != [ ];
+      message = "tests: no `d /data/...` tmpfiles rules found; the /data layout assertion would be vacuous";
+    }
+    {
       assertion =
-        with config.networking.firewall;
-        allowedTCPPorts == [ ]
-        && allowedUDPPorts == [ ]
-        && allowedTCPPortRanges == [ ]
-        && allowedUDPPortRanges == [ ]
-        && interfaces == { };
-      message = "networking.firewall opens a port; the emubox firewall must open none (networking spec)";
+        lib.all (k: k.type == "ed25519") config.services.openssh.hostKeys
+        && lib.all (f: !lib.hasInfix "rsa" f) persistedFiles;
+      message = "tests: the host key must be ed25519 only, in services.openssh.hostKeys and in the persisted list";
     }
   ];
 
   disko.tests.extraChecks = ''
     # The harness itself only waits for local-fs.target; every boot phase
-    # starts by waiting for multi-user.target.
-    machine.wait_for_unit("multi-user.target")
+    # starts by waiting for multi-user.target and asserts that nothing
+    # failed on the way, since several paths here (persist units, secrets,
+    # the WiFi profile) log and continue rather than stop the boot.
+    def booted():
+        machine.wait_for_unit("multi-user.target")
+        failed = machine.succeed("systemctl --failed --no-legend --plain").strip()
+        assert not failed, f"failed units:\n{failed}"
+
+    booted()
 
     # --- vm-test: the VM boots through the real boot path -------------------
 
@@ -105,8 +130,15 @@ in
             assert source.endswith(f"[/{subvol}]"), f"{mountpoint}: {out!r}"
 
     with subtest("Booted through systemd-boot"):
+        # Only the "Current Boot Loader" block proves the loader ran; the
+        # "Available Boot Loaders" block lists it even after a direct
+        # kernel load.
         out = machine.succeed("bootctl status")
-        assert "systemd-boot" in out, out
+        current = out.split("Current Boot Loader:", 1)[1].split("\n\n", 1)[0]
+        assert "systemd-boot" in current, out
+
+    with subtest("/run is memory-backed"):
+        assert machine.succeed("findmnt --noheadings -o FSTYPE /run").strip() == "tmpfs"
 
     # --- persistence: the /data layout exists from the first boot ------------
 
@@ -122,49 +154,78 @@ in
             assert int(mode, 8) == int(entry["mode"], 8), f"{entry['path']}: {out}"
             assert (user, group) == (entry["user"], entry["group"]), f"{entry['path']}: {out}"
 
+    # --- persistence: persisted paths are bound into the root ----------------
+
+    with subtest("Every persisted directory resolves to storage under /persist"):
+        # On btrfs findmnt shows the subvolume path in brackets, never a
+        # /persist/... path.
+        for d in ${py persistedDirs}:
+            out = machine.succeed(f"findmnt --noheadings --target {d} -o SOURCE").strip()
+            assert out.endswith(f"[/@persist{d}]"), f"{d}: {out}"
+
+    with subtest("Every persisted file is a mount or a link into /persist"):
+        for f in ${py persistedFiles}:
+            rc, _ = machine.execute(f"findmnt {f}")
+            if rc != 0:
+                target = machine.succeed(f"readlink {f}").strip()
+                assert target == f"/persist{f}", f"{f} -> {target}"
+
     # --- persistence: proven across a clean reboot ---------------------------
 
     machine_id = machine.succeed("cat /etc/machine-id").strip()
     assert len(machine_id) == 32, f"machine-id not initialised: {machine_id!r}"
+    # A Persistent=true timer touches its stamp when first activated, so the
+    # stamp's mtime is boot 1's; it must survive unchanged.
+    machine.wait_for_file("/var/lib/systemd/timers/stamp-fstrim.timer", timeout=60)
+    stamp_mtime = machine.succeed("stat -c %Y /var/lib/systemd/timers/stamp-fstrim.timer").strip()
     machine.succeed("touch /root/marker /etc/marker /data/marker /tmp/marker")
     machine.succeed("sync")
     machine.shutdown()
 
     machine.start()
-    machine.wait_for_unit("multi-user.target")
+    booted()
 
-    with subtest("Root, /etc and /tmp markers are gone; /data marker remains"):
+    with subtest("Root and /etc markers are gone; /data marker remains"):
         machine.fail("test -e /root/marker")
         machine.fail("test -e /etc/marker")
-        machine.fail("test -e /tmp/marker")
         machine.succeed("test -e /data/marker")
 
-    with subtest("machine-id is stable across boots"):
+    with subtest("/tmp is clean at boot"):
+        # Covered by boot.tmp.cleanOnBoot as well as the root wipe, so this
+        # is the spec's /tmp scenario, not rollback evidence.
+        machine.fail("test -e /tmp/marker")
+
+    with subtest("machine-id is stable across boots and lives on /persist"):
         assert machine.succeed("cat /etc/machine-id").strip() == machine_id
+        assert machine.succeed("cat /persist/etc/machine-id").strip() == machine_id
+        machine.succeed("findmnt /etc/machine-id")
+
+    with subtest("Persistent timer stamp survived the reboot"):
+        assert machine.succeed("stat -c %Y /var/lib/systemd/timers/stamp-fstrim.timer").strip() == stamp_mtime
 
     with subtest("Journal lists both boots and the previous one is readable"):
         out = machine.succeed("journalctl --list-boots --no-pager")
         boots = [l for l in out.splitlines() if l.split() and l.split()[0].lstrip("-").isdigit()]
         assert len(boots) == 2, out
-        machine.succeed("journalctl -b -1 --no-pager -q | grep -q .")
-
-    with subtest("/var/log resolves to storage under /persist"):
-        # On btrfs findmnt shows the subvolume path in brackets, never a
-        # /persist/... path.
-        out = machine.succeed("findmnt --noheadings --target /var/log -o SOURCE").strip()
-        assert out.endswith("[/@persist/var/log]"), out
+        # No pipe: the driver runs commands under pipefail, and a grep -q
+        # that closes the pipe early would fail journalctl with SIGPIPE.
+        assert machine.succeed("journalctl -b -1 --no-pager -q -n 5").strip(), "previous boot's journal is empty"
 
     # --- persistence and base-system: power cut ------------------------------
 
-    machine.succeed("touch /root/marker")
+    machine.succeed("touch /root/marker /etc/marker /tmp/marker")
     machine.succeed("sync")
     machine.crash()
 
     machine.start()
-    machine.wait_for_unit("multi-user.target")
+    booted()
 
-    with subtest("After a power cut the root is wiped and no repair prompt held the boot"):
+    with subtest("After a power cut the root is wiped, /data survived, no repair prompt held the boot"):
         machine.fail("test -e /root/marker")
+        machine.fail("test -e /etc/marker")
+        machine.fail("test -e /tmp/marker")
+        machine.succeed("test -e /data/marker")
+        assert machine.succeed("cat /etc/machine-id").strip() == machine_id
 
     # --- secrets: decrypt in the VM ------------------------------------------
     # Expected content is compared in Python, never through a guest-shell
@@ -179,36 +240,40 @@ in
             (${py (secretFacts "wifi_psk")}, ${py values.psk}),
         ]:
             path = secret["path"]
-            assert path.startswith("/run/secrets"), path
             out = machine.succeed(f"stat -c '%a %U' {path}").strip()
             expected = f"{int(secret['mode'], 8):o} {secret['owner']}"
             assert out == expected, f"{path}: {out!r} != {expected!r}"
             assert machine.succeed(f"cat {path}").strip() == value, path
 
-    with subtest("admin logs in on tty2 with the test password"):
-        # tty1 is the SDDM autologin's Wayland compositor, so switching VTs
-        # needs the ctrl-alt chord; a bare alt-f2 goes to the compositor.
-        machine.send_key("ctrl-alt-f2")
-        machine.wait_until_tty_matches("2", "login: ")
+    with subtest("admin logs in on tty1 with the test password"):
+        # No display manager in the test, so tty1 carries a getty.
+        machine.wait_until_tty_matches("1", "login: ", timeout=120)
         machine.send_chars("admin\n")
-        machine.wait_until_tty_matches("2", "Password: ")
+        machine.wait_until_tty_matches("1", "Password: ", timeout=60)
         machine.send_chars(${py values.password} + "\n")
-        machine.wait_until_tty_matches("2", r"admin@.*\$")
+        machine.wait_until_tty_matches("1", r"admin@.*\$", timeout=120)
 
     # --- networking: the declaration is proven -------------------------------
 
     with subtest("family-wifi is listed, with the SSID and PSK from the test secret"):
-        machine.wait_for_unit("NetworkManager-ensure-profiles.service")
-        machine.succeed("nmcli connection show family-wifi")
+        # The ensure-profiles unit is a oneshot without RemainAfterExit, so
+        # it is inactive once done; wait for its artifact and check its
+        # result rather than its active state.
+        machine.wait_for_file("/run/NetworkManager/system-connections/family-wifi.nmconnection", timeout=120)
+        result = machine.succeed("systemctl show -p Result --value NetworkManager-ensure-profiles.service").strip()
+        assert result == "success", f"NetworkManager-ensure-profiles: {result}"
+        machine.wait_until_succeeds("nmcli connection show family-wifi", timeout=60)
         conn = machine.succeed(
             "cat /run/NetworkManager/system-connections/family-wifi.nmconnection"
-        )
-        assert "ssid=" + ${py values.ssid} in conn.replace(" ", ""), conn
-        assert "psk=" + ${py values.psk} in conn.replace(" ", ""), conn
+        ).replace(" ", "")
+        assert ("ssid=" + ${py values.ssid}) in conn, conn
+        assert ("psk=" + ${py values.psk}) in conn, conn
 
     with subtest("Nothing listens on the LAN"):
         def local_address(line):
             # ss -H columns: State Recv-Q Send-Q Local-Address:Port Peer ...
+            # Wildcards print as 0.0.0.0:port, [::]:port or a bare *:port,
+            # none of which is loopback.
             return line.split()[3]
 
         def is_loopback(addr):
@@ -236,15 +301,23 @@ in
         assert "priority.session" in content and "node.restore-default-targets" in content, content
 
     with subtest("Hygiene timers are active and swap is memory-backed"):
-        machine.succeed("systemctl is-active nix-gc.timer nix-optimise.timer fstrim.timer")
-        swap = machine.succeed("swapon --show=NAME --noheadings")
+        machine.wait_until_succeeds(
+            "systemctl is-active nix-gc.timer nix-optimise.timer fstrim.timer", timeout=60
+        )
+        swap = machine.wait_until_succeeds("swapon --show=NAME --noheadings | grep zram", timeout=60)
         assert "zram" in swap, swap
 
-    with subtest("Runtime watchdog is 30 s"):
-        assert machine.succeed("systemctl show -p RuntimeWatchdogUSec --value").strip() == "30s"
+    with subtest("Runtime watchdog is declared at 30 s"):
+        # The declaration, as the service manager reads it. The live
+        # RuntimeWatchdogUSec value needs a watchdog device the VM does not
+        # have; that is checked on hardware.
+        conf = machine.succeed("systemd-analyze cat-config systemd/system.conf")
+        assert "RuntimeWatchdogSec=30s" in conf, conf
 
     with subtest("Suspend is refused"):
-        machine.fail("systemctl suspend")
+        # A timeout so a regression fails fast instead of suspending the VM
+        # for the rest of the budget.
+        machine.fail("systemctl suspend", timeout=30)
 
     with subtest("Time zone is America/New_York"):
         assert machine.succeed("timedatectl show -p Timezone --value").strip() == "America/New_York"

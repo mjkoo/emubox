@@ -3,6 +3,9 @@
 {
   services.openssh = {
     enable = true;
+    # Loopback only, so the firewall stays closed (nixpkgs would otherwise
+    # open port 22 on every interface).
+    openFirewall = false;
     # ed25519 only: it is the persisted host identity (modules/persistence)
     # and the sops decryption key, and nothing needs an RSA key.
     hostKeys = [

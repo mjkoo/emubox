@@ -43,7 +43,7 @@ jobs:
         run: nix fmt -- --ci
 
       - name: Flake check
-        run: nix flake check
+        run: nix flake check -L
 
       - name: Build host closure
         run: nix build .#nixosConfigurations.emubox.config.system.build.toplevel --no-link

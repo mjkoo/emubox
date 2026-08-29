@@ -1,25 +1,39 @@
 # Design section 4: ephemeral root, persistent OS state under /persist.
 # User data is deliberately outside this mechanism: player's home is on
 # /data and is never wiped (design section 9, layer 1).
-{ lib, ... }:
+{
+  config,
+  lib,
+  utils,
+  ...
+}:
 let
-  # disko labels the partition `disk-<disk>-<partition>`; the same on the
-  # box and in the VM test.
-  rootPartition = "/dev/disk/by-partlabel/disk-main-root";
+  # The partition the root subvolume lives on, as disko declares it
+  # (/dev/disk/by-partlabel/disk-main-root: disko's default label for the
+  # `root` partition of disk `main`); the same on the box and in the VM.
+  rootPartition = config.fileSystems."/".device;
+  rootDevice = "${utils.escapeSystemdPath rootPartition}.device";
+  persistedDirs = map (d: d.dirPath) config.environment.persistence."/persist".directories;
 in
 {
   # Every boot starts from a blank root: before sysroot.mount, replace the
   # @root subvolume with a freshly created one. A new subvolume is exactly
   # what a blank snapshot would be, with no install-time snapshot to keep
   # correct. Subvolumes nested under @root (systemd creates /var/lib/machines
-  # and /var/lib/portables as subvolumes) go first, since btrfs refuses to
-  # delete a parent that still has children.
+  # and /var/lib/portables as subvolumes) go first, deepest first, since
+  # btrfs refuses to delete a parent that still has children.
   boot.initrd.systemd.services.rollback-root = {
     description = "Recreate the @root subvolume";
-    unitConfig.DefaultDependencies = "no";
-    # initrd-root-device.target is where the fstab generator hangs the root
-    # partition's device unit, so the partition is present by then.
-    after = [ "initrd-root-device.target" ];
+    unitConfig.DefaultDependencies = false;
+    # The partition's device unit is what sysroot.mount itself waits for;
+    # the fstab generator also hangs it on initrd-root-device.target for the
+    # /sysroot entry. Depend on both so the unit can never run before the
+    # partition exists.
+    requires = [ rootDevice ];
+    after = [
+      rootDevice
+      "initrd-root-device.target"
+    ];
     before = [ "sysroot.mount" ];
     # Requiring, not wanting: the root cannot be mounted without the wipe
     # having run.
@@ -27,19 +41,48 @@ in
     wantedBy = [ "initrd.target" ];
     serviceConfig.Type = "oneshot";
     script = ''
+      set -o pipefail
       mkdir -p /btrfs-top
       mount -t btrfs -o subvol=/ ${rootPartition} /btrfs-top
       if [ -e /btrfs-top/@root ]; then
+        # `btrfs subvolume list -o` prints `ID <n> gen <n> top level <n>
+        # path <path>` per nested subvolume; field 9 onward is the path.
+        # Reverse-sorted so a child is deleted before its parent.
         btrfs subvolume list -o /btrfs-top/@root \
           | cut -d ' ' -f 9- \
+          | sort -r \
           | while read -r nested; do
               btrfs subvolume delete "/btrfs-top/$nested"
             done
         btrfs subvolume delete /btrfs-top/@root
       fi
       btrfs subvolume create /btrfs-top/@root
-      umount /btrfs-top
+      # The mount lives in the initrd namespace and is discarded at
+      # switch-root; a transiently busy unmount must not stop the boot.
+      umount -l /btrfs-top || true
     '';
+  };
+
+  # impermanence bind-mounts the neededForBoot directories (/var/log,
+  # /var/lib/nixos) in the initrd, but its script that creates their
+  # /persist counterparts runs in the activation step those mounts are
+  # ordered before, so on the very first boot after an install the mounts
+  # would fail and the stage-2 mounts would take over while that boot's
+  # /var/lib/nixos uid and gid maps landed on the ephemeral root. Create
+  # every persisted directory before any of those mounts instead.
+  boot.initrd.systemd.services.persist-dirs = {
+    description = "Create the persisted directories under /persist";
+    unitConfig = {
+      DefaultDependencies = false;
+      RequiresMountsFor = [ "/sysroot/persist" ];
+    };
+    after = [ "sysroot.mount" ];
+    before = map (d: "${utils.escapeSystemdPath "/sysroot${d}"}.mount") persistedDirs ++ [
+      "initrd-nixos-activation.service"
+    ];
+    wantedBy = [ "initrd.target" ];
+    serviceConfig.Type = "oneshot";
+    script = lib.concatMapStringsSep "\n" (d: "mkdir -p /sysroot/persist${d}") persistedDirs;
   };
 
   # /etc/machine-id is bound to its persisted copy in the initrd, before
@@ -47,18 +90,26 @@ in
   # blank root PID 1 finds no /etc/machine-id, treats the boot as a first
   # boot, writes "uninitialized" to the ephemeral root and overmounts a
   # transient id; impermanence's unit then sees an existing mount, leaves it
-  # alone, and the id would change every boot. With the bind in place before
-  # PID 1 starts, it reads the persisted id, or initialises the (empty)
-  # persisted file in place on the very first boot. A service rather than a
-  # mount unit because a fresh @root has no /etc to mount onto.
+  # alone (its own machine-id workaround sits behind that same findmnt
+  # check), and the id would change every boot. With the bind in place
+  # before PID 1 starts, it reads the persisted id, or on the box's very
+  # first boot finds an empty writable file, generates an id and writes it
+  # there, which lands on /persist. A service rather than a mount unit
+  # because a fresh @root has no /etc to mount onto. impermanence's
+  # ConditionFirstBoot override on systemd-machine-id-commit.service (set
+  # because /etc/machine-id is in the file list) is what keeps the bind in
+  # place afterwards: that unit would otherwise unmount it on every boot.
   boot.initrd.systemd.services.persist-machine-id = {
     description = "Bind /etc/machine-id to /persist before activation";
     unitConfig = {
-      DefaultDependencies = "no";
+      DefaultDependencies = false;
       RequiresMountsFor = [ "/sysroot/persist" ];
     };
     after = [ "sysroot.mount" ];
     before = [ "initrd-nixos-activation.service" ];
+    # Required, so a failed bind stops the boot instead of silently
+    # reproducing the changing id.
+    requiredBy = [ "initrd-nixos-activation.service" ];
     wantedBy = [ "initrd.target" ];
     serviceConfig.Type = "oneshot";
     script = ''

@@ -25,8 +25,14 @@ Keys this layer consumes:
 | key                   | consumer                                                                    |
 |-----------------------|-----------------------------------------------------------------------------|
 | `wifi_ssid`           | `sops.templates."wifi.env"`, substituted into the `family-wifi` profile    |
-| `wifi_psk`            | same                                                                        |
+| `wifi_psk`            | same; see the note on characters below                                      |
 | `admin_password_hash` | `users.users.admin.hashedPasswordFile`, decrypted before users are created |
+
+**WiFi values.** `wifi_ssid` and `wifi_psk` reach NetworkManager through a
+systemd `EnvironmentFile`, which unquotes like a shell: a value containing
+`"`, `'` or `\`, or with leading or trailing spaces, is silently altered
+and the box never joins. Every other printable character is fine. If the
+family's passphrase has one of those, change the passphrase on the router.
 
 Later changes add their own keys here: Cloudflare tunnel credentials,
 Backblaze B2 key pair, restic password, RetroAchievements and ScreenScraper

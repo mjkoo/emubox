@@ -29,12 +29,6 @@
       hostSystem = "x86_64-linux";
       # Emulator cores such as libretro-snes9x are unfree-redistributable.
       nixpkgsConfig.allowUnfree = true;
-      # nixpkgs as the host and the VM test see it: overlay applied, unfree on.
-      pkgsHost = import nixpkgs {
-        system = hostSystem;
-        overlays = [ self.overlays.default ];
-        config = nixpkgsConfig;
-      };
     in
     {
       # Vendored packages (ES-DE, freeimage, DuckStation) live in pkgs/ and are
@@ -44,10 +38,9 @@
 
       packages = forAllSystems (system: import ./pkgs { pkgs = pkgsFor system; });
 
-      # Everything that is not tied to the physical disk: importable by the VM
-      # test and by a future second host. Consumers supply a nixpkgs with
-      # `overlays.default` applied (the VM test framework makes nodes'
-      # nixpkgs.* read-only, so the module cannot set it itself).
+      # Everything that is not tied to the physical disk: importable by a
+      # future second host. Consumers supply a nixpkgs with `overlays.default`
+      # applied.
       nixosModules.emubox = {
         imports = [
           inputs.impermanence.nixosModules.impermanence
@@ -83,7 +76,7 @@
           vm = testHost.config.system.build.installTest;
           # No test secret value in any store path of the test closure.
           closure-no-secrets = import ./tests/closure-no-secrets.nix {
-            pkgs = pkgsHost;
+            pkgs = testHost.pkgs;
             toplevel = testHost.config.system.build.toplevel;
           };
         };
@@ -99,10 +92,11 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               just
-              # secrets
+              # secrets and the host key
               sops
               age
               ssh-to-age
+              openssh
               # install and deploy
               nixos-anywhere
               nixos-rebuild-ng

@@ -22,9 +22,14 @@
     # Rendered on /run at boot; NetworkManager's ensure-profiles unit loads
     # it as an EnvironmentFile and substitutes $WIFI_SSID and $WIFI_PSK into
     # the declared profile (modules/hardware).
-    templates."wifi.env".content = ''
-      WIFI_SSID=${config.sops.placeholder.wifi_ssid}
-      WIFI_PSK=${config.sops.placeholder.wifi_psk}
-    '';
+    templates."wifi.env" = {
+      content = ''
+        WIFI_SSID=${config.sops.placeholder.wifi_ssid}
+        WIFI_PSK=${config.sops.placeholder.wifi_psk}
+      '';
+      # A re-keyed PSK reaches the profile on the next switch, not the next
+      # boot.
+      restartUnits = [ "NetworkManager-ensure-profiles.service" ];
+    };
   };
 }

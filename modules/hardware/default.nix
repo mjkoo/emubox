@@ -43,13 +43,14 @@
     pulse.enable = true;
     # HDMI is the default sink by declaration: WirePlumber has no "default
     # sink by name" setting, so the HDMI sink's session priority is raised
-    # above every other ALSA sink (they default to 600-1000; 1500 is the
-    # ceiling WirePlumber advises), and restoring a remembered choice is off
-    # so a fresh root or a re-plugged cable cannot route audio elsewhere.
+    # above every other ALSA sink (WirePlumber's alsa monitor computes
+    # playback priorities in the 744-1109 range; 1500 is the ceiling it
+    # advises), and restoring a remembered choice is off so a fresh root or
+    # a re-plugged cable cannot route audio elsewhere.
     wireplumber.extraConfig."51-emubox-hdmi-default" = {
       "monitor.alsa.rules" = [
         {
-          matches = [ { "node.name" = "~alsa_output.pci-.*hdmi.*"; } ];
+          matches = [ { "node.name" = "~alsa_output\\.pci-.*hdmi.*"; } ];
           actions.update-props."priority.session" = 1500;
         }
       ];
@@ -108,7 +109,21 @@
     };
   };
   # On, with nothing opened: every service that listens binds to loopback.
+  # Asserted here, next to the firewall, so the invariant guards the system
+  # that ships and not only the VM test's variant of it.
   networking.firewall.enable = true;
+  assertions = [
+    {
+      assertion =
+        with config.networking.firewall;
+        allowedTCPPorts == [ ]
+        && allowedUDPPorts == [ ]
+        && allowedTCPPortRanges == [ ]
+        && allowedUDPPortRanges == [ ]
+        && interfaces == { };
+      message = "networking.firewall opens a port; the emubox firewall must open none (networking spec)";
+    }
+  ];
 
   nix = {
     settings.experimental-features = [

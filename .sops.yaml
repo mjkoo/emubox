@@ -5,7 +5,8 @@
 # recipients.
 #
 #   admin:  the admin's age key, ~/.config/sops/age/keys.txt on the admin's
-#           machine (age-keygen; the default location sops reads)
+#           machine (age-keygen); the `just secrets-*` recipes point sops
+#           at that path, since bare sops looks elsewhere on macOS
 #   emubox: the box's pre-generated SSH host key converted with ssh-to-age
 #           (`ssh-to-age < ~/.config/emubox/ssh_host_ed25519_key.pub`); the
 #           install places the key under /persist (README, Install)

@@ -17,6 +17,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # The VM test needs KVM. The runner has /dev/kvm, but as 0660 root:kvm,
+      # which the nix build users cannot open: nix still advertises the
+      # `kvm` feature and schedules the test, QEMU's accel=kvm:tcg silently
+      # falls back to TCG, and the run hits the harness's 600 s timeout.
+      - name: Make /dev/kvm openable by the nix build users
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm-nix.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           # flake inputs fetched through the GitHub API hit rate limits without it

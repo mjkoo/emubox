@@ -42,7 +42,7 @@
 
 ## 7. Close out
 
-- [ ] 7.1 Remove every `TODO(design 4)` and `TODO(secrets)` comment that this change resolved; leave later-epic TODOs in place
-- [ ] 7.2 `.github/workflows/ci.yml`, landed before the first push: before the nix step, add the udev step that makes `/dev/kvm` openable by the build users (rule `KERNEL=="kvm", GROUP="kvm", MODE="0666"`, then `udevadm control --reload-rules && udevadm trigger --name-match=kvm`); without it the daemon advertises `kvm` so the test is scheduled, but `nixbld` cannot open the 0660 root:kvm device, QEMU's `accel=kvm:tcg` silently falls to TCG and the run hits the 600 s timeout
+- [x] 7.1 Remove every `TODO(design 4)` and `TODO(secrets)` comment that this change resolved; leave later-epic TODOs in place
+- [x] 7.2 `.github/workflows/ci.yml`, landed before the first push: before the nix step, add the udev step that makes `/dev/kvm` openable by the build users (rule `KERNEL=="kvm", GROUP="kvm", MODE="0666"`, then `udevadm control --reload-rules && udevadm trigger --name-match=kvm`); without it the daemon advertises `kvm` so the test is scheduled, but `nixbld` cannot open the 0660 root:kvm device, QEMU's `accel=kvm:tcg` silently falls to TCG and the run hits the 600 s timeout
 - [ ] 7.3 Verification actually performed: `just check-all` green on the Mac (its `nix flake check` skips the `x86_64-linux` checks); `just vm-test` and `nix build .#checks.x86_64-linux.closure-no-secrets` green on the KVM-capable builder; CI green once the repository has a remote, with 7.2 in place (CI is the authority from then on, its first run is not gated here, and it is red between 1.3 and 2.4 by design)
-- [ ] 7.4 Walk each scenario in the six delta specs and confirm it is either asserted by the VM test or documented as hardware-only or design-guaranteed
+- [x] 7.4 Walk each scenario in the six delta specs and confirm it is either asserted by the VM test or documented as hardware-only or design-guaranteed

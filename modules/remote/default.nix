@@ -3,6 +3,14 @@
 {
   services.openssh = {
     enable = true;
+    # ed25519 only: it is the persisted host identity (modules/persistence)
+    # and the sops decryption key, and nothing needs an RSA key.
+    hostKeys = [
+      {
+        path = "/etc/ssh/ssh_host_ed25519_key";
+        type = "ed25519";
+      }
+    ];
     listenAddresses = [
       {
         addr = "127.0.0.1";

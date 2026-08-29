@@ -8,10 +8,10 @@
 ## 2. Ephemeral root
 
 - [ ] 2.1 Verify in the VM that the root partition carries disko's `disk-main-root` label and that `btrfs` is on the initrd PATH; if not, add `boot.initrd.systemd.extraBin.btrfs`
-- [ ] 2.2 Add `boot.initrd.systemd.services.rollback-root` to `modules/persistence` per design D1 (mount top level by partlabel, delete nested subvolumes, delete and recreate `@root`)
-- [ ] 2.3 Drop the RSA host key entries from the persisted list and set `services.openssh.hostKeys` to ed25519 only; keep the directory list as scaffolded
+- [x] 2.2 Add `boot.initrd.systemd.services.rollback-root` to `modules/persistence` per design D1 (mount top level by partlabel, delete nested subvolumes, delete and recreate `@root`)
+- [x] 2.3 Drop the RSA host key entries from the persisted list and set `services.openssh.hostKeys` to ed25519 only; keep the directory list as scaffolded
 - [ ] 2.4 Run the VM test on the KVM builder: 1.3 and 1.4 go green
-- [ ] 2.5 Only if the machine-id assertion in 2.4 fails: add the initrd oneshot service from design D2 to `modules/persistence` (`DefaultDependencies=no`, after `sysroot.mount`, before `initrd-nixos-activation.service`; `mkdir -p` both parents, touch `/sysroot/persist/etc/machine-id` and `/sysroot/etc/machine-id` if absent, `mount --bind` the former over the latter), rerun 2.4, and update D2 to say the fallback is in force
+- [x] 2.5 Only if the machine-id assertion in 2.4 fails: add the initrd oneshot service from design D2 to `modules/persistence` (`DefaultDependencies=no`, after `sysroot.mount`, before `initrd-nixos-activation.service`; `mkdir -p` both parents, touch `/sysroot/persist/etc/machine-id` and `/sysroot/etc/machine-id` if absent, `mount --bind` the former over the latter), rerun 2.4, and update D2 to say the fallback is in force
 
 ## 3. Secrets
 

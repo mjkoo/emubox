@@ -80,8 +80,16 @@ in
     before = map (d: "${utils.escapeSystemdPath "/sysroot${d}"}.mount") persistedDirs ++ [
       "initrd-nixos-activation.service"
     ];
+    # Required, like persist-machine-id: a failure here must stop the boot
+    # rather than leave the neededForBoot directories on the ephemeral root.
+    requiredBy = [ "initrd-nixos-activation.service" ];
     wantedBy = [ "initrd.target" ];
     serviceConfig.Type = "oneshot";
+    # Created root:root 0755. impermanence mirrors an existing /persist
+    # directory's ownership onto the root side, so a persisted directory
+    # that needs another owner or mode must be declared with `user`,
+    # `group` or `mode` here AND created accordingly; today every entry is a
+    # plain root-owned path.
     script = lib.concatMapStringsSep "\n" (d: "mkdir -p /sysroot/persist${d}") persistedDirs;
   };
 

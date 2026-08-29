@@ -93,10 +93,14 @@ install target *args:
             exit 1
         fi
     done
+    if [ ! -e {{quote(age_key)}} ]; then
+        echo "no admin age key at {{age_key}}; see secrets/README.md" >&2
+        exit 1
+    fi
     # Refuse to install placeholder secrets. Decrypting into a variable
-    # first makes a missing admin key a loud failure, not a skipped check.
+    # first makes a failed decrypt a loud failure, not a skipped check.
     plain="$(SOPS_AGE_KEY_FILE={{quote(age_key)}} sops decrypt secrets/secrets.yaml)"
-    if grep -q REPLACE-BEFORE-INSTALL <<< "$plain"; then
+    if printf '%s' "$plain" | grep -q REPLACE-BEFORE-INSTALL; then
         echo "secrets/secrets.yaml still holds placeholders; run: just secrets-edit" >&2
         exit 1
     fi

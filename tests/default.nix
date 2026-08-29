@@ -13,14 +13,15 @@
 # system and the extended toplevel that `closure-no-secrets` greps, whereas
 # `extraConfig` reaches only the harness's internal toplevel.
 #
-# The harness boots the installed VM with a fixed 1 GB and a 600 s test
-# timeout and exposes no memory knob. The display manager is forced off
+# The harness boots the installed VM with a fixed 1 GB and exposes no
+# memory knob (its `meta.timeout = 600` is a Hydra hint; the driver's own
+# bound is its 3600 s globalTimeout). The display manager is forced off
 # here (the design's fallback, taken by decision rather than by
-# measurement, since no KVM builder was available to measure the budget):
-# the graphical stack is neither started nor waited on, the console login
-# lands on tty1's getty instead of a VT the kiosk session may own, and the
-# initrd, persistence, secrets and networking paths are unaffected. The
-# graphical session is proven on hardware.
+# measurement, since no KVM builder was available to measure the memory
+# budget): the graphical stack is neither started nor waited on, the
+# console login lands on tty1's getty instead of a VT the kiosk session
+# picks at runtime, and the initrd, persistence, secrets and networking
+# paths are unaffected. The graphical session is proven on hardware.
 { config, lib, ... }:
 let
   values = import ./values.nix;
@@ -134,6 +135,7 @@ in
         # "Available Boot Loaders" block lists it even after a direct
         # kernel load.
         out = machine.succeed("bootctl status")
+        assert "Current Boot Loader:" in out, out
         current = out.split("Current Boot Loader:", 1)[1].split("\n\n", 1)[0]
         assert "systemd-boot" in current, out
 
@@ -163,10 +165,14 @@ in
             out = machine.succeed(f"findmnt --noheadings --target {d} -o SOURCE").strip()
             assert out.endswith(f"[/@persist{d}]"), f"{d}: {out}"
 
-    with subtest("Every persisted file is a mount or a link into /persist"):
+    with subtest("Every persisted file is a bind from /persist or a link into it"):
         for f in ${py persistedFiles}:
-            rc, _ = machine.execute(f"findmnt {f}")
-            if rc != 0:
+            rc, source = machine.execute(f"findmnt --noheadings -o SOURCE {f}")
+            if rc == 0:
+                # A bind of the persisted file, not a transient overmount
+                # from /run.
+                assert source.strip().endswith(f"[/@persist{f}]"), f"{f}: {source}"
+            else:
                 target = machine.succeed(f"readlink {f}").strip()
                 assert target == f"/persist{f}", f"{f} -> {target}"
 
@@ -240,6 +246,7 @@ in
             (${py (secretFacts "wifi_psk")}, ${py values.psk}),
         ]:
             path = secret["path"]
+            assert path.startswith("/run/secrets"), f"secret off the runtime path: {path}"
             out = machine.succeed(f"stat -c '%a %U' {path}").strip()
             expected = f"{int(secret['mode'], 8):o} {secret['owner']}"
             assert out == expected, f"{path}: {out!r} != {expected!r}"
@@ -260,6 +267,8 @@ in
         # it is inactive once done; wait for its artifact and check its
         # result rather than its active state.
         machine.wait_for_file("/run/NetworkManager/system-connections/family-wifi.nmconnection", timeout=120)
+        # Meaningful only after the file exists: Result is also "success"
+        # for a unit that never ran.
         result = machine.succeed("systemctl show -p Result --value NetworkManager-ensure-profiles.service").strip()
         assert result == "success", f"NetworkManager-ensure-profiles: {result}"
         machine.wait_until_succeeds("nmcli connection show family-wifi", timeout=60)
@@ -315,8 +324,8 @@ in
         assert "RuntimeWatchdogSec=30s" in conf, conf
 
     with subtest("Suspend is refused"):
-        # A timeout so a regression fails fast instead of suspending the VM
-        # for the rest of the budget.
+        # The guest-side timeout bounds a refusal that hangs; a suspend that
+        # actually happened would block the driver until its global timeout.
         machine.fail("systemctl suspend", timeout=30)
 
     with subtest("Time zone is America/New_York"):

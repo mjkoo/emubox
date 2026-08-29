@@ -105,7 +105,8 @@ there is no address to push to. The tunnel and the `deploy` recipe arrive
 with the remote-administration change. Until then a changed configuration
 reaches the box by reinstalling (below, restoring `/data`), or by hand at
 the recovery desktop: as `admin`, clone the repository somewhere that
-survives a reboot (`/data` does; `/home/admin` is on the ephemeral root),
+survives a reboot (`/home/admin` is on the ephemeral root; `sudo mkdir
+/data/admin && sudo chown admin /data/admin` makes a place that lasts),
 copy in your edited `secrets/secrets.yaml` (a fresh clone has the
 placeholders), and run `sudo nixos-rebuild switch --flake .#emubox` (sudo
 needs no password).

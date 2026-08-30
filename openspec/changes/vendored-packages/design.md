@@ -77,4 +77,4 @@ A "Vendored packages" subsection under Development, after the cache paragraph: t
 
 None that change the specs, the approach or the tasks.
 
-For archive: the main `vm-test` spec's Purpose reads "CI proves the base layer's guarantees ...", which this change's new requirement outgrows. A delta cannot edit a Purpose, so it is reworded at `/opsx:archive` (or by `spec-maintenance`) to cover what the test proves about the host as a whole.
+The main `vm-test` spec's Purpose read "CI proves the base layer's guarantees ...", which this change's new requirement outgrows. A delta cannot edit a Purpose, so it was reworded directly in `openspec/specs/vm-test/spec.md` on this branch to cover what the test proves about the host as a whole; `/opsx:archive` only merges the delta's requirement.

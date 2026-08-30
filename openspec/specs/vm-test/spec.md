@@ -1,6 +1,6 @@
 ## Purpose
 
-CI proves the base layer's guarantees, ephemeral root, persisted state, secrets and networking declaration, on every push without hardware, through the same boot path the real box uses.
+CI proves what the host configuration guarantees, the base layer's ephemeral root, persisted state, secrets and networking declaration, and the presence of the programs the box installs, on every push without hardware, through the same boot path the real box uses.
 
 ## Requirements
 

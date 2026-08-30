@@ -97,8 +97,10 @@ A frontend that cannot stay up ends somewhere a person can act. A run
 shorter than 60 seconds counts as a crash; three in a row and the session
 script exits. Because SDDM's autologin is configured for the first start
 only (`relogin = false`), what appears then is its login greeter, not
-another doomed relaunch - `admin` can log in and look at the journal. A
-reboot restores automatic login and starts over.
+another doomed relaunch. `admin` can log in there and read the journal,
+choosing the recovery desktop from the greeter's session list rather than
+the pre-selected `emubox` session, which is `player`'s. A reboot restores
+automatic login and starts over.
 
 The frontend runs in ES-DE's kiosk UI mode: no metadata editor, no
 scraper, no collection editing, every game still launchable. The full menu

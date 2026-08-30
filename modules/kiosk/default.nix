@@ -70,6 +70,12 @@ let
       # is the greeter rather than an endless relaunch. EMUBOX_CRASH_WINDOW
       # is a test hook (tests/kiosk.nix lowers it); the box's figure is the
       # 60 s the kiosk spec states, and nothing in the product varies it.
+      #
+      # "Crash" is really "short run". ES-DE's own power-off exits the
+      # frontend first and runs `shutdown` only afterwards, so choosing power
+      # off from the menu increments this counter too. Harmless, since the
+      # box is going down either way, but it is why the threshold is about
+      # short runs rather than about crashes as such.
       window="''${EMUBOX_CRASH_WINDOW:-60}"
       # A non-numeric value would make `[ "$ran" -lt "$window" ]` fail, and
       # because that is an `if` condition `set -e` does not fire: every run
@@ -131,12 +137,20 @@ in
 {
   options.emubox.kiosk = {
     passkey = lib.mkOption {
-      type = lib.types.str;
+      # ES-DE matches the sequence against `{up, down, left, right, a, b, x,
+      # y}` on each entry's first character (UIModeController's mInputVals),
+      # so these eight are the whole alphabet. Constrained rather than a bare
+      # string because any other character silently yields a box whose full
+      # menu cannot be unlocked by anything at all - a failure that would
+      # surface only when the admin tried it, on hardware.
+      type = lib.types.strMatching "[udlrabxy]+";
       default = "uuddlrlrba";
       description = ''
-        The sequence that unlocks the frontend's full menu from kiosk mode.
-        The default is ES-DE's own, so the box behaves as the frontend's
-        documentation describes until the admin chooses another.
+        The sequence that unlocks the frontend's full menu from kiosk mode,
+        written with `u`, `d`, `l`, `r` for the directions and `a`, `b`, `x`,
+        `y` for the face buttons. The default is ES-DE's own, so the box
+        behaves as the frontend's documentation describes until the admin
+        chooses another.
       '';
     };
 

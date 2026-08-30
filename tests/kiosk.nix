@@ -179,11 +179,33 @@
       # --- kiosk: the settings the flake owns -------------------------------
 
       with subtest("Every owned key holds the flake's value"):
-          # Read from the module's own rendered file rather than a second
-          # copy of the table written out here, so the assertion cannot
-          # drift from what the session actually applies.
+          # Two assertions, and they check different things. The first pins
+          # the table itself against the spec's enumeration; the second walks
+          # the settings file the frontend will read and checks it carries
+          # what the table says. Neither alone is enough: the table could be
+          # right and unapplied, or applied and wrong.
           owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
           keys = owned["settings/es_settings.xml"]["keys"]
+
+          # Pinned here, literally, and deliberately not derived from the
+          # module: the loop below compares the settings file against this
+          # same rendered JSON, so on its own it would pass for whatever the
+          # module happened to render, and dropping an owned key would break
+          # no check anywhere. This is the kiosk spec's own enumeration -
+          # "kiosk UI mode, the unlock sequence, the ROM and media
+          # directories under /data, the theme, the en_US language and the
+          # quit menu enabled" - so a key leaving the module has to be a
+          # deliberate edit here too.
+          assert keys == {
+              "UIMode": {"type": "string", "value": "kiosk"},
+              "UIMode_passkey": {"type": "string", "value": ${py passkey}},
+              "ROMDirectory": {"type": "string", "value": "/data/roms"},
+              "MediaDirectory": {"type": "string", "value": "/data/media"},
+              "Theme": {"type": "string", "value": "linear-es-de"},
+              "ApplicationLanguage": {"type": "string", "value": "en_US"},
+              "ShowQuitMenu": {"type": "bool", "value": "true"},
+          }, keys
+
           got = settings_elements()
           for name, spec in keys.items():
               assert got.get(name) == (spec["type"], spec["value"]), (
@@ -249,8 +271,10 @@
           # The primary assertion is this pair: the frontend is gone and the
           # display manager is still there to serve a login.
           machine.succeed("systemctl is-active display-manager.service")
-          # Secondary, and the one observable design D5 calls brittle.
-          machine.wait_until_succeeds("pgrep -f 'sddm-greeter|weston'", timeout=60)
+          # Secondary, and the one observable design D5 calls brittle. The
+          # greeter binary is `sddm-greeter-qt6` and this pin's greeter
+          # compositor is kwin, not the Weston the design first assumed.
+          machine.wait_until_succeeds("pgrep -f 'sddm-greeter|kwin'", timeout=60)
 
       with subtest("A reboot from the greeter restores the kiosk"):
           # Last, so that the reboot is genuinely from the greeter and this

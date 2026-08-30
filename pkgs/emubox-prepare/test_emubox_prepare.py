@@ -525,3 +525,176 @@ def test_the_script_runs_as_a_program(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert (appdata / "settings" / "es_settings.xml").is_file()
+
+
+# --- Robustness of the write path -----------------------------------------
+# Every case below was found by a review that reproduced it against the code;
+# each test is the reproduction, kept so the fix cannot regress silently.
+
+
+def test_write_keeps_an_existing_files_mode(tmp_path: Path) -> None:
+    # os.replace installs a new inode, so without carrying the old file's
+    # mode across, a run by an admin would leave the frontend unable to save.
+    path = tmp_path / "es_settings.xml"
+    assert ep.set_esde_settings(path, OWNED) is True
+    path.chmod(0o600)
+
+    drifted = {**OWNED, "UIMode": {"type": "string", "value": "full"}}
+    assert ep.set_esde_settings(path, drifted) is True
+
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_write_leaves_no_temporary_file_behind(tmp_path: Path) -> None:
+    path = tmp_path / "settings" / "es_settings.xml"
+
+    assert ep.set_esde_settings(path, OWNED) is True
+
+    assert [p.name for p in path.parent.iterdir()] == ["es_settings.xml"]
+
+
+def test_concurrent_writers_never_publish_a_mixed_document(tmp_path: Path) -> None:
+    # The module is on the system path so it can be run by hand; a run by an
+    # admin while the session loop relaunches is a supported scenario, and a
+    # shared temp name let both processes write one inode.
+    path = tmp_path / "es_settings.xml"
+    a = {"K": {"type": "string", "value": "a" * 4000}}
+    b = {"K": {"type": "string", "value": "b" * 4000}}
+
+    for _ in range(20):
+        pids = []
+        for keys in (a, b):
+            pid = os.fork()
+            if pid == 0:  # pragma: no cover - the child never returns
+                try:
+                    ep.set_esde_settings(path, keys)
+                finally:
+                    os._exit(0)
+            pids.append(pid)
+        for pid in pids:
+            _, status = os.waitpid(pid, 0)
+            assert os.waitstatus_to_exitcode(status) == 0
+
+        value = esde_named(path, "K")[2]
+        assert value in (a["K"]["value"], b["K"]["value"]), "mixed document"
+
+
+def test_esde_recreates_an_empty_file_and_says_so(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # What a power cut leaves behind, which on this box is every switch-off
+    # at the wall. It parses to zero elements, so it must not look healthy.
+    path = tmp_path / "es_settings.xml"
+    path.write_text("")
+
+    assert ep.set_esde_settings(path, OWNED) is True
+
+    got = {name: (tag, value) for tag, name, value in esde_elements(path)}
+    assert got == {k: (v["type"], v["value"]) for k, v in OWNED.items()}
+    assert "empty" in capsys.readouterr().err
+
+
+def test_esde_does_not_grow_a_blank_line_on_every_write(tmp_path: Path) -> None:
+    path = tmp_path / "es_settings.xml"
+    ep.set_esde_settings(path, OWNED)
+    sizes = []
+    # Equal-length values, so any difference in size is the file growing and
+    # not just a shorter setting.
+    for value in ("kiosk", "aaaaa", "kiosk", "aaaaa"):
+        ep.set_esde_settings(
+            path, {**OWNED, "UIMode": {"type": "string", "value": value}}
+        )
+        sizes.append(len(path.read_text()))
+
+    assert len(set(sizes)) == 1, sizes
+
+
+# --- Robustness of the INI parser -----------------------------------------
+
+
+def test_ini_keeps_a_file_whose_section_header_carries_a_comment(
+    tmp_path: Path,
+) -> None:
+    # Legal INI that configparser and Qt both accept. Rejecting it would send
+    # the whole file through the recreate path and lose every unowned key.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(
+        "[Interface] ; the interface section\nKeepMe = yes\nConfirmStop = True\n"
+    )
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "KeepMe = yes" in text
+    assert "[Interface] ; the interface section" in text
+
+
+def test_ini_keeps_a_value_containing_an_exotic_line_separator(
+    tmp_path: Path,
+) -> None:
+    # str.splitlines() breaks on U+2028 and friends, inventing a fragment
+    # that fails the syntax check and takes the whole file with it.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nKeepMe = a b\nConfirmStop = True\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    assert "KeepMe = a b" in path.read_text()
+
+
+# --- Robustness of the custom systems step --------------------------------
+
+
+def test_custom_systems_replaces_a_target_that_is_not_readable_text(
+    tmp_path: Path,
+) -> None:
+    # Reached through _read_text, so it is "not what we want" and rewritten
+    # rather than an exception that ends the session at the greeter.
+    source = tmp_path / "es_systems.xml"
+    source.write_text("<systemList />")
+    target = tmp_path / "custom_systems" / "es_systems.xml"
+    target.parent.mkdir()
+    target.write_bytes(b"\xff\xfe not text")
+
+    assert ep.install_custom_systems(target, str(source)) is True
+
+    assert target.read_text() == "<systemList />"
+
+
+def test_custom_systems_removes_a_dangling_symlink(tmp_path: Path) -> None:
+    # Path.exists() follows the link and would report nothing to remove,
+    # leaving exactly the stale entry this branch exists to clear.
+    target = tmp_path / "custom_systems" / "es_systems.xml"
+    target.parent.mkdir()
+    target.symlink_to(tmp_path / "gone.xml")
+
+    assert ep.install_custom_systems(target, "") is True
+
+    assert not target.is_symlink()
+
+
+# --- main()'s diagnostics --------------------------------------------------
+
+
+def test_main_reports_unreadable_owned_values_without_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text("{not json")
+
+    assert ep.main([str(values), ""]) == 1
+
+    assert "owned-values JSON" in capsys.readouterr().err
+
+
+def test_main_reports_an_unknown_format_without_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(json.dumps({"f.conf": {"format": "toml", "keys": {}}}))
+
+    assert ep.main([str(values), ""]) == 1
+
+    assert "unknown format" in capsys.readouterr().err

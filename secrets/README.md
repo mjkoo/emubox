@@ -52,8 +52,8 @@ Re-key after changing a recipient: `just secrets-rekey`.
 Recipient: `test`, the committed VM test host key
 `tests/test_host_ed25519_key` converted with ssh-to-age, and nothing else.
 The values are not secrets: they are the plaintext in `tests/values.nix`,
-which is also what the install test compares the decrypted files against
-what the `closure-no-secrets` check greps the system closure for. Neither
+which is also what the install test compares the decrypted files against,
+and what the `closure-no-secrets` check greps the system closure for. Neither
 the test key nor this file is a recipient of, or consumed by, the box's
 configuration. Edit with `just test-secrets-edit`, which needs no admin
 key.

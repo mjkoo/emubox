@@ -44,7 +44,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -56,7 +58,10 @@ from pathlib import Path
 _WRAPPER = "emubox-settings-forest"
 _XML_DECLARATION = '<?xml version="1.0"?>'
 _DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>\s*")
-_INI_SECTION_RE = re.compile(r"^\s*\[(?P<name>[^]]*)\]\s*$")
+# A trailing comment after a section header is legal INI and is accepted by
+# configparser and Qt alike; rejecting one would send the whole file through
+# the recreate path and lose every unowned key in it.
+_INI_SECTION_RE = re.compile(r"^\s*\[(?P<name>[^]]*)\][ \t]*(?:[;#].*)?$")
 
 
 def note(message: str) -> None:
@@ -88,16 +93,61 @@ def _ensure_parent(path: Path) -> None:
 def _write(path: Path, text: str) -> None:
     """Replace the file's contents in one step.
 
-    Through a temporary file and `os.replace` so that a reader - the
-    frontend, or the next run of this program - never sees a half-written
-    document. A torn write is exactly the failure the recreate policy exists
-    to absorb; not creating more of them is cheap.
+    Through a temporary file and `os.replace` so that a reader - the frontend,
+    or the next run of this program - never sees a half-written document. A
+    torn write is exactly the failure the recreate policy exists to absorb;
+    not creating more of them is cheap.
+
+    Three details that are not decoration:
+
+    - The temporary name is unique (`mkstemp`), not `<name>.emubox-tmp`. The
+      module puts `emubox-prepare` on the system path precisely so it can be
+      run by hand, so two runs against one file are a supported scenario; a
+      shared temp name lets them open the same inode and publish a document
+      interleaved from both.
+    - An existing file's owner and mode are carried onto the replacement.
+      `os.replace` installs a *new* inode, so without this a run as root -
+      an admin's, from the greeter - would leave `es_settings.xml` owned by
+      root and the frontend, which runs as `player`, could never save again.
+    - The data is fsynced before the rename and the directory after it, since
+      `os.replace` is atomic against other processes but not against the
+      power cut this appliance gets every time it is switched off at the wall.
     """
     _ensure_parent(path)
-    temporary = path.with_name(path.name + ".emubox-tmp")
-    temporary.write_text(text)
-    temporary.chmod(0o644)
-    os.replace(temporary, path)
+    try:
+        preserve = path.stat()
+    except OSError:
+        preserve = None
+
+    handle, name = tempfile.mkstemp(
+        dir=path.parent, prefix=path.name + ".", suffix=".emubox-tmp"
+    )
+    temporary = Path(name)
+    try:
+        with os.fdopen(handle, "w") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if preserve is None:
+            temporary.chmod(0o644)
+        else:
+            temporary.chmod(stat.S_IMODE(preserve.st_mode))
+            if os.getuid() == 0:
+                os.chown(temporary, preserve.st_uid, preserve.st_gid)
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    _fsync_directory(path.parent)
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Persist a rename, so the replacement survives a power cut."""
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _read_text(path: Path) -> str | None:
@@ -115,7 +165,10 @@ def _read_text(path: Path) -> str | None:
 
 
 def _render_esde(elements: Sequence[ET.Element]) -> str:
-    body = "".join(ET.tostring(e, encoding="unicode") + "\n" for e in elements)
+    # `.strip()` because a parsed element carries its own tail whitespace, and
+    # appending a newline to that would add one blank line per element on
+    # every write - unbounded growth in a file rewritten before each launch.
+    body = "".join(ET.tostring(e, encoding="unicode").strip() + "\n" for e in elements)
     return f"{_XML_DECLARATION}\n{body}"
 
 
@@ -123,8 +176,17 @@ def _parse_esde(path: Path) -> list[ET.Element] | None:
     text = _read_text(path)
     if text is None:
         return None
+    body = strip_xml_declaration(text)
+    if not body.strip():
+        # An empty or declaration-only file is what a power cut leaves behind,
+        # which on this appliance is every switch-off at the wall. It parses
+        # to zero elements, so without this it would look like a healthy
+        # document that merely lacks every owned key, and the journal would
+        # record no recreation.
+        note(f"{path} is empty; recreating it")
+        return None
     try:
-        root = ET.fromstring(f"<{_WRAPPER}>{strip_xml_declaration(text)}</{_WRAPPER}>")
+        root = ET.fromstring(f"<{_WRAPPER}>{body}</{_WRAPPER}>")
     except ET.ParseError as error:
         note(f"{path} does not parse ({error}); recreating it")
         return None
@@ -168,6 +230,18 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
 # --- INI with sections ----------------------------------------------------
 
 
+def _lines(text: str) -> list[str]:
+    """The file's lines, split only on newlines.
+
+    Not `str.splitlines()`, which also breaks on U+2028, form feed and the
+    other exotic separators - a value containing one would be split into a
+    fragment that fails the syntax check below and take the whole file
+    through the recreate path with it. CRLF is normalised so a file an
+    emulator wrote on Windows round-trips unchanged.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
 def _split_ini_assignment(line: str) -> tuple[str, str, str] | None:
     """A line's (prefix through `=`, key, value), or None if it is not one."""
     head, separator, value = line.partition("=")
@@ -180,7 +254,7 @@ def _parse_ini(path: Path) -> list[str] | None:
     text = _read_text(path)
     if text is None:
         return None
-    lines = text.splitlines()
+    lines = _lines(text.rstrip("\n"))
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith(("#", ";")):
@@ -284,7 +358,7 @@ def _parse_retroarch(path: Path) -> list[str] | None:
     text = _read_text(path)
     if text is None:
         return None
-    lines = text.splitlines()
+    lines = _lines(text.rstrip("\n"))
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -342,15 +416,33 @@ def install_custom_systems(target: Path, source: str) -> bool:
     configuration that no longer defines it. An empty `source` is the removal
     branch, and removing what is not there is a no-op rather than an error -
     that is every launch of the frontend on the box as shipped.
+
+    This step carries the editors' error policy too, and reaches the target
+    only through `_read_text`: a target that is unreadable, not UTF-8, or a
+    directory is treated as "not what we want" and rewritten, rather than
+    raising and ending the session at the greeter. `os.path.lexists` rather
+    than `Path.exists` on the removal branch, because the latter follows a
+    symlink and would leave a dangling one in place - exactly the stale entry
+    this branch exists to clear.
     """
     if not source:
-        if not target.exists():
+        if not os.path.lexists(target):
             return False
-        target.unlink()
+        try:
+            target.unlink()
+        except OSError as error:
+            note(f"{target} could not be removed ({error}); leaving it")
+            return False
         return True
 
-    wanted = Path(source).read_text()
-    if target.exists() and target.read_text() == wanted:
+    wanted = _read_text(Path(source))
+    if wanted is None:
+        # The source is a store path the module rendered, so this is a broken
+        # call site rather than a broken configuration - the one case the
+        # recreate policy deliberately does not cover (design D3).
+        note(f"{source} is unreadable; refusing to install custom systems")
+        raise SystemExit(1)
+    if _read_text(target) == wanted:
         return False
     _write(target, wanted)
     return True
@@ -378,9 +470,22 @@ def main(argv: Sequence[str]) -> int:
         return 1
 
     root = Path(appdata)
-    tables = json.loads(Path(owned_values).read_text())
+    # The owned-values file is a store path the module renders, so anything
+    # wrong with it is a broken call site, not a broken configuration: the
+    # recreate policy deliberately does not cover it and the session should
+    # end at the greeter. It still ends with a line in the journal rather
+    # than a stack trace, which is what an admin reading `journalctl` needs.
+    try:
+        tables = json.loads(Path(owned_values).read_text())
+    except (OSError, ValueError) as error:
+        note(f"{owned_values} is not readable owned-values JSON ({error})")
+        return 1
     for relative, table in tables.items():
-        editor = _EDITORS[table["format"]]
+        try:
+            editor = _EDITORS[table["format"]]
+        except KeyError:
+            note(f"{relative}: unknown format {table.get('format')!r}")
+            return 1
         editor(root / relative, table["keys"])
 
     install_custom_systems(root / "custom_systems" / "es_systems.xml", custom_systems)

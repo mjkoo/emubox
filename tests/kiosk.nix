@@ -326,7 +326,16 @@ in
               # so three passes would land on one process and record one
               # crash, and the session would never give up.
               pid = esde_pids()[0]
-              machine.succeed(f"kill {pid}")
+              # SIGKILL, not SIGTERM. These kills land on a frontend that is
+              # seconds old, and a starting ES-DE has SDL's SIGTERM handler
+              # installed but is not yet polling the event queue, so the
+              # SDL_QUIT it posts sits unread and the process does not exit
+              # (CI run 2: a 60 s wait for a 4-second-old pid timed out).
+              # SIGKILL is also the better model of what this subtest is
+              # about - a crash, not a quit; the relaunch subtest above still
+              # uses SIGTERM against a frontend that has been up 35 s, which
+              # is the graceful-exit path.
+              machine.succeed(f"kill -KILL {pid}")
               machine.wait_until_fails(f"kill -0 {pid}", timeout=60)
 
           # Longer than the loop's 2 s relaunch pause: without the grace

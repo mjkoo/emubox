@@ -1,6 +1,6 @@
 ## Purpose
 
-CI proves the base layer's guarantees, ephemeral root, persisted state, secrets and networking declaration, on every push without hardware, through the same boot path the real box uses.
+CI proves what the host configuration guarantees, the base layer's ephemeral root, persisted state, secrets and networking declaration, and the presence of the programs the box installs, on every push without hardware, through the same boot path the real box uses.
 
 ## Requirements
 
@@ -43,6 +43,17 @@ The test SHALL assert the family WiFi profile is listed by the network manager w
 #### Scenario: Profile and listeners
 - **WHEN** the test node has booted
 - **THEN** the declared profile is listed, its generated connection file carries the test PSK, and every listening TCP socket, and every UDP socket other than the DHCP client's, is bound to loopback
+
+### Requirement: Vendored programs are installed in the booted system
+The test SHALL assert, on the booted node, that the frontend and the vendored emulator are installed on the system's program path and that the frontend reports the pinned version, so that a package that fails to build or is dropped from the host closure fails CI rather than being discovered on the box.
+
+#### Scenario: Programs present
+- **WHEN** the test node has booted
+- **THEN** `es-de` and `duckstation` are executable files on the system's program path
+
+#### Scenario: Frontend version
+- **WHEN** the test runs `es-de --version` on the booted node, which has no display
+- **THEN** the command succeeds and its output contains `ES-DE 3.4.1`
 
 ### Requirement: The test runs in CI and locally
 The test SHALL be part of `nix flake check` so CI runs it on every push, and SHALL be runnable with the documented recipe on any `x86_64-linux` builder that exposes KVM; CI's runner is the one this change uses, and no local KVM builder is assumed.

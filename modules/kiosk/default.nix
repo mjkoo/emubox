@@ -70,7 +70,8 @@ in
     });
   '';
 
-  # TODO(pkgs/es-de): ES-DE itself, once vendored. Until then the session
-  # script references `es-de` by name and the loop simply retries.
-  environment.systemPackages = [ pkgs.cage ];
+  environment.systemPackages = [
+    pkgs.cage
+    pkgs.es-de
+  ];
 }

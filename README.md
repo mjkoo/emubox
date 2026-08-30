@@ -34,6 +34,35 @@ set), the box substitutes from it once `binaryCachePublicKey` is set in
 `hosts/emubox/facts.nix`, and a local builder gains the same by adding the
 cache to its own `nix.settings`.
 
+### Vendored packages
+
+`pkgs/` holds the three packages the pinned nixpkgs no longer carries,
+built against the flake's own nixpkgs and exposed both through the
+overlay and as `packages.x86_64-linux.{es-de,freeimage,duckstation}`.
+Each `package.nix` opens with where it came from and why it is here.
+
+- `es-de`, the frontend, is built from source at release 3.4.1 with the
+  in-app updater compiled out, from the derivation nixpkgs removed in PR
+  #454867. The build fails if the installed find rules stop naming the
+  NixOS RetroArch core directory.
+- `freeimage` is ES-DE's only image backend and the reason nixpkgs removed
+  both: it carries more than thirty unpatched CVEs, listed unchanged in
+  its `knownVulnerabilities`, plus three small fixes forward against the
+  newer libjpeg, OpenEXR and libtiff, recorded in its header. The flake
+  permits it by name in `permittedInsecurePackages`; the accepted risk (it
+  only ever decodes images the admin put on the box, and CI builds it
+  whenever its inputs change) is recorded beside that permission in
+  `flake.nix`.
+- `duckstation` is the unmodified upstream `x86_64` AppImage of a pinned
+  release, extracted and run inside an FHS wrapper, never built from
+  patched source. nixpkgs dropped its derivation at upstream's request
+  when the licence became CC-BY-NC-ND 4.0, which permits redistributing
+  unmodified copies non-commercially with attribution and forbids
+  derivatives; that is what lets the public cache hold it. To bump it,
+  edit `version` in `pkgs/duckstation/package.nix`, set
+  `hash = lib.fakeHash`, rebuild, and record the hash the failed fetch
+  reports; nothing else in the file changes.
+
 ## Install
 
 One command over Ethernet installs or reinstalls the box from the flake,

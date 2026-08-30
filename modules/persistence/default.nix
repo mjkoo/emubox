@@ -24,7 +24,16 @@ in
   # btrfs refuses to delete a parent that still has children.
   boot.initrd.systemd.services.rollback-root = {
     description = "Recreate the @root subvolume";
-    unitConfig.DefaultDependencies = false;
+    unitConfig = {
+      DefaultDependencies = false;
+      # Never wipe a mounted root. The unit is ordered before sysroot.mount,
+      # so this is false on the run that matters; it exists so that any
+      # future re-queue of the unit while /sysroot is up (see
+      # RemainAfterExit below) is a skipped, logged no-op rather than the
+      # deletion of the live root. A skipped wipe shows up as surviving
+      # markers in the VM test.
+      ConditionPathIsMountPoint = "!/sysroot";
+    };
     # The partition's device unit is what sysroot.mount itself waits for;
     # the fstab generator also hangs it on initrd-root-device.target for the
     # /sysroot entry. Depend on both so the unit can never run before the
@@ -39,7 +48,17 @@ in
     # having run.
     requiredBy = [ "sysroot.mount" ];
     wantedBy = [ "initrd.target" ];
-    serviceConfig.Type = "oneshot";
+    serviceConfig = {
+      Type = "oneshot";
+      # Stay "active (exited)" for the rest of the initrd. Without this a
+      # finished oneshot is inactive, and the switch-root transaction
+      # (initrd-nixos-activation has RequiresMountsFor=/sysroot/run, which
+      # re-queues a start job on sysroot.mount and, through its Requires=,
+      # on this unit) ran the wipe a second time under the mounted root and
+      # deleted the live @root; the first CI run of the install test showed
+      # exactly that. With RemainAfterExit the second start job is a no-op.
+      RemainAfterExit = true;
+    };
     script = ''
       set -o pipefail
       mkdir -p /btrfs-top
@@ -84,7 +103,13 @@ in
     # rather than leave the neededForBoot directories on the ephemeral root.
     requiredBy = [ "initrd-nixos-activation.service" ];
     wantedBy = [ "initrd.target" ];
-    serviceConfig.Type = "oneshot";
+    serviceConfig = {
+      Type = "oneshot";
+      # Run once: the switch-root transaction re-queues this unit through
+      # the requiredBy above (same mechanism as rollback-root's). The
+      # mkdirs are idempotent, so a second run would only be noise.
+      RemainAfterExit = true;
+    };
     # Created root:root 0755. impermanence mirrors an existing /persist
     # directory's ownership onto the root side, so a persisted directory
     # that needs another owner or mode must be declared with `user`,
@@ -119,7 +144,13 @@ in
     # reproducing the changing id.
     requiredBy = [ "initrd-nixos-activation.service" ];
     wantedBy = [ "initrd.target" ];
-    serviceConfig.Type = "oneshot";
+    serviceConfig = {
+      Type = "oneshot";
+      # Run once: re-queued by the switch-root transaction like the other
+      # two initrd oneshots; a second run would stack a second bind mount
+      # on the same file.
+      RemainAfterExit = true;
+    };
     script = ''
       mkdir -p /sysroot/persist/etc /sysroot/etc
       [ -e /sysroot/persist/etc/machine-id ] || touch /sysroot/persist/etc/machine-id

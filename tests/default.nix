@@ -184,7 +184,9 @@ in
     # stamp's mtime is boot 1's; it must survive unchanged.
     machine.wait_for_file("/var/lib/systemd/timers/stamp-fstrim.timer", timeout=60)
     stamp_mtime = machine.succeed("stat -c %Y /var/lib/systemd/timers/stamp-fstrim.timer").strip()
-    machine.succeed("touch /root/marker /etc/marker /data/marker /tmp/marker")
+    # The /data marker goes under player's home, the path the persistence
+    # spec's "Data under /data survives a reboot" scenario names.
+    machine.succeed("touch /root/marker /etc/marker /data/home/player/marker /tmp/marker")
     machine.succeed("sync")
     machine.shutdown()
 
@@ -194,7 +196,7 @@ in
     with subtest("Root and /etc markers are gone; /data marker remains"):
         machine.fail("test -e /root/marker")
         machine.fail("test -e /etc/marker")
-        machine.succeed("test -e /data/marker")
+        machine.succeed("test -e /data/home/player/marker")
 
     with subtest("/tmp is clean at boot"):
         # Covered by boot.tmp.cleanOnBoot as well as the root wipe, so this
@@ -230,7 +232,7 @@ in
         machine.fail("test -e /root/marker")
         machine.fail("test -e /etc/marker")
         machine.fail("test -e /tmp/marker")
-        machine.succeed("test -e /data/marker")
+        machine.succeed("test -e /data/home/player/marker")
         assert machine.succeed("cat /etc/machine-id").strip() == machine_id
 
     # --- secrets: decrypt in the VM ------------------------------------------
@@ -313,7 +315,9 @@ in
         machine.wait_until_succeeds(
             "systemctl is-active nix-gc.timer nix-optimise.timer fstrim.timer", timeout=60
         )
-        swap = machine.wait_until_succeeds("swapon --show=NAME --noheadings | grep zram", timeout=60)
+        # No pipe (see the journal check above); the zram device appears
+        # shortly after boot, so poll the listing and match it in Python.
+        swap = machine.wait_until_succeeds("swapon --show=NAME --noheadings", timeout=60)
         assert "zram" in swap, swap
 
     with subtest("Runtime watchdog is declared at 30 s"):

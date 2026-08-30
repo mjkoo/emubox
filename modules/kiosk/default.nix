@@ -65,6 +65,26 @@ let
     text = ''
       export ESDE_APPDATA_DIR=${cfg.appdataDir}
 
+      # Every way out of this script must exit 0, because SDDM shows a
+      # greeter only for a session that ended cleanly - it reads exit 1 as
+      # HELPER_AUTH_ERROR and then never starts one at all (the threshold
+      # comment below carries the mechanism). That applies to the deliberate
+      # give-up *and* to an unexpected failure under `set -e`: a bug here, or
+      # the non-zero `emubox-prepare` that design D1 says should "stop at a
+      # greeter the admin can log into", would otherwise leave the box on a
+      # black screen with no way in - the opposite of what it promises. The
+      # real status is logged before it is swallowed, so the journal keeps it.
+      # A named function rather than the assignment inline in the trap
+      # string, which shellcheck rejects as SC2154 (it cannot see a variable
+      # assigned inside single quotes).
+      report_clean_exit() {
+        if [ "$1" -ne 0 ]; then
+          echo "emubox-session: exiting $1; reporting a clean exit so SDDM shows the greeter" >&2
+        fi
+        exit 0
+      }
+      trap 'report_clean_exit $?' EXIT
+
       # A run shorter than the window counts as a crash; three in a row and
       # the session ends. SDDM's autoLogin.relogin is false, so what follows
       # is the greeter rather than an endless relaunch. EMUBOX_CRASH_WINDOW

@@ -45,7 +45,7 @@ The test SHALL assert the family WiFi profile is listed by the network manager w
 - **THEN** the declared profile is listed, its generated connection file carries the test PSK, and every listening TCP socket, and every UDP socket other than the DHCP client's, is bound to loopback
 
 ### Requirement: The test runs in CI and locally
-The test SHALL be part of `nix flake check` so CI runs it on every push, and SHALL be runnable locally with the documented recipe on an `x86_64-linux` builder that exposes KVM.
+The test SHALL be part of `nix flake check` so CI runs it on every push, and SHALL be runnable with the documented recipe on any `x86_64-linux` builder that exposes KVM; CI's runner is the one this change uses, and no local KVM builder is assumed.
 
 #### Scenario: CI runs the test
 - **WHEN** a push to `main` or a pull request runs CI

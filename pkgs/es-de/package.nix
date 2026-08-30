@@ -12,6 +12,17 @@
 # form. FreeImage resolves to the vendored pkgs/freeimage through the
 # overlay; ES-DE has no other image backend.
 #
+# kiosk-quit-menu.patch is this project's own, not nixpkgs'. Since upstream
+# commit defb16b6 (2020-12-17) GuiMenu.cpp adds the QUIT entry only when
+# neither ForceKiosk nor UIMode == "kiosk" is in effect, so kiosk mode has no
+# quit menu at all and the box would have no way to power off from the
+# frontend. The patch adds the entry in every UI mode and, in openQuitMenu(),
+# routes kiosk mode to the submenu and drops its "quit ES-DE" row (the
+# session would only relaunch the frontend) and its "suspend" row (the box
+# refuses to suspend), leaving reboot and power off with their confirmations.
+# Being in `patches`, a bump to a source the hunks no longer apply to fails
+# in the patch phase rather than producing a frontend without the menu.
+#
 # Bumping: edit `version`, set `hash = lib.fakeHash`, rebuild, and record
 # the hash the failed fetch reports; the guard and the version check re-run.
 {
@@ -45,6 +56,8 @@ stdenv.mkDerivation (finalAttrs: {
     url = "https://gitlab.com/es-de/emulationstation-de/-/archive/v${finalAttrs.version}/emulationstation-de-v${finalAttrs.version}.tar.gz";
     hash = "sha256-MVmJIdxwEG3wgvwbhuIEYCxKaYss/3hq9xszGLjZ1Xw=";
   };
+
+  patches = [ ./kiosk-quit-menu.patch ];
 
   postPatch = ''
     # ldd-based detection fails for cross builds

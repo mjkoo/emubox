@@ -136,6 +136,22 @@ def test_esde_preserves_typed_bool_and_int_elements(tmp_path: Path) -> None:
     assert esde_named(path, "MaxVRAM") == ("int", "MaxVRAM", "512")
 
 
+def test_esde_corrects_an_owned_key_stored_under_the_wrong_type(
+    tmp_path: Path,
+) -> None:
+    # The flake owns the element type as well as the value, so a key whose
+    # value already matches but whose type drifted is still put right - ES-DE
+    # reads `<bool>` and `<string>` into different maps.
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n<string name="ShowQuitMenu" value="true" />\n'
+    )
+
+    assert ep.set_esde_settings(path, OWNED) is True
+
+    assert esde_named(path, "ShowQuitMenu") == ("bool", "ShowQuitMenu", "true")
+
+
 def test_esde_does_not_write_when_nothing_changed(tmp_path: Path) -> None:
     path = tmp_path / "es_settings.xml"
     assert ep.set_esde_settings(path, OWNED) is True
@@ -251,6 +267,43 @@ def test_ini_recreates_an_unreadable_file(
     assert "Fullscreen = True" in text
     assert "not a line of this file's format" not in text
     assert "Dolphin.ini" in capsys.readouterr().err
+
+
+def test_ini_recreates_a_file_with_a_line_that_is_not_a_setting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Readable text, so this reaches the syntax check rather than the decode
+    # failure the case above reaches: a line that is neither blank, comment,
+    # section header nor assignment means the file is not this format.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = False\nthis line has no assignment\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "this line has no assignment" not in text
+    assert "ConfirmStop = False" in text
+    assert "Fullscreen = True" in text
+    assert "not a setting" in capsys.readouterr().err
+
+
+def test_ini_appends_a_key_before_a_trailing_comment(tmp_path: Path) -> None:
+    # A new key goes after the section's last setting rather than at the end
+    # of its block, so a comment written under the last setting keeps sitting
+    # under it instead of being pushed away from what it annotates.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(
+        "[Interface]\nConfirmStop = False\n[Display]\nRenderToMain = True\n; about the display\n"
+    )
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    lines = path.read_text().splitlines()
+    assert lines[-3:] == [
+        "RenderToMain = True",
+        "Fullscreen = True",
+        "; about the display",
+    ]
 
 
 # --- RetroArch flat file --------------------------------------------------

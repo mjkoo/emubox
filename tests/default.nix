@@ -340,7 +340,7 @@ in
         assert "SystemMaxUse=256M" in conf, conf
         assert "MaxRetentionSec=1month" in conf, conf
 
-    # --- packages: the vendored programs are installed --------------------
+    # --- packages: the vendored programs are installed -----------------------
     # Nothing is launched beyond `--version`: the VM has no display, and
     # the AppImage's Qt would fail without one, proving nothing about the
     # package. `es-de --version` returns before SDL initialises.
@@ -350,7 +350,10 @@ in
         machine.succeed("test -x /run/current-system/sw/bin/duckstation")
 
     with subtest("es-de reports the pinned version"):
-        out = machine.succeed("es-de --version")
+        # LD_BIND_NOW resolves every function symbol at load, so an
+        # unresolved symbol anywhere in ES-DE's library graph (FreeImage's
+        # fixes forward included) fails here instead of on first use.
+        out = machine.succeed("LD_BIND_NOW=1 es-de --version")
         assert "ES-DE 3.4.1" in out, out
   '';
 }

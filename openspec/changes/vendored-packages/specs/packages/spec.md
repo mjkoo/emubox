@@ -35,7 +35,7 @@ FreeImage SHALL be the last derivation nixpkgs carried before removal, with its 
 
 #### Scenario: Insecure package is permitted deliberately
 - **WHEN** the host configuration or the standalone package is evaluated
-- **THEN** FreeImage builds only because the flake's nixpkgs configuration lists that exact package name as permitted, and the reason (only admin-supplied images are decoded; CI rebuilds it on every push) is recorded where the permission is granted
+- **THEN** FreeImage builds only because the flake's nixpkgs configuration lists that exact package name as permitted, and the reason (only admin-supplied images are decoded; CI builds it whenever its inputs change) is recorded where the permission is granted
 
 #### Scenario: Permission is what admits it
 - **WHEN** the package name is removed from the flake's permitted list and `nix build .#freeimage` runs
@@ -61,7 +61,7 @@ The vendored packages' store paths the project publishes to its public binary ca
 
 #### Scenario: DuckStation on the cache
 - **WHEN** the cache roots are pushed
-- **THEN** the DuckStation store path pushed holds the upstream AppImage's contents extracted unmodified, plus the wrapper that runs them; the licence permits redistributing that unmodified work non-commercially with attribution, and extraction changes its form, not its content
+- **THEN** the DuckStation store path pushed holds the upstream AppImage's contents extracted unmodified, plus the wrapper that runs them and a desktop entry the project wrote; the licence permits redistributing that unmodified work non-commercially with attribution, and extraction changes its form, not its content
 
 #### Scenario: ES-DE and FreeImage on the cache
 - **WHEN** the cache roots are pushed

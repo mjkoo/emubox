@@ -1,33 +1,44 @@
 # Vendored from nixpkgs revision 7c7c704523 (pkgs/by-name/fr/freeimage/),
 # the last revision carrying this derivation: the parent of PR #454867
 # (2025-10-23), whose two commits removed emulationstation-de and then
-# freeimage over the unpatched CVEs listed in knownVulnerabilities below. Kept because ES-DE (pkgs/es-de) has no other image backend. Every
-# file in this directory is the nixpkgs original: the diffs and patches are
-# byte-exact copies (patchFlags --binary: unbundle.diff and
-# libtiff-4.4.0.diff carry CRLF line endings), and this file differs only
-# by this header and by nixfmt's whitespace, which CI's format check
-# requires. knownVulnerabilities is deliberately not edited: it is the
-# record of what is unpatched. flake.nix permits the package by name and
-# records the accepted risk beside that permission.
+# freeimage over the unpatched CVEs listed in knownVulnerabilities below.
+# Kept because ES-DE (pkgs/es-de) has no other image backend.
 #
-# One fix forward against the pinned nixpkgs, the design's expected
-# vendoring cost: nixpkgs 608422bd4 ("libjpeg: drop freeimage support",
-# 2025-05-22) removed the patches that compiled libjpeg-turbo's transupp.c
-# into libjpeg and installed transupp.h in a `dev_private` output, which
-# is now `throw "not supported anymore"`. FreeImage's unbundled
-# JPEGTransform.cpp still includes <transupp.h> and calls jtransform_*.
-# The postPatch below compiles libjpeg-turbo's own transupp.c (from the
-# same libjpeg the library links, so the versions match by construction)
-# into libfreeimage instead; FreeImage builds with -fvisibility=hidden, so
-# nothing new is exported. Overriding libjpeg for FreeImage alone was
-# rejected: ES-DE also loads libjpeg through poppler, and the dynamic
-# linker picks one libjpeg.so.8 by soname in load order.
+# The diffs and patches are byte-exact copies of the nixpkgs files
+# (patchFlags --binary: several carry CRLF line endings, which the
+# repository's .gitattributes keeps from conversion); libtiff-4.4.0.diff
+# sits in nixpkgs' directory without being in its patches list and is
+# copied for completeness. This file differs from nixpkgs' by this header,
+# nixfmt's whitespace (CI's format check requires it), the three fixes
+# forward below, the removal of libjpeg.dev_private from buildInputs (that
+# output is now a throw), and lib.licenses.freeimage inlined under meta
+# (it left nixpkgs with the package). knownVulnerabilities is deliberately
+# not edited: it is the record of what is unpatched. flake.nix permits the
+# package by name and records the accepted risk beside that permission.
 #
-# Two more fixes forward of the same kind, both as substitutions in
-# postPatch: OpenEXR 3 moved half.h into Imath and its stream API takes
-# uint64_t (the lines Fedora's freeimage-openexr3.patch changes, applied
-# to the unbundled tree), and libtiff 4.7.2 (2026-04) moved tif_row into
-# the tif_dir sub-struct, which PluginG3's fax decoder reaches into.
+# The fixes forward are the design's expected vendoring cost, each a
+# postPatch substitution:
+# - nixpkgs 608422bd4 ("libjpeg: drop freeimage support", 2025-05-22)
+#   removed the patches that compiled libjpeg-turbo's transupp.c into
+#   libjpeg and installed transupp.h in a dev_private output. FreeImage's
+#   unbundled JPEGTransform.cpp still includes <transupp.h> and calls
+#   jtransform_*. The postPatch compiles libjpeg-turbo's own transupp.c
+#   (from the same libjpeg the library links, so the versions match by
+#   construction) into libfreeimage instead; FreeImage builds with
+#   -fvisibility=hidden, so nothing new is exported. Overriding libjpeg
+#   for FreeImage alone was rejected: ES-DE also loads libjpeg through
+#   poppler, and the dynamic linker picks one libjpeg.so.8 by soname in
+#   load order. To re-check on a libjpeg bump: transupp.c still needs
+#   only jcopy_block_row and jdiv_round_up from the library, and jpegint.h
+#   still has no configuration-dependent struct layout (the stub
+#   jconfigint.h defines none). The fallback if that breaks is dropping
+#   JPEGTransform.cpp from the source lists: ES-DE never calls
+#   FreeImage_JPEGTransform*.
+# - OpenEXR 3 moved half.h into Imath and its stream API takes uint64_t
+#   (the lines Fedora's freeimage-openexr3.patch changes, applied to the
+#   unbundled tree).
+# - libtiff 4.7.2 (2026-04) moved tif_row into the tif_dir sub-struct,
+#   which PluginG3's fax decoder reaches into.
 {
   lib,
   stdenv,
@@ -89,10 +100,11 @@ stdenv.mkDerivation (finalAttrs: {
       --replace "pkg-config" "$PKG_CONFIG"
 
     # transupp from libjpeg-turbo's source, compiled into libfreeimage
-    # (see the header). jinclude.h wants a generated jconfigint.h; the
-    # only thing transupp.c reaches through it is INLINE, and its
-    # getenv/setenv helpers, which transupp.c never calls, are left out
-    # (setenv is POSIX, invisible under the Makefile's -std=c99).
+    # (see the header). jinclude.h wants a generated jconfigint.h; with
+    # its getenv/setenv helpers compiled out (transupp.c never calls them,
+    # and setenv is invisible under the Makefile's -std=c99) nothing the
+    # copied files use is left in it, so the stub only names the macros
+    # the headers mention.
     cp ${libjpeg.src}/src/{transupp.c,transupp.h,jinclude.h,jpegint.h,jpegapicomp.h} Source/FreeImageToolkit/
     cat > Source/FreeImageToolkit/jconfigint.h <<'HDR'
     #define INLINE inline
@@ -178,6 +190,8 @@ stdenv.mkDerivation (finalAttrs: {
         url = "https://spdx.org/licenses/FreeImage.html";
         free = true;
         redistributable = true;
+        deprecated = false;
+        licenseType = "simple";
       }
       gpl2Only
       gpl3Only

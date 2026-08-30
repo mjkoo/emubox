@@ -13,9 +13,9 @@
 # installs its contents plus an FHS wrapper that runs them, so what
 # reaches the store and the cache is the extracted form, byte-identical in
 # content: the posture rests on the contents being unmodified, not on the
-# file being one blob. The .desktop file installed below is rewritten to
-# call the wrapper; it lands under $out/share/applications, outside the
-# extracted tree the wrapper runs.
+# file being one blob. The desktop entry installed below is written here
+# (the wrapper's name with upstream's icon name and categories), not a
+# rewritten copy of upstream's file; the icon is copied verbatim.
 #
 # Bumping: edit `version` to the new release tag (without the leading v),
 # set `hash = lib.fakeHash`, rebuild, and record the hash the failed fetch
@@ -27,6 +27,7 @@
   lib,
   appimageTools,
   fetchurl,
+  makeDesktopItem,
 }:
 
 let
@@ -41,17 +42,28 @@ let
   # The unpacked AppImage; wrapType2 runs the same extraction for the
   # wrapper, so this is one more reference to the same store path.
   contents = appimageTools.extract { inherit pname version src; };
+
+  desktopItem = makeDesktopItem {
+    name = "org.duckstation.DuckStation";
+    desktopName = "DuckStation";
+    genericName = "PlayStation 1 Emulator";
+    comment = "Fast PlayStation 1 emulator";
+    exec = "duckstation %f";
+    icon = "org.duckstation.DuckStation";
+    categories = [
+      "Game"
+      "Emulator"
+      "Qt"
+    ];
+  };
 in
 appimageTools.wrapType2 {
   inherit pname version src;
 
-  # The desktop entry and icon from the extracted AppImage; Exec and
-  # TryExec point at the wrapper, which is what is on PATH.
+  # The project's desktop entry (see the header) and upstream's icon.
   extraInstallCommands = ''
-    install -Dm444 ${contents}/org.duckstation.DuckStation.desktop \
+    install -Dm444 ${desktopItem}/share/applications/org.duckstation.DuckStation.desktop \
       -t $out/share/applications
-    substituteInPlace $out/share/applications/org.duckstation.DuckStation.desktop \
-      --replace-fail 'duckstation-qt' 'duckstation'
     install -Dm444 ${contents}/usr/share/icons/hicolor/512x512/apps/org.duckstation.DuckStation.png \
       -t $out/share/icons/hicolor/512x512/apps
   '';

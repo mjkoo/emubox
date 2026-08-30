@@ -3,13 +3,17 @@
 # flake. Derived from nixpkgs revision 7c7c704523
 # (pkgs/by-name/em/emulationstation-de/package.nix, 3.2.0), the last
 # revision carrying it: the parent of PR #454867 (2025-10-23), which
-# removed it along with freeimage. Changes
-# from that derivation: renamed to es-de, bumped to 3.4.1, the nixpkgs
-# patch that added /run/current-system/sw/lib/retroarch/cores to
-# es_find_rules.xml dropped because upstream's file carries that path (the
-# postInstall guard below re-checks that claim on every bump), and a
-# version check added. FreeImage resolves to the vendored pkgs/freeimage
-# through the overlay; ES-DE has no other image backend.
+# removed it along with freeimage. Changes from that derivation: renamed
+# to es-de, bumped to 3.4.1, the nixpkgs patch that added
+# /run/current-system/sw/lib/retroarch/cores to es_find_rules.xml dropped
+# because upstream's file carries that path (the postInstall guard below
+# re-checks that claim on every bump), a version check added, the nixpkgs
+# maintainer dropped, and the description shortened to nixpkgs' noun-phrase
+# form. FreeImage resolves to the vendored pkgs/freeimage through the
+# overlay; ES-DE has no other image backend.
+#
+# Bumping: edit `version`, set `hash = lib.fakeHash`, rebuild, and record
+# the hash the failed fetch reports; the guard and the version check re-run.
 {
   lib,
   stdenv,
@@ -77,6 +81,10 @@ stdenv.mkDerivation (finalAttrs: {
   # carried it since before 3.2.0; this fails the build if a bump drops it.
   postInstall = ''
     rules=$out/share/es-de/resources/systems/linux/es_find_rules.xml
+    if [ ! -f "$rules" ]; then
+      echo "es-de: $rules is not installed; the resources moved" >&2
+      exit 1
+    fi
     if ! grep -qF /run/current-system/sw/lib/retroarch/cores "$rules"; then
       echo "es-de: $rules does not list /run/current-system/sw/lib/retroarch/cores" >&2
       exit 1

@@ -36,7 +36,7 @@ cache to its own `nix.settings`.
 
 ### Vendored packages
 
-`pkgs/` holds the three programs the pinned nixpkgs no longer carries,
+`pkgs/` holds the three packages the pinned nixpkgs no longer carries,
 built against the flake's own nixpkgs and exposed both through the
 overlay and as `packages.x86_64-linux.{es-de,freeimage,duckstation}`.
 Each `package.nix` opens with where it came from and why it is here.
@@ -46,11 +46,13 @@ Each `package.nix` opens with where it came from and why it is here.
   #454867. The build fails if the installed find rules stop naming the
   NixOS RetroArch core directory.
 - `freeimage` is ES-DE's only image backend and the reason nixpkgs removed
-  both: it carries about thirty unpatched CVEs, listed unchanged in its
-  `knownVulnerabilities`. The flake permits it by name in
-  `permittedInsecurePackages`; the accepted risk (it only ever decodes
-  images the admin put on the box, and CI rebuilds it on every push) is
-  recorded beside that permission in `flake.nix`.
+  both: it carries more than thirty unpatched CVEs, listed unchanged in
+  its `knownVulnerabilities`, plus three small fixes forward against the
+  newer libjpeg, OpenEXR and libtiff, recorded in its header. The flake
+  permits it by name in `permittedInsecurePackages`; the accepted risk (it
+  only ever decodes images the admin put on the box, and CI builds it
+  whenever its inputs change) is recorded beside that permission in
+  `flake.nix`.
 - `duckstation` is the unmodified upstream `x86_64` AppImage of a pinned
   release, extracted and run inside an FHS wrapper, never built from
   patched source. nixpkgs dropped its derivation at upstream's request

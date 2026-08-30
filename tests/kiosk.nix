@@ -348,12 +348,15 @@ in
           # The primary assertion is this pair: the frontend is gone and the
           # display manager is still there to serve a login.
           machine.succeed("systemctl is-active display-manager.service")
-          # Secondary, and the one observable design D5 calls brittle. `-x`
-          # against the compositor's own name, never `pgrep -f`: `-f` matches
-          # the full command line and pgrep excludes only its own pid, so the
-          # driver's `bash -c` and `timeout` processes carry the pattern
-          # themselves and `pgrep -f 'sddm-greeter|kwin'` succeeds on any
-          # booted machine, greeter or not.
+          # The greeter itself, asserted as a session on the seat rather than
+          # by a process name. Design D5 allowed the process name to be
+          # adjusted or dropped if it proved flaky, and it has now proved so
+          # twice: nixpkgs wraps these binaries, so cage's comm is
+          # `.cage-wrapped` and the greeter compositor's is
+          # `.kwin_wayland-w` (15-char comm truncation), and `pgrep -f` is
+          # worse than useless because it matches the driver's own command
+          # line. An active `sddm` session on seat0 is what "the greeter is
+          # shown" actually means, and it depends on no binary's name.
           def greeter_state():
               return machine.succeed(
                   "echo '--- sessions'; loginctl list-sessions --no-legend || true; "
@@ -365,15 +368,16 @@ in
               )
 
           try:
-              machine.wait_until_succeeds("pgrep -x kwin_wayland", timeout=120)
+              retry(lambda _: session_on_seat("sddm"), timeout_seconds=120)
           except Exception:
               # Only on failure, so a green run stays quiet. This dump is what
               # identified the exit-code bug: it showed no sessions, no seat,
               # and only the sddm daemon itself still running.
               print(greeter_state())
               raise
-          # And the seat is no longer player's, which is the other half of
-          # "no automatic login while this display manager keeps running".
+          # The seat being the greeter's is also the other half of "no
+          # automatic login while this display manager keeps running": it
+          # cannot be player's at the same time.
           assert not session_on_seat("player")
 
       with subtest("A reboot from the greeter restores the kiosk"):

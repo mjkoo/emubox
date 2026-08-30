@@ -27,6 +27,14 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      # The host closure is about 10 GB and the runner's root disk starts
+      # with roughly 20 GB free; drop the preinstalled toolchains nothing
+      # here uses before the store fills it.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           # flake inputs fetched through the GitHub API hit rate limits without it

@@ -1,7 +1,7 @@
-# Vendored from nixpkgs revision 8451347 (pkgs/by-name/fr/freeimage/), the
-# parent of PR #454867 (2025-10-23), which removed freeimage and with it
-# emulationstation-de over the unpatched CVEs listed in knownVulnerabilities
-# below. Kept because ES-DE (pkgs/es-de) has no other image backend. Every
+# Vendored from nixpkgs revision 7c7c704523 (pkgs/by-name/fr/freeimage/),
+# the last revision carrying this derivation: the parent of PR #454867
+# (2025-10-23), whose two commits removed emulationstation-de and then
+# freeimage over the unpatched CVEs listed in knownVulnerabilities below. Kept because ES-DE (pkgs/es-de) has no other image backend. Every
 # file in this directory is the nixpkgs original: the diffs and patches are
 # byte-exact copies (patchFlags --binary: unbundle.diff and
 # libtiff-4.4.0.diff carry CRLF line endings), and this file differs only
@@ -12,7 +12,7 @@
 #
 # One fix forward against the pinned nixpkgs, the design's expected
 # vendoring cost: nixpkgs 608422bd4 ("libjpeg: drop freeimage support",
-# 2025-11) removed the patches that compiled libjpeg-turbo's transupp.c
+# 2025-05-22) removed the patches that compiled libjpeg-turbo's transupp.c
 # into libjpeg and installed transupp.h in a `dev_private` output, which
 # is now `throw "not supported anymore"`. FreeImage's unbundled
 # JPEGTransform.cpp still includes <transupp.h> and calls jtransform_*.
@@ -168,7 +168,20 @@ stdenv.mkDerivation (finalAttrs: {
   meta = {
     description = "Open Source library for accessing popular graphics image file formats";
     homepage = "http://freeimage.sourceforge.net/";
-    license = "GPL";
+    license = with lib.licenses; [
+      # lib.licenses.freeimage left nixpkgs with the package in the same
+      # PR; this is that entry as mkLicense built it.
+      {
+        spdxId = "FreeImage";
+        shortName = "freeimage";
+        fullName = "FreeImage Public License v1.0";
+        url = "https://spdx.org/licenses/FreeImage.html";
+        free = true;
+        redistributable = true;
+      }
+      gpl2Only
+      gpl3Only
+    ];
     knownVulnerabilities = [
       "CVE-2024-31570"
       "CVE-2024-28584"
@@ -215,7 +228,7 @@ stdenv.mkDerivation (finalAttrs: {
       "CVE-2019-12214"
       "CVE-2019-12212"
     ];
-    maintainers = with lib.maintainers; [ l-as ];
+    maintainers = [ ];
     platforms = with lib.platforms; unix;
   };
 })

@@ -65,4 +65,4 @@ The vendored packages' store paths the project publishes to its public binary ca
 
 #### Scenario: ES-DE and FreeImage on the cache
 - **WHEN** the cache roots are pushed
-- **THEN** ES-DE (MIT) and FreeImage (GPL, as the vendored derivation records it) are pushed with the rest
+- **THEN** ES-DE (MIT) and FreeImage (FreeImage Public License or GPL, as the vendored derivation records it) are pushed with the rest

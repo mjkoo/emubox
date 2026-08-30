@@ -25,19 +25,24 @@ fmt-check:
 flake-check:
     nix flake check
 
-# Evaluate the host closure and both x86_64-linux checks without building (works on macOS)
+# Evaluate the host closure and the x86_64-linux checks without building (works on macOS)
 eval:
     nix eval --raw .#nixosConfigurations.{{host}}.config.system.build.toplevel.drvPath
     nix eval --raw .#checks.x86_64-linux.vm.drvPath
+    nix eval --raw .#checks.x86_64-linux.kiosk.drvPath
     nix eval --raw .#checks.x86_64-linux.closure-no-secrets.drvPath
 
 # Build the host closure (needs an x86_64-linux builder)
 build:
     nix build .#nixosConfigurations.{{host}}.config.system.build.toplevel --no-link --print-out-paths
 
-# Build and run the VM test (x86_64-linux builder with KVM)
+# Build and run the install VM test (x86_64-linux builder with KVM)
 vm-test:
     nix build .#checks.x86_64-linux.vm --no-link
+
+# Build and run the kiosk VM test (x86_64-linux builder with KVM)
+kiosk-test:
+    nix build .#checks.x86_64-linux.kiosk --no-link
 
 # Prove no test secret value is in the system closure (x86_64-linux builder)
 closure-check:

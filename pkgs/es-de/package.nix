@@ -22,6 +22,17 @@
 # refuses to suspend), leaving reboot and power off with their confirmations.
 # Being in `patches`, a bump to a source the hunks no longer apply to fails
 # in the patch phase rather than producing a frontend without the menu.
+# `--fuzz=0` alongside the default `-p1` makes that a tripwire on any drift
+# in the hunks' context, not only on drift in the lines they change: GNU
+# patch's default fuzz of 2 would apply them through a nearby edit, and the
+# guard is meant to put a person in front of the patch on such a bump. It
+# costs nothing today - the hunks apply to the pinned source with fuzz
+# forbidden.
+#
+# The kiosk restriction inside openQuitMenu() is Linux-only by construction:
+# on __APPLE__ and __ANDROID__ upstream takes an `if (true)` branch to the
+# bare "really quit?" box, so the guarded submenu is unreachable there. This
+# package is `platforms = lib.platforms.linux`, so that path is never built.
 #
 # Bumping: edit `version`, set `hash = lib.fakeHash`, rebuild, and record
 # the hash the failed fetch reports; the guard and the version check re-run.
@@ -58,6 +69,12 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   patches = [ ./kiosk-quit-menu.patch ];
+  # `-p1` is the stdenv default, restated because setting patchFlags
+  # replaces it rather than adding to it.
+  patchFlags = [
+    "-p1"
+    "--fuzz=0"
+  ];
 
   postPatch = ''
     # ldd-based detection fails for cross builds

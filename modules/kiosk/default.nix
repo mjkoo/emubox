@@ -53,9 +53,12 @@ let
   # value, and a per-command prefix is exactly the shape in which prepare
   # would assert settings into a directory the frontend never reads.
   #
-  # emubox-prepare and es-de resolve from the system path (they are in
-  # environment.systemPackages below), not from runtimeInputs, so that the
-  # session and any outside caller reach one binary.
+  # cage is the one runtimeInput, so the compositor is pinned to the exact
+  # store path this module was built against. emubox-prepare and es-de are
+  # deliberately not: they resolve from the system path (they are in
+  # environment.systemPackages below), so that the session and any outside
+  # caller - the test driver, an admin who reached the greeter - reach one
+  # binary rather than two that happen to agree.
   emubox-session = pkgs.writeShellApplication {
     name = "emubox-session";
     runtimeInputs = [ pkgs.cage ];
@@ -68,6 +71,17 @@ let
       # is a test hook (tests/kiosk.nix lowers it); the box's figure is the
       # 60 s the kiosk spec states, and nothing in the product varies it.
       window="''${EMUBOX_CRASH_WINDOW:-60}"
+      # A non-numeric value would make `[ "$ran" -lt "$window" ]` fail, and
+      # because that is an `if` condition `set -e` does not fire: every run
+      # would silently count as long and the counter would never reach three.
+      # Falling back loudly is the safe reading - the box stays up and the
+      # journal says why the hook was ignored.
+      case "$window" in
+        "" | *[!0-9]*)
+          echo "emubox-session: EMUBOX_CRASH_WINDOW=$window is not a number; using 60" >&2
+          window=60
+          ;;
+      esac
       crashes=0
 
       while true; do

@@ -48,7 +48,8 @@ kiosk-test:
 closure-check:
     nix build .#checks.x86_64-linux.closure-no-secrets --no-link
 
-# Push the cache roots (unfree cores, vendored packages) to the emubox Cachix
+# Push the cache roots (redistributable unfree cores, the packages pkgs/
+# builds) to the emubox Cachix
 # cache, as CI does; needs CACHIX_AUTH_TOKEN and an x86_64-linux builder
 cache-push:
     nix build .#packages.x86_64-linux.cache-roots --no-link --print-out-paths | xargs cachix push emubox
@@ -74,7 +75,7 @@ secrets-edit:
 secrets-rekey:
     SOPS_AGE_KEY_FILE={{quote(age_key)}} sops updatekeys secrets/secrets.yaml
 
-# Edit the VM test's secrets (decrypts with the committed test host key)
+# Edit the VM tests' secrets (decrypts with the committed test host key)
 test-secrets-edit:
     SOPS_AGE_KEY="$(ssh-to-age -private-key -i tests/test_host_ed25519_key)" sops secrets/test.yaml
 

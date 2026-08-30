@@ -54,31 +54,37 @@
       hostPkgs =
         assert host.pkgs.stdenv.hostPlatform.system == hostSystem;
         host.pkgs;
-      vendored = import ./pkgs { pkgs = hostPkgs; };
+      ownPackages = import ./pkgs { pkgs = hostPkgs; };
     in
     {
-      # Vendored packages (ES-DE, freeimage, DuckStation) live in pkgs/ and are
+      # What the flake builds itself lives in pkgs/ - the vendored programs
+      # (ES-DE, freeimage, DuckStation) and its own (emubox-prepare) - and is
       # exposed both as an overlay and as flake packages so CI can push them to
       # the public binary cache on their own, without the system closure.
       overlays.default = import ./overlays { inherit inputs; };
 
-      # Only for the host's system: the vendored packages are Linux-only, and
+      # Only for the host's system: these are Linux-only as packaged, and
       # `nix flake check` on the Mac would evaluate (and reject) anything
-      # offered under its own system. Built from the host's own package set,
+      # offered under its own system. (`checks` is a different matter: the
+      # Mac deliberately checks emubox-prepare natively, see below.) Built
+      # from the host's own package set,
       # which carries nixpkgsConfig and the overlay, so `nix build
       # .#packages.x86_64-linux.es-de` is the host's store path by
       # construction, not a second build that happens to agree with it.
-      packages.${hostSystem} = vendored // {
+      packages.${hostSystem} = ownPackages // {
         # What the binary cache holds: the store paths cache.nixos.org never
         # has, so every consumer without the cache (CI, the Mac's builder,
-        # the box) would compile them. Hydra builds no unfree package, which
-        # is every RetroArch core the emulators module selects that carries
-        # a non-free license; the vendored packages under pkgs/ are ours and
-        # are pushed whole: the cache is kept licence-clean by what is
-        # vendored, not by a filter here (design). DuckStation's licence
-        # (CC-BY-NC-ND 4.0) reads `redistributable = false` in nixpkgs'
-        # metadata; pkgs/duckstation/package.nix records why pushing its
-        # unmodified upstream contents is within that licence. CI pushes
+        # the box) would compile them. Three kinds, and the licence posture
+        # of each is settled differently (design D7). The unfree RetroArch
+        # cores the emulators module selects are *derived* - nobody reviews
+        # a new one - so they get the programmatic guard below, which admits
+        # only cores whose licence permits redistribution. Everything under
+        # pkgs/ is *curated*: a person adds each one and settles its posture
+        # in its own package.nix, whether vendored (DuckStation's
+        # CC-BY-NC-ND 4.0 reads `redistributable = false` in nixpkgs'
+        # metadata, and pkgs/duckstation/package.nix records why pushing its
+        # unmodified upstream contents is within that licence) or the
+        # project's own (emubox-prepare, MIT, the repo's LICENSE). CI pushes
         # exactly this closure (`just cache-push` does the same by hand),
         # never a system toplevel, so the cache stays small.
         cache-roots =
@@ -103,7 +109,7 @@
             map (p: {
               name = p.name;
               path = p;
-            }) (unfreeCores ++ lib.attrValues vendored)
+            }) (unfreeCores ++ lib.attrValues ownPackages)
           );
       };
 

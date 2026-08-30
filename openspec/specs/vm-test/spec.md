@@ -1,6 +1,6 @@
 ## Purpose
 
-CI proves what the host configuration guarantees, the base layer's ephemeral root, persisted state, secrets and networking declaration, and the presence of the programs the box installs, on every push without hardware, through the same boot path the real box uses.
+CI proves what the host configuration guarantees on every push, without hardware. In a VM twice over: through the same boot path the real box uses, for the base layer's ephemeral root, persisted state, secrets and networking declaration and the presence of the programs the box installs; and on a plain node with a graphical stack, for the kiosk session. Outside a VM once: the config editor's unit tests, lint and type check, which run on every system the flake is checked on, the admin's Mac included.
 
 ## Requirements
 

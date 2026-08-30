@@ -110,7 +110,7 @@
   };
   # On, with nothing opened: every service that listens binds to loopback.
   # Asserted here, next to the firewall, so the invariant guards the system
-  # that ships and not only the VM test's variant of it.
+  # that ships and not only the VM tests' variants of it.
   networking.firewall.enable = true;
   assertions = [
     {
@@ -132,9 +132,12 @@
         "flakes"
       ];
       # The project's binary cache, on top of cache.nixos.org (extra-*, so
-      # the defaults stay): the unfree cores and the vendored packages,
-      # which CI pushes (flake output `cache-roots`). Gated on the key so a
-      # host without one evaluates and simply builds those paths itself.
+      # the defaults stay): the redistributable unfree cores and everything
+      # pkgs/ builds, vendored or the project's own, which CI pushes (flake
+      # output `cache-roots`). Gated on the key so a host without one
+      # evaluates and simply builds those paths itself - which for this box
+      # means compiling ES-DE and FreeImage from source on an N150, so the
+      # key is what keeps a first install to minutes rather than hours.
       extra-substituters = lib.mkIf (config.emubox.facts.binaryCachePublicKey != null) [
         "https://emubox.cachix.org"
       ];

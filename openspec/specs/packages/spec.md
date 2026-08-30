@@ -1,6 +1,6 @@
 ## Purpose
 
-The programs this project builds or wraps itself because the pinned nixpkgs no longer carries them: the ES-DE frontend, its FreeImage dependency and the DuckStation emulator. The capability fixes what each is, where it comes from, what security and licence posture it carries, and that the box and the public binary cache receive them.
+What the flake builds and caches itself, of two kinds: programs the pinned nixpkgs no longer carries, which are vendored - the ES-DE frontend, its FreeImage dependency and the DuckStation emulator - and programs of the project's own that nixpkgs never carried. The capability fixes what each is, where it comes from, what security and licence posture it carries, and that the box and the public binary cache receive them.
 
 ## Requirements
 

@@ -1,8 +1,18 @@
-# Hardware facts every module may read. Declared here so the software stack
+# Per-host facts every module may read. Declared here so the software stack
 # evaluates on its own (VM test, a second host); values are set per host.
 { lib, ... }:
 {
   options.emubox.facts = {
+    binaryCachePublicKey = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Public key of the `emubox` Cachix cache (`emubox.cachix.org-1:...`),
+        which holds the store paths cache.nixos.org never has (the unfree
+        emulator cores, the vendored packages). Null until the cache exists;
+        the substituter is only configured once it is set.
+      '';
+    };
     disk = lib.mkOption {
       type = lib.types.str;
       default = "/dev/disk/by-diskseq/1";

@@ -12,30 +12,62 @@ jobs:
   nix:
     name: Nix
     runs-on: ubuntu-latest
+    env:
+      # Write token for the emubox Cachix cache; empty on a fork or until
+      # the repository secret exists, which skips the push step below.
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The VM test needs KVM. The runner has /dev/kvm, but as 0660 root:kvm,
+      # which the nix build users cannot open: nix still advertises the
+      # `kvm` feature and schedules the test, QEMU's accel=kvm:tcg silently
+      # falls back to TCG, and the run crawls into the driver's timeout.
+      - name: Make /dev/kvm openable by the nix build users
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm-nix.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Insurance, not a fix: the first runs measured about 85 GB free on
+      # the runner against a 10 GB host closure, so nothing here needs
+      # reclaiming today. This gives /nix a BTRFS volume spanning / and
+      # /mnt (about 65 GB at `holster`, which purges nothing) so that the
+      # vendored packages of later changes have room without a surprise.
+      # Must precede the Nix install.
+      - uses: wimpysworld/nothing-but-nix@687c797a730352432950c707ab493fcc951818d7 # v10
+        with:
+          hatchet-protocol: holster
 
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           # flake inputs fetched through the GitHub API hit rate limits without it
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      # No-account cache on the GitHub Actions cache API. Swap for
-      # cachix/cachix-action once the public cache for pkgs/ exists (design 12.4).
-      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      # The project's public binary cache: what cache.nixos.org never has
+      # (the unfree emulator cores, the vendored packages), also used by the
+      # box and the Mac's builder. Pull only here; the push is the explicit
+      # step at the end, so a system toplevel's closure never goes up.
+      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
         with:
-          use-flakehub: false
-          diagnostic-endpoint: ""
+          name: emubox
+          skipPush: true
 
       - name: Format check
         run: nix fmt -- --ci
 
       - name: Flake check
-        run: nix flake check
+        run: nix flake check -L
 
       - name: Build host closure
         run: nix build .#nixosConfigurations.emubox.config.system.build.toplevel --no-link
 
-  # TODO(design 12.4): on success, fast-forward `release` and push pkgs/ to Cachix.
+      # Everything in cache-roots was built above as part of the host
+      # closure, so this only uploads. Paths already on the cache are skipped.
+      - name: Push the cache roots to Cachix
+        if: env.CACHIX_AUTH_TOKEN != ''
+        run: nix build .#packages.x86_64-linux.cache-roots --no-link --print-out-paths | xargs cachix push emubox
+
+  # TODO(design 12.4): on success, fast-forward `release`.

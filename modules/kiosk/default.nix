@@ -26,8 +26,15 @@ let
   '';
 in
 {
+  # A real `player` group: the /data layout (modules/library) is owned
+  # `player player` with setgid on roms/ and bios/, so that admin's ingest
+  # over the admin link lands group-owned (design 8). isNormalUser alone
+  # would put the user in `users` and leave the tmpfiles rules unresolvable
+  # (the first booted CI run: "Failed to resolve group 'player'").
+  users.groups.player = { };
   users.users.player = {
     isNormalUser = true;
+    group = "player";
     home = "/data/home/player";
     createHome = true;
     extraGroups = [

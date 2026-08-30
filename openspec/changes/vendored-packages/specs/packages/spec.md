@@ -22,7 +22,7 @@ The flake SHALL provide `es-de`, `freeimage` and `duckstation` as packages of it
 ### Requirement: ES-DE is built from source at a pinned release
 ES-DE SHALL be built from the upstream source archive of release 3.4.1 with the in-app application updater compiled out, so that the box's frontend only ever changes through the flake.
 
-#### Scenario: Version and updater
+#### Scenario: Version report
 - **WHEN** the built `es-de` is asked for its version
 - **THEN** it reports 3.4.1
 

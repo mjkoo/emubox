@@ -1,7 +1,7 @@
 ## 1. Flake wiring (red first: the three attributes must exist before anything builds)
 
 - [ ] 1.1 In `flake.nix`, extend `nixpkgsConfig` with `permittedInsecurePackages = [ "freeimage-3.18.0-unstable-2024-04-18" ]` and the risk comment from design D3 (only admin-supplied images are decoded; CI rebuilds on every push; ES-DE's AppImage is the fallback)
-- [ ] 1.2 In `flake.nix`, define `hostPkgs = import nixpkgs { system = hostSystem; config = nixpkgsConfig; overlays = [ self.overlays.default ]; }` and replace the `forAllSystems` `packages` with `packages.${hostSystem} = import ./pkgs { pkgs = hostPkgs; } // { cache-roots = ...; }` per design D3; `devShells` and `formatter` stay `forAllSystems`; confirm `nix flake check` on the Mac still evaluates (`just check-all`)
+- [ ] 1.2 In `flake.nix`, define `hostPkgs = self.nixosConfigurations.emubox.pkgs` (the set `cache-roots` already reads) and replace the `forAllSystems` `packages` with `packages.${hostSystem} = import ./pkgs { pkgs = hostPkgs; } // { cache-roots = ...; }` per design D3; `devShells` and `formatter` stay `forAllSystems`; confirm `nix flake check` on the Mac still evaluates (`just check-all`)
 - [ ] 1.3 Rewrite `pkgs/default.nix` as the three `callPackage`s (design D2) with the TODO comment removed; `overlays/default.nix` is unchanged
 
 ## 2. FreeImage
@@ -17,13 +17,13 @@
 
 ## 4. DuckStation
 
-- [ ] 4.1 Create `pkgs/duckstation/package.nix` per design D1: `appimageTools.wrapType2` on `DuckStation-x64.AppImage` from release `v0.1-11752` (hash via `nix store prefetch-file` or a `lib.fakeHash` build), `extraInstallCommands` installing the `.desktop` file and icon from `appimageTools.extract`, `meta` with `license = lib.licenses.cc-by-nc-nd-40`, `mainProgram = "duckstation"`, `platforms = [ "x86_64-linux" ]`, `homepage`, and the licence-reasoning header
-- [ ] 4.2 `nix build .#duckstation` succeeds on the Linux builder; `result/bin/duckstation` exists and `result/share/applications/` holds the desktop file; `nix-update --flake duckstation --version 0.1-11752` (or the equivalent dry run) shows the bump path works without touching anything else
+- [ ] 4.1 Create `pkgs/duckstation/package.nix` per design D1: `appimageTools.wrapType2` on `DuckStation-x64.AppImage` from release `v0.1-11752` (hash via `nix store prefetch-file` or a `lib.fakeHash` build), `extraInstallCommands` installing the `.desktop` file (its `Exec=` line rewritten to `duckstation`) and icon from `appimageTools.extract`, `meta` with `license = lib.licenses.cc-by-nc-nd-40`, `mainProgram = "duckstation"`, `platforms = [ "x86_64-linux" ]`, `homepage`, and the licence-reasoning header
+- [ ] 4.2 `nix build .#duckstation` succeeds on the Linux builder; `result/bin/duckstation` exists and `result/share/applications/` holds the desktop file; prove the bump path (design D1) by setting `hash = lib.fakeHash`, rebuilding, and confirming the reported hash is the recorded one with nothing else in the file touched, then restore
 
 ## 5. Host closure, cache roots, VM test
 
 - [ ] 5.1 `modules/kiosk`: add `pkgs.es-de` to `environment.systemPackages`, remove the `TODO(pkgs/es-de)` comment; `modules/emulators`: append `duckstation`, remove its TODO
-- [ ] 5.2 `just build` (host toplevel on the Linux builder) succeeds and `nix build .#packages.x86_64-linux.cache-roots --print-out-paths` lists `es-de`, `freeimage` and `duckstation` among the roots; `nix build .#es-de --print-out-paths` equals the `es-de` path inside `cache-roots` (the standalone and host package sets agree; design D3), likewise for the other two
+- [ ] 5.2 `just build` (host toplevel on the Linux builder) succeeds and `nix build .#packages.x86_64-linux.cache-roots --print-out-paths` lists `es-de`, `freeimage` and `duckstation` among the roots; `nix build .#es-de --print-out-paths` equals the `es-de` path inside `cache-roots` (one package set serves both; design D3), likewise for the other two
 - [ ] 5.3 `tests/default.nix`: add the `packages` subtest group per design D4 (`test -x` on both programs under `/run/current-system/sw/bin`; `es-de --version` output contains `ES-DE 3.4.1`); `nix build .#checks.x86_64-linux.vm.driver` renders the script on the local builder
 - [ ] 5.4 With the author's go-ahead, open the pull request from this branch so CI runs the VM test (KVM is CI-only); the first run compiles ES-DE and FreeImage cold; the new subtests are green and `just check-all` passes locally; record the run in this task
 

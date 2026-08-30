@@ -364,10 +364,12 @@ in
                   "systemctl status display-manager.service --no-pager -n 40 || true"
               )
 
-          print(greeter_state())
           try:
               machine.wait_until_succeeds("pgrep -x kwin_wayland", timeout=120)
           except Exception:
+              # Only on failure, so a green run stays quiet. This dump is what
+              # identified the exit-code bug: it showed no sessions, no seat,
+              # and only the sddm daemon itself still running.
               print(greeter_state())
               raise
           # And the seat is no longer player's, which is the other half of

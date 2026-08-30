@@ -117,7 +117,21 @@ let
           echo "emubox-session: es-de exited with $rc after ''${ran}s (crash $crashes of 3)" >&2
           if [ "$crashes" -ge 3 ]; then
             echo "emubox-session: three short runs in a row; ending the session" >&2
-            exit 1
+            # Exit 0, not 1, and this is load-bearing. SDDM casts the
+            # helper's exit code straight to its HelperExitStatus enum
+            # (src/auth/Auth.cpp), whose value 1 is HELPER_AUTH_ERROR - and
+            # Display::slotHelperFinished is `if (status != HELPER_AUTH_ERROR)
+            # stop()`, because SDDM refuses to restart the display after an
+            # authentication failure so a bad password cannot loop the
+            # greeter. A session exiting 1 therefore leaves the daemon alive
+            # with no display and no greeter at all: a black screen, which is
+            # the failure state this whole design exists to avoid. Exiting 0
+            # is read as a session that ended normally, so the display is
+            # stopped and recreated, and the new one shows the greeter
+            # because `daemonApp->first` is already false. Proved in CI: with
+            # `exit 1` the journal stops dead at "Auth: sddm-helper exited
+            # with 1" and no greeter ever appears.
+            exit 0
           fi
         else
           crashes=0

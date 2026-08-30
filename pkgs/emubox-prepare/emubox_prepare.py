@@ -282,11 +282,6 @@ def _parse_ini(path: Path) -> list[str] | None:
         # would otherwise look like a healthy document missing every key.
         note(f"{path} is empty; recreating it")
         return None
-    if not text.strip():
-        # Recorded, like the ES-DE case: an empty file yields no lines and
-        # would otherwise look like a healthy document missing every key.
-        note(f"{path} is empty; recreating it")
-        return None
     lines = _lines(text.rstrip("\n"))
     for line in lines:
         stripped = line.strip()

@@ -27,8 +27,25 @@
       pkgsFor = system: nixpkgs.legacyPackages.${system};
       # The one target the appliance builds for.
       hostSystem = "x86_64-linux";
-      # Emulator cores such as libretro-snes9x are unfree-redistributable.
-      nixpkgsConfig.allowUnfree = true;
+      # The host's package set: nixpkgsConfig and the overlay applied, the
+      # set the standalone packages and cache-roots read (design D3).
+      hostPkgs = self.nixosConfigurations.emubox.pkgs;
+      # One configuration for the host's package set and, through hostPkgs
+      # below, for the standalone packages: they are the same store paths.
+      nixpkgsConfig = {
+        # Emulator cores such as libretro-snes9x are unfree-redistributable.
+        allowUnfree = true;
+        # FreeImage (pkgs/freeimage) is the derivation nixpkgs removed over
+        # its unpatched CVEs; ES-DE has no other image backend. The risk is
+        # accepted because FreeImage only ever decodes images the admin put
+        # on the box (art scraped from ScreenScraper, bundled theme assets):
+        # no untrusted input reaches it. CI rebuilds it on every push, so a
+        # library bump that breaks it surfaces before the box. If the source
+        # build becomes unmaintainable, the fallback is wrapping ES-DE's own
+        # AppImage and dropping this permission. The name is pname-version,
+        # as nixpkgs matches it.
+        permittedInsecurePackages = [ "freeimage-3.18.0-unstable-2024-04-18" ];
+      };
     in
     {
       # Vendored packages (ES-DE, freeimage, DuckStation) live in pkgs/ and are
@@ -36,31 +53,40 @@
       # the public binary cache on their own, without the system closure.
       overlays.default = import ./overlays { inherit inputs; };
 
-      packages = lib.recursiveUpdate (forAllSystems (system: import ./pkgs { pkgs = pkgsFor system; })) {
-        # What the binary cache holds: the store paths cache.nixos.org never
-        # has, so every consumer without the cache (CI, the Mac's builder,
-        # the box) would compile them. Hydra builds no unfree package, which
-        # is every RetroArch core the emulators module selects that carries
-        # a non-free license; the vendored packages under pkgs/ are ours.
-        # CI pushes exactly this closure (`just cache-push` does the same by
-        # hand), never a system toplevel, so the cache stays small.
-        ${hostSystem}.cache-roots =
-          let
-            host = self.nixosConfigurations.emubox;
-            inherit (host) pkgs;
-            licenses = p: lib.toList (p.meta.license or [ ]);
-            isUnfree = p: lib.any (l: !(l.free or true)) (licenses p);
-            retroarchs = lib.filter (p: p ? cores) host.config.environment.systemPackages;
-            unfreeCores = lib.unique (lib.filter isUnfree (lib.concatMap (r: r.cores) retroarchs));
-            vendored = lib.attrValues (import ./pkgs { inherit pkgs; });
-          in
-          pkgs.linkFarm "emubox-cache-roots" (
-            map (p: {
-              name = p.name;
-              path = p;
-            }) (unfreeCores ++ vendored)
-          );
-      };
+      # Only for the host's system: the vendored packages are Linux-only, and
+      # `nix flake check` on the Mac would evaluate (and reject) anything
+      # offered under its own system. Built from the host's own package set,
+      # which carries nixpkgsConfig and the overlay, so `nix build
+      # .#packages.x86_64-linux.es-de` is the host's store path by
+      # construction, not a second build that happens to agree with it.
+      packages.${hostSystem} =
+        let
+          host = self.nixosConfigurations.emubox;
+        in
+        import ./pkgs { pkgs = hostPkgs; }
+        // {
+          # What the binary cache holds: the store paths cache.nixos.org never
+          # has, so every consumer without the cache (CI, the Mac's builder,
+          # the box) would compile them. Hydra builds no unfree package, which
+          # is every RetroArch core the emulators module selects that carries
+          # a non-free license; the vendored packages under pkgs/ are ours.
+          # CI pushes exactly this closure (`just cache-push` does the same by
+          # hand), never a system toplevel, so the cache stays small.
+          cache-roots =
+            let
+              licenses = p: lib.toList (p.meta.license or [ ]);
+              isUnfree = p: lib.any (l: !(l.free or true)) (licenses p);
+              retroarchs = lib.filter (p: p ? cores) host.config.environment.systemPackages;
+              unfreeCores = lib.unique (lib.filter isUnfree (lib.concatMap (r: r.cores) retroarchs));
+              vendored = lib.attrValues (import ./pkgs { pkgs = hostPkgs; });
+            in
+            hostPkgs.linkFarm "emubox-cache-roots" (
+              map (p: {
+                name = p.name;
+                path = p;
+              }) (unfreeCores ++ vendored)
+            );
+        };
 
       # Everything that is not tied to the physical disk: importable by a
       # future second host. Consumers supply a nixpkgs with `overlays.default`

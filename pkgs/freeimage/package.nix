@@ -9,8 +9,7 @@
 # repository's .gitattributes keeps from conversion); libtiff-4.4.0.diff
 # sits in nixpkgs' directory without being in its patches list and is
 # copied for completeness. This file differs from nixpkgs' by this header,
-# nixfmt's whitespace (CI's format check requires it), the three fixes
-# forward below, the removal of libjpeg.dev_private from buildInputs (that
+# the three fixes forward below, the removal of libjpeg.dev_private from buildInputs (that
 # output is now a throw), and lib.licenses.freeimage inlined under meta
 # (it left nixpkgs with the package). knownVulnerabilities is deliberately
 # not edited: it is the record of what is unpatched. flake.nix permits the
@@ -28,8 +27,9 @@
 #   -fvisibility=hidden, so nothing new is exported. Overriding libjpeg
 #   for FreeImage alone was rejected: ES-DE also loads libjpeg through
 #   poppler, and the dynamic linker picks one libjpeg.so.8 by soname in
-#   load order. To re-check on a libjpeg bump: transupp.c still needs
-#   only jcopy_block_row and jdiv_round_up from the library, and jpegint.h
+#   load order. To re-check on a libjpeg bump: the only internal symbols
+#   transupp.c needs from the library are still jcopy_block_row and
+#   jdiv_round_up (the rest is public jpeg_* API), and jpegint.h
 #   still has no configuration-dependent struct layout (the stub
 #   jconfigint.h defines none). The fallback if that breaks is dropping
 #   JPEGTransform.cpp from the source lists: ES-DE never calls
@@ -103,14 +103,11 @@ stdenv.mkDerivation (finalAttrs: {
     # (see the header). jinclude.h wants a generated jconfigint.h; with
     # its getenv/setenv helpers compiled out (transupp.c never calls them,
     # and setenv is invisible under the Makefile's -std=c99) nothing the
-    # copied files use is left in it, so the stub only names the macros
-    # the headers mention.
+    # copied files use is left in it; the stub defines INLINE, the one
+    # macro jinclude.h still names.
     cp ${libjpeg.src}/src/{transupp.c,transupp.h,jinclude.h,jpegint.h,jpegapicomp.h} Source/FreeImageToolkit/
     cat > Source/FreeImageToolkit/jconfigint.h <<'HDR'
     #define INLINE inline
-    #define THREAD_LOCAL
-    #define HIDDEN
-    #define FALLTHROUGH
     #define NO_GETENV
     #define NO_PUTENV
     HDR

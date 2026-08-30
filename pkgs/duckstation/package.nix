@@ -14,8 +14,9 @@
 # reaches the store and the cache is the extracted form, byte-identical in
 # content: the posture rests on the contents being unmodified, not on the
 # file being one blob. The desktop entry installed below is written here
-# (the wrapper's name with upstream's icon name and categories), not a
-# rewritten copy of upstream's file; the icon is copied verbatim.
+# (the wrapper's name; upstream's name, comment, icon name and categories
+# restated), not a rewritten copy of upstream's file; the icon is copied
+# verbatim.
 #
 # Bumping: edit `version` to the new release tag (without the leading v),
 # set `hash = lib.fakeHash`, rebuild, and record the hash the failed fetch

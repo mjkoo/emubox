@@ -23,7 +23,7 @@ The frontend and the preferred PS1 emulator the design names are not in the pinn
 
 ## Impact
 
-- `pkgs/default.nix` (three `callPackage`s), `pkgs/freeimage/` (new: `package.nix`, `unbundle.diff`, `libtiff-4.4.0.diff`, eight `CVE-*.patch`), `pkgs/es-de/package.nix` (new), `pkgs/duckstation/package.nix` (new), `overlays/default.nix` (unchanged in content), `flake.nix` (the insecure-package permission; `packages` restricted to `x86_64-linux`; design D3), `modules/kiosk` and `modules/emulators` (one package each), `tests/default.nix` (one subtest group), `README.md`. `.github/workflows/ci.yml` is untouched: the vendored paths are in the host closure CI already builds before the push step.
+- `pkgs/default.nix` (three `callPackage`s), `pkgs/freeimage/` (new: `package.nix`, `unbundle.diff`, `libtiff-4.4.0.diff`, eight `CVE-*.patch`), `pkgs/es-de/package.nix` (new), `pkgs/duckstation/package.nix` (new), `.gitattributes` (new: the FreeImage patches keep their CRLF bytes), `overlays/default.nix` (unchanged in content), `flake.nix` (the insecure-package permission; `packages` restricted to `x86_64-linux`; design D3), `modules/kiosk` and `modules/emulators` (one package each), `tests/default.nix` (one subtest group), `README.md`. `.github/workflows/ci.yml` is untouched: the vendored paths are in the host closure CI already builds before the push step.
 - No new flake inputs. First cold CI run compiles ES-DE and freeimage and unpacks the AppImage once; every run after that substitutes from the `emubox` Cachix cache.
 - `ACCT`: none new. The Cachix cache and its token exist since the base layer.
 - Depends on E0 only; independent of E1 in content but lands after it. E3 (kiosk session) and E4 (emulators) depend on this change.

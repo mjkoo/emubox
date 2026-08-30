@@ -1,6 +1,6 @@
 ## 1. Flake wiring (red first: the three attributes must exist before anything builds)
 
-- [x] 1.1 In `flake.nix`, extend `nixpkgsConfig` with `permittedInsecurePackages = [ "freeimage-3.18.0-unstable-2024-04-18" ]` and the risk comment from design D3 (only admin-supplied images are decoded; CI rebuilds on every push; ES-DE's AppImage is the fallback)
+- [x] 1.1 In `flake.nix`, extend `nixpkgsConfig` with `permittedInsecurePackages = [ "freeimage-3.18.0-unstable-2024-04-18" ]` and the risk comment from design D3 (only admin-supplied images are decoded; CI builds it whenever its inputs change; ES-DE's AppImage is the fallback)
 - [x] 1.2 In `flake.nix`, define `hostPkgs = self.nixosConfigurations.emubox.pkgs` (the set `cache-roots` already reads) and replace the `forAllSystems` `packages` with `packages.${hostSystem} = import ./pkgs { pkgs = hostPkgs; } // { cache-roots = ...; }` per design D3; `devShells` and `formatter` stay `forAllSystems`; confirm `nix flake check` on the Mac still evaluates (`just check-all`)
 - [x] 1.3 Rewrite `pkgs/default.nix` as the three `callPackage`s (design D2) with the TODO comment removed; `overlays/default.nix` is unchanged
 
@@ -17,7 +17,7 @@
 
 ## 4. DuckStation
 
-- [x] 4.1 Create `pkgs/duckstation/package.nix` per design D1: `appimageTools.wrapType2` on `DuckStation-x64.AppImage` from release `v0.1-11752` (hash via `nix store prefetch-file` or a `lib.fakeHash` build), `extraInstallCommands` installing the `.desktop` file (its `Exec=` line rewritten to `duckstation`) and icon from `appimageTools.extract`, `meta` with `license = lib.licenses.cc-by-nc-nd-40`, `mainProgram = "duckstation"`, `platforms = [ "x86_64-linux" ]`, `homepage`, and the licence-reasoning header
+- [x] 4.1 Create `pkgs/duckstation/package.nix` per design D1: `appimageTools.wrapType2` on `DuckStation-x64.AppImage` from release `v0.1-11752` (hash via `nix store prefetch-file` or a `lib.fakeHash` build), `extraInstallCommands` installing a desktop entry the package writes with `makeDesktopItem` (`Exec=duckstation`, upstream's icon name and categories) and the icon from `appimageTools.extract`, `meta` with `license = lib.licenses.cc-by-nc-nd-40`, `mainProgram = "duckstation"`, `platforms = [ "x86_64-linux" ]`, `homepage`, and the licence-reasoning header
 - [x] 4.2 `nix build .#packages.x86_64-linux.duckstation` succeeds; `result/bin/duckstation` exists and `result/share/applications/` holds the desktop file; prove the bump path (design D1) by setting `hash = lib.fakeHash`, rebuilding, and confirming the reported hash is the recorded one with nothing else in the file touched, then restore
 
 ## 5. Host closure, cache roots, VM test

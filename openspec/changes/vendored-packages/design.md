@@ -1,0 +1,76 @@
+## Context
+
+See proposal.md for motivation. What shapes the approach:
+
+- The locked nixpkgs is `nixos-26.05` at `26.05.20260827.d57af92`. `freeimage`, `emulationstation-de` and `duckstation` all evaluate to a `throw` ("removed"). Every input the removed derivations need is present: `ffmpeg` 8.1.2, `poppler` 26.06, `libgit2` 1.9.7, `pugixml` 1.15, `harfbuzz`, `icu`, `curl`, `alsa-lib`, `bluez`, `libGL`; `SDL2` is now `sdl2-compat` 2.32.68, the SDL2 API implemented over SDL3.
+- nixpkgs revision `8451347` (the parent of the removal, PR #454867) holds `pkgs/by-name/fr/freeimage/` (`package.nix`, `unbundle.diff` at 80 KB, `libtiff-4.4.0.diff`, eight `CVE-*.patch`, version `3.18.0-unstable-2024-04-18` from SVN r1911, `meta.license = "GPL"`, a `knownVulnerabilities` list of about thirty CVEs) and `pkgs/by-name/em/emulationstation-de/` (`package.nix` for 3.2.0 with `cmakeFlags = [ (lib.cmakeBool "APPLICATION_UPDATER" false) ]`, a `postPatch` that strips a `GET_PREREQUISITES` call from `CMake/Packages/FindPoppler.cmake`, and `001-add-nixpkgs-retroarch-cores.patch`).
+- ES-DE v3.4.1 (2026-04-10) is the latest tag. Its `CMakeLists.txt` still takes `find_package(SDL2 REQUIRED)` and the same dependency list as 3.2.0; `CMake/Packages/FindPoppler.cmake` still carries the `GET_PREREQUISITES` line; `resources/systems/linux/es_find_rules.xml` line 48 is `<entry>/run/current-system/sw/lib/retroarch/cores</entry>`, so the nixpkgs patch is redundant. `es-app/src/main.cpp` handles `--version` in `parseArguments()` and returns before `SDL_Init`, printing `ES-DE <version> (r<release>)`.
+- DuckStation: nixpkgs `nixos-25.11` still carries a 343-line source derivation at `0.1-10130` with two patches, `sources.json` and `update.sh`; it is not used here (D1). Upstream release `v0.1-11752` (2026-08-12) publishes `DuckStation-x64.AppImage` (88 MB). Licence CC-BY-NC-ND 4.0; nixpkgs' removal message reads "removed following upstream request. Please use the appimage instead".
+- The repository `mjkoo/emubox` is public and `packages.x86_64-linux.cache-roots` pushes the closure of every vendored package to the public `emubox` Cachix cache on each green CI run. That plumbing (cachix-action, `cache-roots`, `just cache-push`, README cache section) landed with the base layer; this change adds no CI step.
+- `flake.nix` builds `packages` for every system from `nixpkgs.legacyPackages` (no config, no overlay) and sets `nixpkgs.config = { allowUnfree = true; }` only for the host. `pkgs/default.nix` is `{ pkgs }: { }`; `overlays/default.nix` is `final: prev: import ../pkgs { pkgs = final; }`.
+- nixpkgs' `appimageTools.wrapType2` takes `{ pname, version, src, extraPkgs, extraInstallCommands, passthru, meta, ... }`, runs the AppImage's `AppRun` inside a `buildFHSEnv` with a broad default library set, and installs the program as `$out/bin/<pname>`; `appimageTools.extract` yields the unpacked contents for the `.desktop` file and icon.
+- The VM test runs with the display manager forced off (base-layer decision), so nothing in the VM starts a graphical session; assertions on the vendored programs are limited to what runs headless.
+
+## Goals / Non-Goals
+
+**Goals:**
+- Retire the "builds against a newer SDL/ffmpeg/poppler" risk in CI before E3 stacks a session on top of it.
+- Keep the package set a single directory of ordinary `callPackage` files with recorded provenance, so a later bump or a nixpkgs re-addition is a small, reviewable diff.
+- Keep the public cache licence-clean by construction of what is vendored, not by a filter on what is pushed.
+
+**Non-Goals:**
+- ES-DE configuration, `ESDE_APPDATA_DIR`, the session loop, `emubox-prepare`, `es_systems.xml` overrides: E3 and E4.
+- DuckStation's own settings, its controller and RetroAchievements setup, and whether the AppImage's Qt renders under cage on the box: E4 configures, E12 proves on hardware.
+- A private cache, a second nixpkgs input, or the RetroArch core list; the cores are unchanged.
+- Bumping DuckStation after this change; the mechanism is provided, the cadence is the admin's.
+
+## Decisions
+
+### D1. DuckStation is the upstream AppImage, wrapped
+
+`pkgs/duckstation/package.nix` is `appimageTools.wrapType2 { pname = "duckstation"; version = "0.1-11752"; src = fetchurl { url = "https://github.com/stenzek/duckstation/releases/download/v0.1-11752/DuckStation-x64.AppImage"; hash = ...; }; }` with `extraInstallCommands` installing the `.desktop` file and icon from `appimageTools.extract`, `meta.license = lib.licenses.cc-by-nc-nd-40`, `meta.mainProgram = "duckstation"`, `meta.platforms = [ "x86_64-linux" ]`, and a header comment carrying the licence reasoning verbatim: the repository and the cache are public; CC-BY-NC-ND permits redistributing unmodified copies non-commercially with attribution and forbids distributing derivatives; the nixpkgs source derivation patches the source, so its build could not be pushed to the cache; the AppImage is unmodified and is the channel the author asks distributions to use.
+
+- Why not the nixos-25.11 source derivation (the design doc's original plan): it rested on "private use, private repo", and the repository is public. Excluding a source build from `cache-roots` instead would make CI, the Mac's builder and later the box (E11's substitutes-only auto-upgrade) compile DuckStation themselves; the N150 would have to build it or never receive a new one.
+- Why not drop DuckStation: internal-resolution upscaling on the iGPU is the reason the design prefers it over Beetle PSX HW, which remains installed as the alternate.
+- Bumping: change `version` and `hash`; `nix-update --flake duckstation` does it mechanically because the URL is derived from `version`. No `sources.json` or `update.sh` since there are no sub-sources.
+- The FHS environment's default library set covers Qt AppImages on X11 and Wayland in the common case. `extraPkgs` is the escape hatch (for example `libdecor`) if E12 finds the window does not open under cage; nothing is added speculatively.
+
+### D2. ES-DE is a source build; FreeImage is copied verbatim
+
+- `pkgs/freeimage/`: every file from nixpkgs `8451347` `pkgs/by-name/fr/freeimage/` copied unchanged, plus a header comment in `package.nix` naming the revision, the removal PR and the reason it is kept (ES-DE has no other image backend). `knownVulnerabilities` is not edited: the record of what is unpatched is the point.
+- `pkgs/es-de/package.nix`: the `8451347` derivation with `pname = "es-de"`, `version = "3.4.1"`, the new `fetchzip` hash (the URL pattern `https://gitlab.com/es-de/emulationstation-de/-/archive/v${version}/emulationstation-de-v${version}.tar.gz` is unchanged), `patches` removed, the `FindPoppler.cmake` `postPatch` kept, `APPLICATION_UPDATER` off, the same `buildInputs`, `meta.mainProgram = "es-de"`, and two checks added:
+  - `postInstall` greps the installed find-rules file (`$out/share/es-de/resources/systems/linux/es_find_rules.xml`, or wherever the 3.4.1 install step places `resources/`, confirmed during implementation) for `/run/current-system/sw/lib/retroarch/cores` and fails the build if absent. This replaces the dropped patch with a guard on the fact that made it droppable.
+  - `versionCheckHook` with `versionCheckProgramArg = "--version"`, valid because `--version` returns before SDL initialises (Context).
+- Why a source build over ES-DE's own AppImage: the updater is compiled out rather than silenced by a setting, FreeImage's exposure is visible in the flake instead of buried in a bundle, ES-DE links nixpkgs' ffmpeg, poppler and SDL, and CI catches a library bump that breaks it. The AppImage is the fallback (Risks).
+- Why copy files rather than a second flake input pinned at `8451347`: the ES-DE derivation is edited anyway, so only FreeImage would benefit, at the cost of fetching a whole nixpkgs tree and locking a second input forever. The overlay's existing comment ("not a second pinned nixpkgs") already states the policy.
+- `pkgs/default.nix` becomes `{ pkgs }: { freeimage = pkgs.callPackage ./freeimage { }; es-de = pkgs.callPackage ./es-de { }; duckstation = pkgs.callPackage ./duckstation { }; }`. `callPackage` resolves ES-DE's `freeimage` argument to the vendored one because the overlay puts it on `final`.
+
+### D3. One nixpkgs configuration serves the host and the standalone packages
+
+- `nixpkgsConfig` in `flake.nix` becomes `{ allowUnfree = true; permittedInsecurePackages = [ "freeimage-3.18.0-unstable-2024-04-18" ]; }` with the risk comment beside the list: FreeImage decodes only images the admin placed on the box (scraped art from ScreenScraper, bundled theme assets); no untrusted input reaches it; CI rebuilds it on every push, so a breaking library bump is caught before the box; the AppImage wrap of ES-DE is the fallback if the source build becomes unmaintainable. The name is `pname-version` as nixpkgs matches it.
+- `packages` is restricted to `x86_64-linux`: `packages.${hostSystem} = import ./pkgs { pkgs = hostPkgs; } // { cache-roots = ...; }` where `hostPkgs = import nixpkgs { system = hostSystem; config = nixpkgsConfig; overlays = [ self.overlays.default ]; }`. Two reasons: `legacyPackages` carries no config, so `nix build .#freeimage` would refuse the insecure package and `.#duckstation` the unfree licence; and `forAllSystems` would put Linux-only derivations under `packages.aarch64-darwin`, which `nix flake check` evaluates and rejects, breaking `just check-all` on the Mac. `cache-roots` keeps its definition; its `vendored = lib.attrValues (import ./pkgs { inherit pkgs; })` now yields three paths. `devShells` and `formatter` stay `forAllSystems`.
+- Why not `nixpkgs.config` in a module: the flake constructs two package sets (host and standalone) and both must agree; one attrset in `flake.nix` is the single place.
+
+### D4. Module wiring and the VM assertion
+
+- `modules/kiosk`: `environment.systemPackages = [ pkgs.cage pkgs.es-de ]`, the `TODO(pkgs/es-de)` comment removed; the session script is untouched. `modules/emulators`: `duckstation` appended to the list, its TODO removed.
+- `tests/default.nix` gains one subtest group after the base-system group: `test -x /run/current-system/sw/bin/es-de`, `test -x /run/current-system/sw/bin/duckstation`, and `machine.succeed("es-de --version")` containing `ES-DE 3.4.1`. No process is launched beyond that: the VM has no display and the AppImage's Qt would fail without one, which would prove nothing about the package.
+- `.github/workflows/ci.yml`: only the comment over the push step changes ("built above as part of the host closure" stays true; "only uploads" is dropped because the first cold run compiles). No step is added or reordered.
+
+### D5. README
+
+A "Vendored packages" subsection under Layout or Development: the three packages, why they exist (removed from nixpkgs, with the PR and the licence change named), the FreeImage acknowledgment in one sentence pointing at `flake.nix` for the full text, and the DuckStation posture (unmodified upstream AppImage; what the licence permits; bump by version and hash).
+
+## Risks / Trade-offs
+
+- [ES-DE 3.4.1 does not build or link against `sdl2-compat`, ffmpeg 8 or poppler 26.06] → Fix forward first (a `postPatch` or a cmake flag is a normal vendoring cost). If it stays broken, switch this change to wrapping `ES-DE_x64.AppImage` and drop `pkgs/freeimage` and the insecure-package permission, through an update of these artifacts rather than a silent switch in code; the updater is then silenced by an ES-DE setting in E3.
+- [The FreeImage `unbundle.diff` no longer applies against the pinned libtiff/libraw/openexr headers] → The diff targets FreeImage's own tree, not the libraries, so a header change surfaces as a compile error, handled as above; the CVE patches are independent of it.
+- [The AppImage's bundled Qt does not open a window under cage on Wayland] → E12 line; `extraPkgs` (`libdecor`, `libxkbcommon`) or forcing `QT_QPA_PLATFORM=xcb` through XWayland, which cage ships, are one-line changes in the wrapper's `extraInstallCommands`.
+- [Upstream deletes or re-tags `v0.1-11752`] → The hash pins the artifact; a vanished URL fails the build loudly, and the fix is a bump. The cache keeps the last good store path for the box in the meantime.
+- [First cold CI run is long] → ES-DE and FreeImage are minutes; the AppImage is a download and unpack. After the first push every run substitutes from Cachix. No timeout change is made unless a run shows one is needed.
+- [`versionCheckHook` fails in the sandbox because `es-de --version` touches the home directory] → `parseArguments` runs before any directory setup in 3.4.1's `main()`; if a later bump changes that, the hook is dropped and the VM assertion remains.
+- [Private-use assumption resurfaces] → The licence reasoning lives in the package file and the README, where the next person to touch DuckStation reads it.
+
+## Open Questions
+
+None that change the specs, the approach or the tasks. The exact install path of `es_find_rules.xml` in 3.4.1's install tree is confirmed while writing the guard (D2); either path is a one-line difference.

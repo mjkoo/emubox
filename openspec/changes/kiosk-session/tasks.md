@@ -33,6 +33,8 @@
   - `EMUBOX_CRASH_WINDOW` is 30, not the 10 first written: `started=$SECONDS` is set before `cage -- es-de`, so a run's measured length includes cage and ES-DE starting under llvmpipe. The test now also asserts the variable reached the session, by reading `/proc/<cage>/environ`, before either timing subtest relies on it.
   - The node seeds one dummy ROM file, so no assertion depends on how ES-DE behaves with no game files at all.
 - [ ] 4.3 With the author's go-ahead, open the pull request so CI runs both VM tests (KVM is CI-only); iterate on the kiosk test until green (design Risks list the expected adjustments: wait time, resolution, memory, greeter process name); record the run here
+  - PR #3 opened 2026-08-30 (`https://github.com/mjkoo/emubox/pull/3`). Run 1 (`33337692210`) got further than expected: the node **booted**, `display-manager.service` came up, `player` held an active session on `seat0`, and `es-de` was running under `cage` **5.5 s** after the wait began - so the initrd `suppressedUnits` fix, the session loop, autologin and the compositor all work on the first real execution, and the 120 s budget has enormous headroom against the box's 60 s figure.
+  - Run 1 failed on the crash-window probe, which was the assertion's own bug rather than the thing it asserts: `pgrep -x cage` matches nothing because nixpkgs ships cage through a wrapper, so its `comm` is `.cage-wrapped`, and the command degenerated to `/proc//environ`. (The ancestry walk passed at the same moment because it substring-matches.) Now read off the frontend's own pid, which inherits the same environment and whose `comm` `pgrep -x es-de` already matches.
 
 ## 5. Specs and docs
 

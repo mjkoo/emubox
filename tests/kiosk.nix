@@ -225,8 +225,13 @@ in
           # not reach the session the window would silently stay at 60, and
           # both timing subtests below would fail for a reason that points
           # nowhere near the cause.
+          # Read off the frontend, not off cage: nixpkgs ships cage through a
+          # wrapper, so its `comm` is `.cage-wrapped` and `pgrep -x cage`
+          # matches nothing (which is how this assertion first failed in CI,
+          # on `/proc//environ`). The frontend inherits the session's
+          # environment just the same, and `pgrep -x es-de` already works.
           environ = machine.succeed(
-              "tr '\\0' '\\n' < /proc/$(pgrep -x cage | head -1)/environ"
+              f"tr '\\0' '\\n' < /proc/{esde_pids()[0]}/environ"
           )
           assert "EMUBOX_CRASH_WINDOW=${toString crashWindow}" in environ, environ
 

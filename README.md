@@ -27,6 +27,13 @@ an `x86_64-linux` builder, and the two VM tests (`just vm-test` for the
 disko install test, `just kiosk-test` for the kiosk session) need one that
 exposes KVM. CI builds all of it on every push.
 
+One local gap is worth knowing about: the kiosk session script is a
+`writeShellApplication`, so shellcheck runs when it is *built*, and nothing
+in `just check-all` builds anything. An edit to it can pass every check
+macOS can run and still fail CI. `just session-check` builds just that
+script on an `x86_64-linux` builder (no KVM, seconds rather than a closure)
+and is the quick way to check it.
+
 `emubox-prepare` is Python, so `nix flake check` and `nix fmt` cover more
 than Nix. Its unit tests, `ruff check`, `ruff format --check` and `ty check`
 run in the package's own `checkPhase`, and `checks.<system>.emubox-prepare`

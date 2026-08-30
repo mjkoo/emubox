@@ -30,6 +30,7 @@ eval:
     nix eval --raw .#nixosConfigurations.{{host}}.config.system.build.toplevel.drvPath
     nix eval --raw .#checks.x86_64-linux.vm.drvPath
     nix eval --raw .#checks.x86_64-linux.kiosk.drvPath
+    nix eval --raw .#checks.x86_64-linux.session.drvPath
     nix eval --raw .#checks.x86_64-linux.closure-no-secrets.drvPath
 
 # Build the host closure (needs an x86_64-linux builder)
@@ -43,6 +44,14 @@ vm-test:
 # Build and run the kiosk VM test (x86_64-linux builder with KVM)
 kiosk-test:
     nix build .#checks.x86_64-linux.kiosk --no-link
+
+# Build the kiosk session script, which is what runs its shellcheck
+# (x86_64-linux builder, no KVM needed). writeShellApplication shellchecks in
+# its check phase, and `just check-all` is evaluation-only, so without this an
+# edit to emubox-session can pass every check runnable on macOS and still fail
+# CI. Seconds, unlike `just build`.
+session-check:
+    nix build .#checks.x86_64-linux.session --no-link
 
 # Prove no test secret value is in the system closure (x86_64-linux builder)
 closure-check:

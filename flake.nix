@@ -166,6 +166,25 @@
             # The host's software modules as a plain node with a graphical
             # stack: the session, its crash counter and the greeter.
             kiosk = hostPkgs.testers.runNixOSTest (import ./tests/kiosk.nix { inherit self; });
+            # The kiosk session script on its own, because building it is
+            # what runs its shellcheck: `writeShellApplication` does that in
+            # its check phase, and nothing the admin's Mac can run reaches
+            # it - `just check-all` is evaluation-only, and the closure that
+            # would build it needs an x86_64-linux builder. Without this an
+            # edit to `emubox-session` passes every local check and fails
+            # CI, which is exactly what happened to the EXIT trap. Selected
+            # by `providedSessions` rather than by position: the recovery
+            # module puts Plasma's session package in the same list.
+            session =
+              let
+                ours = lib.filter (
+                  p: (p.providedSessions or [ ]) == [ "emubox" ]
+                ) host.config.services.displayManager.sessionPackages;
+              in
+              if ours == [ ] then
+                throw "flake.nix: no session package provides `emubox`; the checks.session selector is stale"
+              else
+                lib.head ours;
             # No test secret value in any store path of the test closure.
             closure-no-secrets = import ./tests/closure-no-secrets.nix {
               pkgs = testHost.pkgs;

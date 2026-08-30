@@ -38,7 +38,7 @@
     pcsx2
     azahar
     scummvm
-    # TODO(pkgs/duckstation): vendored DuckStation via the overlay.
+    duckstation
   ];
 
   # TODO(design 6): retroarch.cfg keys asserted by emubox-prepare, the

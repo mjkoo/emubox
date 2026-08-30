@@ -22,9 +22,9 @@
 
 ## 5. Host closure, cache roots, VM test
 
-- [ ] 5.1 `modules/kiosk`: add `pkgs.es-de` to `environment.systemPackages`, remove the `TODO(pkgs/es-de)` comment; `modules/emulators`: append `duckstation`, remove its TODO
-- [ ] 5.2 `just build` (host toplevel on the Linux builder) succeeds and `nix build .#packages.x86_64-linux.cache-roots --print-out-paths` lists `es-de`, `freeimage` and `duckstation` among the roots; `nix build .#packages.x86_64-linux.es-de --print-out-paths` equals the `es-de` path inside `cache-roots` (one package set serves both; design D3), likewise for the other two
-- [ ] 5.3 `tests/default.nix`: add the `packages` subtest group per design D4 (`test -x` on both programs under `/run/current-system/sw/bin`; `es-de --version` output contains `ES-DE 3.4.1`); `nix build .#checks.x86_64-linux.vm.driver` renders the script on the local builder
+- [x] 5.1 `modules/kiosk`: add `pkgs.es-de` to `environment.systemPackages`, remove the `TODO(pkgs/es-de)` comment; `modules/emulators`: append `duckstation`, remove its TODO
+- [x] 5.2 `just build` (host toplevel on the Linux builder) succeeds and `nix build .#packages.x86_64-linux.cache-roots --print-out-paths` lists `es-de`, `freeimage` and `duckstation` among the roots; `nix build .#packages.x86_64-linux.es-de --print-out-paths` equals the `es-de` path inside `cache-roots` (one package set serves both; design D3), likewise for the other two
+- [x] 5.3 `tests/default.nix`: add the `packages` subtest group per design D4 (`test -x` on both programs under `/run/current-system/sw/bin`; `es-de --version` output contains `ES-DE 3.4.1`); `nix build .#checks.x86_64-linux.vm.driver` renders the script on the local builder
 - [ ] 5.4 With the author's go-ahead, open the pull request from this branch so CI runs the VM test (KVM is CI-only); the first run compiles ES-DE and FreeImage cold; the new subtests are green and `just check-all` passes locally; record the run in this task
 
 ## 6. Docs

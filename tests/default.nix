@@ -339,5 +339,18 @@ in
         conf = machine.succeed("systemd-analyze cat-config systemd/journald.conf")
         assert "SystemMaxUse=256M" in conf, conf
         assert "MaxRetentionSec=1month" in conf, conf
+
+    # --- packages: the vendored programs are installed --------------------
+    # Nothing is launched beyond `--version`: the VM has no display, and
+    # the AppImage's Qt would fail without one, proving nothing about the
+    # package. `es-de --version` returns before SDL initialises.
+
+    with subtest("es-de and duckstation are on the system's program path"):
+        machine.succeed("test -x /run/current-system/sw/bin/es-de")
+        machine.succeed("test -x /run/current-system/sw/bin/duckstation")
+
+    with subtest("es-de reports the pinned version"):
+        out = machine.succeed("es-de --version")
+        assert "ES-DE 3.4.1" in out, out
   '';
 }

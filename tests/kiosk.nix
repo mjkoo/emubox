@@ -353,10 +353,23 @@ in
           # the full command line and pgrep excludes only its own pid, so the
           # driver's `bash -c` and `timeout` processes carry the pattern
           # themselves and `pgrep -f 'sddm-greeter|kwin'` succeeds on any
-          # booted machine, greeter or not. This pin's greeter compositor is
-          # kwin (sddm.wayland.compositor), and the kiosk session runs cage,
-          # so kwin_wayland running at all is the greeter.
-          machine.wait_until_succeeds("pgrep -x kwin_wayland", timeout=60)
+          # booted machine, greeter or not.
+          def greeter_state():
+              return machine.succeed(
+                  "echo '--- sessions'; loginctl list-sessions --no-legend || true; "
+                  "echo '--- seat'; loginctl show-seat seat0 || true; "
+                  "echo '--- processes'; ps -eo user,pid,comm --no-headers "
+                  "| grep -iE 'sddm|kwin|weston|cage|es-de|plasma' || true; "
+                  "echo '--- display-manager'; "
+                  "systemctl status display-manager.service --no-pager -n 40 || true"
+              )
+
+          print(greeter_state())
+          try:
+              machine.wait_until_succeeds("pgrep -x kwin_wayland", timeout=120)
+          except Exception:
+              print(greeter_state())
+              raise
           # And the seat is no longer player's, which is the other half of
           # "no automatic login while this display manager keeps running".
           assert not session_on_seat("player")

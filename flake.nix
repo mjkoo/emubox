@@ -162,6 +162,13 @@
               actionlint
               shellcheck
               zizmor
+              # emubox-prepare: what its checkPhase runs, so the same
+              # commands are available by hand. `nix fmt` reaches ruff
+              # through the formatter override, but only for formatting.
+              python3
+              python3.pkgs.pytest
+              ruff
+              ty
               # binary cache (`just cache-push`)
               cachix
             ];

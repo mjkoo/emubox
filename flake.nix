@@ -181,8 +181,8 @@
                   p: (p.providedSessions or [ ]) == [ "emubox" ]
                 ) host.config.services.displayManager.sessionPackages;
               in
-              if ours == [ ] then
-                throw "flake.nix: no session package provides `emubox`; the checks.session selector is stale"
+              if lib.length ours != 1 then
+                throw "flake.nix: expected exactly one session package providing `emubox`, found ${toString (lib.length ours)}; the checks.session selector is stale"
               else
                 lib.head ours;
             # No test secret value in any store path of the test closure.

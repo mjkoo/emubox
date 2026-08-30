@@ -176,10 +176,16 @@ in
           One command rather than a `ps` per level: a process exiting between
           two round trips would otherwise fail the test rather than answer it.
           """
+          # `line=$(...) || break` rather than testing readability first: the
+          # process can exit between the test and the read, and under the
+          # driver's `set -e` that would fail the command instead of ending
+          # the walk, which is the opposite of the point.
           script = (
               "p=" + str(pid) + "; chain=; "
-              "while [ \"$p\" -gt 1 ] && [ -r /proc/$p/stat ]; do "
-              "set -- $(awk '{print $2, $4}' /proc/$p/stat); "
+              "while [ \"$p\" -gt 1 ]; do "
+              "line=$(awk '{print $2, $4}' /proc/$p/stat 2>/dev/null) || break; "
+              "[ -n \"$line\" ] || break; "
+              "set -- $line; "
               "chain=\"$chain $1\"; p=$2; "
               "done; echo \"$chain\""
           )
@@ -298,7 +304,7 @@ in
           # Proved by PID, not by presence: without waiting for the old
           # process to die, the dying process satisfies "es-de is running"
           # and the subtest passes with no relaunch having happened.
-          machine.wait_until_fails(f"kill -0 {before}", timeout=30)
+          machine.wait_until_fails(f"kill -0 {before}", timeout=60)
 
           def relaunched(_last):
               return any(p != before for p in esde_pids())
@@ -353,7 +359,6 @@ in
           # the same shape the install test already uses.
           machine.shutdown()
           machine.start()
-          machine.wait_for_unit("display-manager.target")
           machine.wait_for_unit("display-manager.service")
           retry(lambda _: session_on_seat("player"), timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)

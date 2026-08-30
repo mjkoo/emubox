@@ -566,10 +566,16 @@ def test_concurrent_writers_never_publish_a_mixed_document(tmp_path: Path) -> No
         for keys in (a, b):
             pid = os.fork()
             if pid == 0:  # pragma: no cover - the child never returns
+                # The exit code has to carry the failure: a bare
+                # `finally: os._exit(0)` makes the parent's check below
+                # unconditionally true, which is how this test passed against
+                # the very code it exists to reject.
+                code = 0
                 try:
                     ep.set_esde_settings(path, keys)
-                finally:
-                    os._exit(0)
+                except BaseException:
+                    code = 1
+                os._exit(code)
             pids.append(pid)
         for pid in pids:
             _, status = os.waitpid(pid, 0)

@@ -88,6 +88,25 @@ def _ensure_parent(path: Path) -> None:
     for directory in missing:
         directory.mkdir(exist_ok=True)
         directory.chmod(0o755)
+        _inherit_owner(directory)
+
+
+def _inherit_owner(path: Path) -> None:
+    """Give a newly created path its parent directory's owner.
+
+    Only meaningful as root. tmpfiles creates `/data/es-de` owned by
+    `player`, so a run by an admin from the greeter would otherwise leave the
+    `settings/` directory and the file inside it owned by root - and then the
+    frontend, which runs as `player`, could not write there at all and every
+    later launch would end back at the greeter.
+    """
+    if os.getuid() != 0:
+        return
+    try:
+        parent = path.parent.stat()
+        os.chown(path, parent.st_uid, parent.st_gid)
+    except OSError as error:  # pragma: no cover - needs root to reach
+        note(f"{path}: could not set the owner ({error})")
 
 
 def _write(path: Path, text: str) -> None:
@@ -130,6 +149,7 @@ def _write(path: Path, text: str) -> None:
             os.fsync(stream.fileno())
         if preserve is None:
             temporary.chmod(0o644)
+            _inherit_owner(temporary)
         else:
             temporary.chmod(stat.S_IMODE(preserve.st_mode))
             if os.getuid() == 0:
@@ -236,10 +256,13 @@ def _lines(text: str) -> list[str]:
     Not `str.splitlines()`, which also breaks on U+2028, form feed and the
     other exotic separators - a value containing one would be split into a
     fragment that fails the syntax check below and take the whole file
-    through the recreate path with it. CRLF is normalised so a file an
-    emulator wrote on Windows round-trips unchanged.
+    through the recreate path with it. No CRLF handling is needed here:
+    `Path.read_text` already translates universal newlines, so only `\n`
+    ever reaches this.
     """
-    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not text:
+        return []
+    return text.split("\n")
 
 
 def _split_ini_assignment(line: str) -> tuple[str, str, str] | None:
@@ -253,6 +276,16 @@ def _split_ini_assignment(line: str) -> tuple[str, str, str] | None:
 def _parse_ini(path: Path) -> list[str] | None:
     text = _read_text(path)
     if text is None:
+        return None
+    if not text.strip():
+        # Recorded, like the ES-DE case: an empty file yields no lines and
+        # would otherwise look like a healthy document missing every key.
+        note(f"{path} is empty; recreating it")
+        return None
+    if not text.strip():
+        # Recorded, like the ES-DE case: an empty file yields no lines and
+        # would otherwise look like a healthy document missing every key.
+        note(f"{path} is empty; recreating it")
         return None
     lines = _lines(text.rstrip("\n"))
     for line in lines:
@@ -418,9 +451,12 @@ def install_custom_systems(target: Path, source: str) -> bool:
     that is every launch of the frontend on the box as shipped.
 
     This step carries the editors' error policy too, and reaches the target
-    only through `_read_text`: a target that is unreadable, not UTF-8, or a
-    directory is treated as "not what we want" and rewritten, rather than
-    raising and ending the session at the greeter. `os.path.lexists` rather
+    only through `_read_text`: a target that is unreadable or not UTF-8 is
+    treated as "not what we want" and rewritten, rather than raising and
+    ending the session at the greeter. A target that is a *directory* is the
+    one case still left to raise, deliberately - it cannot be replaced, and
+    like an unwritable `/data` it is the kind of breakage that should stop at
+    a greeter an admin can log into. `os.path.lexists` rather
     than `Path.exists` on the removal branch, because the latter follows a
     symlink and would leave a dangling one in place - exactly the stale entry
     this branch exists to clear.
@@ -480,11 +516,18 @@ def main(argv: Sequence[str]) -> int:
     except (OSError, ValueError) as error:
         note(f"{owned_values} is not readable owned-values JSON ({error})")
         return 1
+    if not isinstance(tables, dict):
+        note(
+            f"{owned_values}: expected an object of files, got {type(tables).__name__}"
+        )
+        return 1
     for relative, table in tables.items():
-        try:
-            editor = _EDITORS[table["format"]]
-        except KeyError:
-            note(f"{relative}: unknown format {table.get('format')!r}")
+        if not isinstance(table, dict) or "format" not in table or "keys" not in table:
+            note(f"{relative}: expected an object with 'format' and 'keys'")
+            return 1
+        editor = _EDITORS.get(table["format"])
+        if editor is None:
+            note(f"{relative}: unknown format {table['format']!r}")
             return 1
         editor(root / relative, table["keys"])
 

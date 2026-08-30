@@ -29,4 +29,4 @@
 
 ## 6. Docs
 
-- [ ] 6.1 README "Vendored packages" subsection per design D5 (why each exists, FreeImage acknowledgment pointing at `flake.nix`, DuckStation licence posture and bump procedure)
+- [x] 6.1 README "Vendored packages" subsection per design D5 (why each exists, FreeImage acknowledgment pointing at `flake.nix`, DuckStation licence posture and bump procedure)

@@ -12,6 +12,10 @@ jobs:
   nix:
     name: Nix
     runs-on: ubuntu-latest
+    env:
+      # Write token for the emubox Cachix cache; empty on a fork or until
+      # the repository secret exists, which skips the push step below.
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,12 +44,14 @@ jobs:
           # flake inputs fetched through the GitHub API hit rate limits without it
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      # No-account cache on the GitHub Actions cache API. Swap for
-      # cachix/cachix-action once the public cache for pkgs/ exists (design 12.4).
-      - uses: DeterminateSystems/magic-nix-cache-action@908b263ff629f4cc17666315b7fd3ec127c6244d # v14
+      # The project's public binary cache: what cache.nixos.org never has
+      # (the unfree emulator cores, the vendored packages), also used by the
+      # box and the Mac's builder. Pull only here; the push is the explicit
+      # step at the end, so a system toplevel's closure never goes up.
+      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
         with:
-          use-flakehub: false
-          diagnostic-endpoint: ""
+          name: emubox
+          skipPush: true
 
       - name: Format check
         run: nix fmt -- --ci
@@ -56,4 +62,10 @@ jobs:
       - name: Build host closure
         run: nix build .#nixosConfigurations.emubox.config.system.build.toplevel --no-link
 
-  # TODO(design 12.4): on success, fast-forward `release` and push pkgs/ to Cachix.
+      # Everything in cache-roots was built above as part of the host
+      # closure, so this only uploads. Paths already on the cache are skipped.
+      - name: Push the cache roots to Cachix
+        if: env.CACHIX_AUTH_TOKEN != ''
+        run: nix build .#packages.x86_64-linux.cache-roots --no-link --print-out-paths | xargs cachix push emubox
+
+  # TODO(design 12.4): on success, fast-forward `release`.

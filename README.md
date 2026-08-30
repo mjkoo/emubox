@@ -26,6 +26,14 @@ from macOS; building the host (`just build`, `just closure-check`) needs
 an `x86_64-linux` builder, and the VM test (`just vm-test`) needs one that
 exposes KVM. CI builds all of it on every push.
 
+The `emubox` Cachix cache (`https://emubox.cachix.org`) holds what
+cache.nixos.org never has: the unfree emulator cores and the vendored
+packages, the flake's `cache-roots` output. CI pushes it after a green
+run (`just cache-push` does the same by hand with `CACHIX_AUTH_TOKEN`
+set), the box substitutes from it once `binaryCachePublicKey` is set in
+`hosts/emubox/facts.nix`, and a local builder gains the same by adding the
+cache to its own `nix.settings`.
+
 ## Install
 
 One command over Ethernet installs or reinstalls the box from the flake,

@@ -126,10 +126,22 @@
   ];
 
   nix = {
-    settings.experimental-features = [
-      "nix-command"
-      "flakes"
-    ];
+    settings = {
+      experimental-features = [
+        "nix-command"
+        "flakes"
+      ];
+      # The project's binary cache, on top of cache.nixos.org (extra-*, so
+      # the defaults stay): the unfree cores and the vendored packages,
+      # which CI pushes (flake output `cache-roots`). Gated on the key so a
+      # host without one evaluates and simply builds those paths itself.
+      extra-substituters = lib.mkIf (config.emubox.facts.binaryCachePublicKey != null) [
+        "https://emubox.cachix.org"
+      ];
+      extra-trusted-public-keys = lib.mkIf (config.emubox.facts.binaryCachePublicKey != null) [
+        config.emubox.facts.binaryCachePublicKey
+      ];
+    };
     gc = {
       automatic = true;
       options = "--delete-older-than 14d";

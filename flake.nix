@@ -36,7 +36,31 @@
       # the public binary cache on their own, without the system closure.
       overlays.default = import ./overlays { inherit inputs; };
 
-      packages = forAllSystems (system: import ./pkgs { pkgs = pkgsFor system; });
+      packages = lib.recursiveUpdate (forAllSystems (system: import ./pkgs { pkgs = pkgsFor system; })) {
+        # What the binary cache holds: the store paths cache.nixos.org never
+        # has, so every consumer without the cache (CI, the Mac's builder,
+        # the box) would compile them. Hydra builds no unfree package, which
+        # is every RetroArch core the emulators module selects that carries
+        # a non-free license; the vendored packages under pkgs/ are ours.
+        # CI pushes exactly this closure (`just cache-push` does the same by
+        # hand), never a system toplevel, so the cache stays small.
+        ${hostSystem}.cache-roots =
+          let
+            host = self.nixosConfigurations.emubox;
+            inherit (host) pkgs;
+            licenses = p: lib.toList (p.meta.license or [ ]);
+            isUnfree = p: lib.any (l: !(l.free or true)) (licenses p);
+            retroarchs = lib.filter (p: p ? cores) host.config.environment.systemPackages;
+            unfreeCores = lib.unique (lib.filter isUnfree (lib.concatMap (r: r.cores) retroarchs));
+            vendored = lib.attrValues (import ./pkgs { inherit pkgs; });
+          in
+          pkgs.linkFarm "emubox-cache-roots" (
+            map (p: {
+              name = p.name;
+              path = p;
+            }) (unfreeCores ++ vendored)
+          );
+      };
 
       # Everything that is not tied to the physical disk: importable by a
       # future second host. Consumers supply a nixpkgs with `overlays.default`
@@ -104,6 +128,8 @@
               actionlint
               shellcheck
               zizmor
+              # binary cache (`just cache-push`)
+              cachix
             ];
           };
         }

@@ -43,6 +43,11 @@ vm-test:
 closure-check:
     nix build .#checks.x86_64-linux.closure-no-secrets --no-link
 
+# Push the cache roots (unfree cores, vendored packages) to the emubox Cachix
+# cache, as CI does; needs CACHIX_AUTH_TOKEN and an x86_64-linux builder
+cache-push:
+    nix build .#packages.x86_64-linux.cache-roots --no-link --print-out-paths | xargs cachix push emubox
+
 # Interactive VM for poking at the kiosk (x86_64-linux)
 vm:
     nixos-rebuild build-vm --flake .#{{host}} && ./result/bin/run-{{host}}-vm

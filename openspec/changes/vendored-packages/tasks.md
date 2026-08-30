@@ -17,8 +17,8 @@
 
 ## 4. DuckStation
 
-- [ ] 4.1 Create `pkgs/duckstation/package.nix` per design D1: `appimageTools.wrapType2` on `DuckStation-x64.AppImage` from release `v0.1-11752` (hash via `nix store prefetch-file` or a `lib.fakeHash` build), `extraInstallCommands` installing the `.desktop` file (its `Exec=` line rewritten to `duckstation`) and icon from `appimageTools.extract`, `meta` with `license = lib.licenses.cc-by-nc-nd-40`, `mainProgram = "duckstation"`, `platforms = [ "x86_64-linux" ]`, `homepage`, and the licence-reasoning header
-- [ ] 4.2 `nix build .#packages.x86_64-linux.duckstation` succeeds; `result/bin/duckstation` exists and `result/share/applications/` holds the desktop file; prove the bump path (design D1) by setting `hash = lib.fakeHash`, rebuilding, and confirming the reported hash is the recorded one with nothing else in the file touched, then restore
+- [x] 4.1 Create `pkgs/duckstation/package.nix` per design D1: `appimageTools.wrapType2` on `DuckStation-x64.AppImage` from release `v0.1-11752` (hash via `nix store prefetch-file` or a `lib.fakeHash` build), `extraInstallCommands` installing the `.desktop` file (its `Exec=` line rewritten to `duckstation`) and icon from `appimageTools.extract`, `meta` with `license = lib.licenses.cc-by-nc-nd-40`, `mainProgram = "duckstation"`, `platforms = [ "x86_64-linux" ]`, `homepage`, and the licence-reasoning header
+- [x] 4.2 `nix build .#packages.x86_64-linux.duckstation` succeeds; `result/bin/duckstation` exists and `result/share/applications/` holds the desktop file; prove the bump path (design D1) by setting `hash = lib.fakeHash`, rebuilding, and confirming the reported hash is the recorded one with nothing else in the file touched, then restore
 
 ## 5. Host closure, cache roots, VM test
 

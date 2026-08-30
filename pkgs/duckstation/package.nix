@@ -1,0 +1,66 @@
+# DuckStation, the PS1 emulator, as the upstream x86_64 AppImage of a pinned
+# release, extracted and run unmodified inside an FHS wrapper.
+#
+# Why a binary and not a source build: nixpkgs removed its duckstation
+# derivation at upstream's request after the licence changed to
+# CC-BY-NC-ND 4.0 ("removed following upstream request. Please use the
+# appimage instead"). This repository and the emubox Cachix cache are
+# public. CC-BY-NC-ND permits redistributing unmodified copies
+# non-commercially with attribution and forbids distributing derivatives;
+# the nixpkgs source derivation patched the source, so its build could not
+# be pushed to the cache. The AppImage is unmodified and is the channel
+# upstream asks distributions to use. wrapType2 extracts the AppImage and
+# installs its contents plus an FHS wrapper that runs them, so what
+# reaches the store and the cache is the extracted form, byte-identical in
+# content: the posture rests on the contents being unmodified, not on the
+# file being one blob. The .desktop file installed below is rewritten to
+# call the wrapper; it lands under $out/share/applications, outside the
+# extracted tree the wrapper runs.
+#
+# Bumping: edit `version` to the new release tag (without the leading v),
+# set `hash = lib.fakeHash`, rebuild, and record the hash the failed fetch
+# reports. The URL derives from `version`, so nothing else changes.
+#
+# Attribution: DuckStation by Connor McLaughlin (stenzek) and contributors,
+# https://github.com/stenzek/duckstation, CC-BY-NC-ND 4.0.
+{
+  lib,
+  appimageTools,
+  fetchurl,
+}:
+
+let
+  pname = "duckstation";
+  version = "0.1-11752";
+
+  src = fetchurl {
+    url = "https://github.com/stenzek/duckstation/releases/download/v${version}/DuckStation-x64.AppImage";
+    hash = "sha256-Fpp90sN3MXgOs3KcvhbwSP/z47bvnJ9JmGncEXSJmlQ=";
+  };
+
+  # The unpacked AppImage; wrapType2 runs the same extraction for the
+  # wrapper, so this is one more reference to the same store path.
+  contents = appimageTools.extract { inherit pname version src; };
+in
+appimageTools.wrapType2 {
+  inherit pname version src;
+
+  # The desktop entry and icon from the extracted AppImage; Exec and
+  # TryExec point at the wrapper, which is what is on PATH.
+  extraInstallCommands = ''
+    install -Dm444 ${contents}/org.duckstation.DuckStation.desktop \
+      -t $out/share/applications
+    substituteInPlace $out/share/applications/org.duckstation.DuckStation.desktop \
+      --replace-fail 'duckstation-qt' 'duckstation'
+    install -Dm444 ${contents}/usr/share/icons/hicolor/512x512/apps/org.duckstation.DuckStation.png \
+      -t $out/share/icons/hicolor/512x512/apps
+  '';
+
+  meta = {
+    description = "Fast PlayStation 1 emulator";
+    homepage = "https://github.com/stenzek/duckstation";
+    license = lib.licenses.cc-by-nc-nd-40;
+    platforms = [ "x86_64-linux" ];
+    mainProgram = "duckstation";
+  };
+}

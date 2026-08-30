@@ -160,7 +160,7 @@
                       return True
               return False
 
-          retry(player_session_active, timeout=120)
+          retry(player_session_active, timeout_seconds=120)
 
       with subtest("es-de runs inside the cage compositor"):
           # 120 s is this test's budget, chosen with headroom for ES-DE
@@ -230,7 +230,7 @@
               return any(p != before for p in esde_pids())
 
           # 15 s is the kiosk spec's own constant, asserted as written.
-          retry(relaunched, timeout=15)
+          retry(relaunched, timeout_seconds=15)
 
       with subtest("Three short runs in a row end at the greeter"):
           for strike in range(3):
@@ -257,7 +257,7 @@
           # proves that ending there does not outlive the boot.
           machine.reboot()
           machine.wait_for_unit("display-manager.service")
-          retry(player_session_active, timeout=120)
+          retry(player_session_active, timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)
     '';
 }

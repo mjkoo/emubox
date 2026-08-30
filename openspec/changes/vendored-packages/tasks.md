@@ -1,13 +1,13 @@
 ## 1. Flake wiring (red first: the three attributes must exist before anything builds)
 
-- [ ] 1.1 In `flake.nix`, extend `nixpkgsConfig` with `permittedInsecurePackages = [ "freeimage-3.18.0-unstable-2024-04-18" ]` and the risk comment from design D3 (only admin-supplied images are decoded; CI rebuilds on every push; ES-DE's AppImage is the fallback)
-- [ ] 1.2 In `flake.nix`, define `hostPkgs = self.nixosConfigurations.emubox.pkgs` (the set `cache-roots` already reads) and replace the `forAllSystems` `packages` with `packages.${hostSystem} = import ./pkgs { pkgs = hostPkgs; } // { cache-roots = ...; }` per design D3; `devShells` and `formatter` stay `forAllSystems`; confirm `nix flake check` on the Mac still evaluates (`just check-all`)
-- [ ] 1.3 Rewrite `pkgs/default.nix` as the three `callPackage`s (design D2) with the TODO comment removed; `overlays/default.nix` is unchanged
+- [x] 1.1 In `flake.nix`, extend `nixpkgsConfig` with `permittedInsecurePackages = [ "freeimage-3.18.0-unstable-2024-04-18" ]` and the risk comment from design D3 (only admin-supplied images are decoded; CI rebuilds on every push; ES-DE's AppImage is the fallback)
+- [x] 1.2 In `flake.nix`, define `hostPkgs = self.nixosConfigurations.emubox.pkgs` (the set `cache-roots` already reads) and replace the `forAllSystems` `packages` with `packages.${hostSystem} = import ./pkgs { pkgs = hostPkgs; } // { cache-roots = ...; }` per design D3; `devShells` and `formatter` stay `forAllSystems`; confirm `nix flake check` on the Mac still evaluates (`just check-all`)
+- [x] 1.3 Rewrite `pkgs/default.nix` as the three `callPackage`s (design D2) with the TODO comment removed; `overlays/default.nix` is unchanged
 
 ## 2. FreeImage
 
-- [ ] 2.1 Copy `package.nix`, `unbundle.diff`, `libtiff-4.4.0.diff` and the eight `CVE-*.patch` files from nixpkgs revision `8451347` `pkgs/by-name/fr/freeimage/` into `pkgs/freeimage/` unchanged (fetch each from `https://raw.githubusercontent.com/NixOS/nixpkgs/8451347/pkgs/by-name/fr/freeimage/<file>`; `patchFlags = [ "-p1" "--binary" ]` means the diffs carry CRLF and must be copied byte-exact, not through an editor), then add the provenance header (revision, removal PR #454867, why it is kept) to `package.nix`
-- [ ] 2.2 `nix build .#packages.x86_64-linux.freeimage` succeeds (the full attribute: `packages` exists only for `x86_64-linux` after 1.2, so the short `.#freeimage` form resolves only in a shell on the Linux builder itself); the same build with the permission removed from 1.1 refuses with the `knownVulnerabilities` message (proves the permission is what admits it), then restore 1.1
+- [x] 2.1 Copy `package.nix`, `unbundle.diff`, `libtiff-4.4.0.diff` and the eight `CVE-*.patch` files from nixpkgs revision `8451347` `pkgs/by-name/fr/freeimage/` into `pkgs/freeimage/` unchanged (fetch each from `https://raw.githubusercontent.com/NixOS/nixpkgs/8451347/pkgs/by-name/fr/freeimage/<file>`; `patchFlags = [ "-p1" "--binary" ]` means the diffs carry CRLF and must be copied byte-exact, not through an editor), then add the provenance header (revision, removal PR #454867, why it is kept) to `package.nix`
+- [x] 2.2 `nix build .#packages.x86_64-linux.freeimage` succeeds (the full attribute: `packages` exists only for `x86_64-linux` after 1.2, so the short `.#freeimage` form resolves only in a shell on the Linux builder itself); the same build with the permission removed from 1.1 refuses with the `knownVulnerabilities` message (proves the permission is what admits it), then restore 1.1
 
 ## 3. ES-DE
 

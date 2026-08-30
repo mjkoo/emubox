@@ -31,13 +31,15 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # The host closure is about 10 GB and the runner's root disk starts
-      # with roughly 20 GB free; drop the preinstalled toolchains nothing
-      # here uses before the store fills it.
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
+      # Insurance, not a fix: the first runs measured about 85 GB free on
+      # the runner against a 10 GB host closure, so nothing here needs
+      # reclaiming today. This gives /nix a BTRFS volume spanning / and
+      # /mnt (about 65 GB at `holster`, which purges nothing) so that the
+      # vendored packages of later changes have room without a surprise.
+      # Must precede the Nix install.
+      - uses: wimpysworld/nothing-but-nix@687c797a730352432950c707ab493fcc951818d7 # v10
+        with:
+          hatchet-protocol: holster
 
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:

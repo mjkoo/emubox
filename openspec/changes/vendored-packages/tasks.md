@@ -13,8 +13,7 @@
 
 - [ ] 3.1 Create `pkgs/es-de/package.nix` from the `8451347` `emulationstation-de` derivation per design D2: `pname = "es-de"`, `version = "3.4.1"`, `patches` removed, `postPatch` for `FindPoppler.cmake` kept, `APPLICATION_UPDATER` off, provenance header; obtain the `fetchzip` hash with a first build (`lib.fakeHash`) and record it
 - [ ] 3.2 Add the find-rules guard in `postInstall`: locate the installed `es_find_rules.xml` under `$out/share/es-de/resources/systems/linux/` (confirm the path from the 3.4.1 install step; design D2), grep for `/run/current-system/sw/lib/retroarch/cores`, fail the build if absent; prove the guard by temporarily grepping for a string that is not there and watching the build fail, then restore
-- [ ] 3.3 Add `versionCheckHook` (`nativeInstallCheckInputs`, `versionCheckProgramArg = "--version"`, `doInstallCheck = true`); `nix build .#es-de` succeeds on the Linux builder and `result/bin/es-de --version` prints `ES-DE 3.4.1`
-- [ ] 3.4 If 3.3 fails to compile or link against `sdl2-compat`, ffmpeg 8 or poppler 26.06: fix forward with a `postPatch` or cmake flag and record it in the package's header; if that fails, stop and update these artifacts to the AppImage fallback (design Risks) before continuing
+- [ ] 3.3 Add `versionCheckHook` (`nativeInstallCheckInputs`, `versionCheckProgramArg = "--version"`, `doInstallCheck = true`); `nix build .#es-de` succeeds on the Linux builder and `result/bin/es-de --version` prints `ES-DE 3.4.1`. A compile or link failure against `sdl2-compat`, ffmpeg 8 or poppler 26.06 is fixed forward with a `postPatch` or cmake flag recorded in the package's header; if that fails, stop and update these artifacts to the AppImage fallback (design Risks) before continuing
 
 ## 4. DuckStation
 
@@ -24,11 +23,10 @@
 ## 5. Host closure, cache roots, VM test
 
 - [ ] 5.1 `modules/kiosk`: add `pkgs.es-de` to `environment.systemPackages`, remove the `TODO(pkgs/es-de)` comment; `modules/emulators`: append `duckstation`, remove its TODO
-- [ ] 5.2 `just build` (host toplevel on the Linux builder) succeeds and `nix build .#packages.x86_64-linux.cache-roots --print-out-paths` lists `es-de`, `freeimage` and `duckstation` among the roots
+- [ ] 5.2 `just build` (host toplevel on the Linux builder) succeeds and `nix build .#packages.x86_64-linux.cache-roots --print-out-paths` lists `es-de`, `freeimage` and `duckstation` among the roots; `nix build .#es-de --print-out-paths` equals the `es-de` path inside `cache-roots` (the standalone and host package sets agree; design D3), likewise for the other two
 - [ ] 5.3 `tests/default.nix`: add the `packages` subtest group per design D4 (`test -x` on both programs under `/run/current-system/sw/bin`; `es-de --version` output contains `ES-DE 3.4.1`); `nix build .#checks.x86_64-linux.vm.driver` renders the script on the local builder
-- [ ] 5.4 Open the pull request from this branch so CI runs the VM test (KVM is CI-only); the first run compiles ES-DE and FreeImage cold; the new subtests are green and `just check-all` passes locally; record the run in this task
+- [ ] 5.4 With the author's go-ahead, open the pull request from this branch so CI runs the VM test (KVM is CI-only); the first run compiles ES-DE and FreeImage cold; the new subtests are green and `just check-all` passes locally; record the run in this task
 
-## 6. Docs and comments
+## 6. Docs
 
 - [ ] 6.1 README "Vendored packages" subsection per design D5 (why each exists, FreeImage acknowledgment pointing at `flake.nix`, DuckStation licence posture and bump procedure)
-- [ ] 6.2 `.github/workflows/ci.yml`: reword the comment over the Cachix push step (the roots are built by the host build above; the first cold run compiles), no step changes; `just lint-actions` passes

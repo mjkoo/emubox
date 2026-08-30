@@ -12,7 +12,7 @@
 ## 3. ES-DE
 
 - [ ] 3.1 Create `pkgs/es-de/package.nix` from the `8451347` `emulationstation-de` derivation per design D2: `pname = "es-de"`, `version = "3.4.1"`, `patches` removed, `postPatch` for `FindPoppler.cmake` kept, `APPLICATION_UPDATER` off, provenance header; obtain the `fetchzip` hash with a first build (`lib.fakeHash`) and record it
-- [ ] 3.2 Add the find-rules guard in `postInstall`: locate the installed `es_find_rules.xml` under `$out/share/es-de/resources/systems/linux/` (confirm the path from the 3.4.1 install step; design D2), grep for `/run/current-system/sw/lib/retroarch/cores`, fail the build if absent; prove the guard by temporarily grepping for a string that is not there and watching the build fail, then restore
+- [ ] 3.2 Add the find-rules guard in `postInstall`: grep the installed `$out/share/es-de/resources/systems/linux/es_find_rules.xml` (design D2) for `/run/current-system/sw/lib/retroarch/cores`, fail the build if absent; prove the guard by temporarily grepping for a string that is not there and watching the build fail, then restore
 - [ ] 3.3 Add `versionCheckHook` (`nativeInstallCheckInputs`, `versionCheckProgramArg = "--version"`, `doInstallCheck = true`); `nix build .#es-de` succeeds on the Linux builder and `result/bin/es-de --version` prints `ES-DE 3.4.1`. A compile or link failure against `sdl2-compat`, ffmpeg 8 or poppler 26.06 is fixed forward with a `postPatch` or cmake flag recorded in the package's header; if that fails, stop and update these artifacts to the AppImage fallback (design Risks) before continuing
 
 ## 4. DuckStation

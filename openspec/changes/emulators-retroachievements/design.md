@@ -262,7 +262,22 @@ E12 line.
 
 - Which homebrew title serves each BIOS-free core family, and the
   final override list D5's diff produces - both enumerable at apply
-  time without changing the approach.
+  time without changing the approach. Enumerated: 16 of the 18 BIOS-free
+  families have a ROM whose author states a licence, seven of them from
+  the 240p Test Suite and its ports. Atari 7800 and Neo Geo Pocket do
+  not, after two independent searches: binaries exist, but none is
+  paired with a written grant, and the fixtures are fetched by public CI
+  and pushed through a public binary cache. Those two are named exempt
+  in the configuration and move to the hardware checklist, which is what
+  the vm-test requirement now says.
 - The exact uniform hotkey combo set (menu, save, load, fast-forward,
   screenshot) - config data settled during apply with the controller
-  layout in mind, before E6 maps it per pad.
+  layout in mind, before E6 maps it per pad. Settled: RetroArch's
+  `input_<action>` keys hold keyboard names, and the gamepad `_btn` keys
+  are written per pad by autoconfig, which is E6's table rather than
+  this change's. So this change pins the keyboard names (f1 menu, f2
+  save, f4 load, space fast-forward toggle, f8 screenshot) and the two
+  device-independent gamepad combo enums, and touches no `_btn` key. A
+  quit combo joins the set the design first listed: without one, a
+  player who enters a core has no controller-only way back to the
+  frontend.

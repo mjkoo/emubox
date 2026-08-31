@@ -3,11 +3,19 @@
 ### Requirement: Emulator launches and achievements are proven in the VM
 The kiosk VM test (or a sibling node built from the same modules) SHALL
 assert emulator behavior without hardware: for each BIOS-free core
-family in the system table, RetroArch SHALL run a freely redistributable
-homebrew ROM headless and the test SHALL assert a successful exit and a
+family in the system table for which a freely redistributable homebrew
+ROM exists, RetroArch SHALL run that ROM headless and the test SHALL
+assert a successful exit and a
 log line proving the core ran; each standalone emulator SHALL get a
 smoke launch asserting the process starts against the asserted
-configuration. Against a RetroAchievements endpoint mocked inside the
+configuration. A core family SHALL be exempt from the headless launch
+only when no ROM for it carries an explicit licence or redistribution
+grant from its author, since the fixtures are fetched by a public CI
+run and pushed through a public binary cache; the configuration SHALL
+name each exempt family, so an exemption is a deliberate line someone
+added rather than a family the test quietly skipped. An exempt family
+is a hardware checklist item, like the BIOS-dependent cores.
+Against a RetroAchievements endpoint mocked inside the
 test network, the test SHALL assert that each supporting emulator's
 configuration carries the account name and token - DuckStation's by
 decrypting the stored value the way the pinned DuckStation version does
@@ -22,9 +30,16 @@ checklist items, not VM assertions.
 
 #### Scenario: Core families launch headless
 - **WHEN** the VM test runs RetroArch headless with the homebrew ROM of
-  a BIOS-free core family
+  a BIOS-free core family that has one
 - **THEN** the run exits successfully and the log carries the expected
   line, and any family's failure fails the test
+
+#### Scenario: A family with no redistributable ROM
+- **WHEN** a BIOS-free core family has no ROM carrying an explicit
+  licence or redistribution grant
+- **THEN** the configuration names that family as exempt, the test
+  launches nothing for it and stays green, and the family is covered by
+  the hardware checklist instead
 
 #### Scenario: Tokens asserted against a mock
 - **WHEN** the VM test boots with RetroAchievements enabled, test

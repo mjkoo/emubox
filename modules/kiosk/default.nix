@@ -13,38 +13,16 @@ let
   # resolves under ESDE_APPDATA_DIR. Everything ES-DE writes that is not
   # named here is left exactly as the frontend last wrote it, which is what
   # lets a preference changed in its own menus survive a reboot.
+  #
+  # This module contributes only its own file, `settings/es_settings.xml`,
+  # to `emubox.kiosk.ownedFiles` below; `modules/emulators` contributes every
+  # emulator's config file to the same option (design D4,
+  # emulators-retroachievements). The two merge through the module system's
+  # ordinary attrset merging, which is why the option's type has to be one
+  # that merges rather than a plain let-bound value.
   esdeString = value: {
     type = "string";
     inherit value;
-  };
-  ownedFiles = {
-    "settings/es_settings.xml" = {
-      format = "esde-xml";
-      keys = {
-        # The restriction itself, reasserted before every launch: an admin
-        # who unlocked the full menu last time gets kiosk mode this time.
-        UIMode = esdeString "kiosk";
-        UIMode_passkey = esdeString cfg.passkey;
-        ROMDirectory = esdeString "/data/roms";
-        MediaDirectory = esdeString "/data/media";
-        Theme = esdeString "linear-es-de";
-        ApplicationLanguage = esdeString "en_US";
-        # Makes the QUIT entry open the patched menu (pkgs/es-de) rather
-        # than a bare "really quit?" box.
-        ShowQuitMenu = {
-          type = "bool";
-          value = "true";
-        };
-      };
-    };
-  };
-  # The owned-values document emubox-prepare reads. `retroachievements` is a
-  # second namespace beside `files` (design D1, emulators-retroachievements);
-  # this module has no RetroAchievements configuration yet, so it is always
-  # null, which is what tells prepare the feature is disabled.
-  ownedValues = {
-    files = ownedFiles;
-    retroachievements = null;
   };
 
   # The empty string, not a store path to an empty file: the empty value is
@@ -221,9 +199,71 @@ in
       '';
     };
 
+    ownedFiles = lib.mkOption {
+      # A submodule per file, not the looser `attrsOf (attrsOf anything)`:
+      # a module that forgets `format` or misspells it as `"ini "` gets a
+      # named-option eval error at the file and line that set it, rather
+      # than a value that only fails once `emubox-prepare` reads the
+      # rendered JSON on the box. The `keys` shape still varies by format
+      # (esde-xml's `{name: {type, value}}`, ini's `{section: {key:
+      # value}}`, retroarch's flat `{key: value}}`) and prepare, not this
+      # module, is what enforces that shape - `anything` here is honest
+      # about the limit of what Nix can usefully check.
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            format = lib.mkOption {
+              type = lib.types.enum [
+                "esde-xml"
+                "ini"
+                "retroarch"
+              ];
+              description = "The emubox-prepare editor this file's keys are written through.";
+            };
+            keys = lib.mkOption {
+              type = lib.types.attrsOf lib.types.anything;
+              default = { };
+              description = "The keys this file owns, shaped per `format` (see emubox-prepare).";
+            };
+          };
+        }
+      );
+      default = { };
+      internal = true;
+      description = ''
+        Every config file the flake owns a value in, keyed by that file's
+        path (a relative path resolves under `appdataDir`, an absolute one
+        is used as written - the same convention `emubox-prepare` uses
+        throughout). `modules/kiosk` and `modules/emulators` each add their
+        own entries here; the attrset merge across modules is the whole
+        mechanism (design D4, emulators-retroachievements) - no module
+        reads another's entries, they just both write into this one option.
+      '';
+    };
+
+    retroachievementsNamespace = lib.mkOption {
+      type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+      default = null;
+      internal = true;
+      description = ''
+        The owned-values document's `retroachievements` namespace (design
+        D1, emulators-retroachievements), or null when the feature is off.
+        This module never sets it; `modules/emulators` does, from
+        `emubox.retroachievements.enable`. It lives here rather than in
+        `modules/emulators` because `ownedValuesFile` below is what has to
+        render it, and an internal option is how one module hands a value
+        to another without either reading the other's private state.
+      '';
+    };
+
     ownedValuesFile = lib.mkOption {
       type = lib.types.path;
-      default = pkgs.writeText "emubox-owned-values.json" (builtins.toJSON ownedValues);
+      default = pkgs.writeText "emubox-owned-values.json" (
+        builtins.toJSON {
+          files = cfg.ownedFiles;
+          retroachievements = cfg.retroachievementsNamespace;
+        }
+      );
       readOnly = true;
       internal = true;
       description = ''
@@ -236,6 +276,26 @@ in
   };
 
   config = {
+    emubox.kiosk.ownedFiles."settings/es_settings.xml" = {
+      format = "esde-xml";
+      keys = {
+        # The restriction itself, reasserted before every launch: an admin
+        # who unlocked the full menu last time gets kiosk mode this time.
+        UIMode = esdeString "kiosk";
+        UIMode_passkey = esdeString cfg.passkey;
+        ROMDirectory = esdeString "/data/roms";
+        MediaDirectory = esdeString "/data/media";
+        Theme = esdeString "linear-es-de";
+        ApplicationLanguage = esdeString "en_US";
+        # Makes the QUIT entry open the patched menu (pkgs/es-de) rather
+        # than a bare "really quit?" box.
+        ShowQuitMenu = {
+          type = "bool";
+          value = "true";
+        };
+      };
+    };
+
     # A real `player` group: the /data layout (modules/library) is owned
     # `player player` with setgid on roms/ and bios/, so that admin's ingest
     # over the admin link lands group-owned (design 8). isNormalUser alone

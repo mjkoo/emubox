@@ -152,6 +152,17 @@
           perSystem.emubox-prepare = (pkgsFor system).callPackage ./pkgs/emubox-prepare/package.nix { };
           perSystem.emubox-check-bios = (pkgsFor system).callPackage ./pkgs/emubox-check-bios/package.nix { };
 
+          # The retroachievements spec's Disabled scenario, asserted at eval
+          # time. Per-system like the two above rather than under `hostOnly`,
+          # and for the same reason: it needs no VM and no x86_64-linux
+          # builder, so the admin's Mac catches a wrong "off" spelling
+          # without waiting for CI. What it guards is the one code path in
+          # the repository that nothing else touches - see the file's header.
+          perSystem.retroachievements-disabled = import ./tests/retroachievements-disabled.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
+
           # The host configuration extended with the test module: the VM
           # test installs and boots its toplevel, and the closure check greps
           # that same toplevel, so a test override reaches both.

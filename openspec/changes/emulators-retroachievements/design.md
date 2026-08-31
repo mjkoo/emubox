@@ -110,9 +110,25 @@ root) is unchanged, but the owned-values JSON becomes
 bare file map. `files` is exactly the old map, now also carrying the
 emulator config files. `retroachievements`, when non-null, carries the
 username file path, password file path, cache file path, the hardcore
-flag, the API URL, and the per-emulator token targets. A null `retroachievements` means the
-feature is disabled; there is no separate enabled flag inside the
-namespace. Alternative
+flag, the API URL, and the per-emulator token targets.
+
+This decision first said a null `retroachievements` meant the feature
+was disabled, with no enabled flag inside the namespace. That was
+reversed during apply, and the reason is worth recording because the
+first shape had a hole. A null namespace carries no per-emulator key
+locations, so prepare had no way to reach the credentials a previously
+enabled box had already written: switching the feature off left the
+account's live token in all five emulator configs and in two credential
+files. The namespace is therefore always rendered and carries its own
+`enabled` boolean. False skips the login entirely, as the requirement
+demands, and uses the same per-target key locations the enabled case
+carries to remove the username, token and login timestamp and delete
+the two credential files. A box that never enabled the feature writes
+nothing and says nothing, because every removal is a no-op on a key
+that was never there. An absent `enabled` defaults to true, so the
+field is additive.
+
+Alternative
 considered: encode credentials as values in the file map - rejected
 because the JSON is a world-readable store path, so it may only carry
 *paths* to secrets (`/run/secrets/...`), never their contents, and
@@ -244,14 +260,19 @@ line; standalones smoke-launched just far enough to prove the binary
 runs against the asserted config.
 
 Read at apply time, and the reason the requirement now reads narrower
-than this paragraph: four of the eighteen BIOS-free families are
+than this paragraph: six of the eighteen BIOS-free families are
 exempt, not two. Atari 7800 and Neo Geo Pocket for licensing, as the
-Open Questions record. N64 and Dreamcast for mechanism - RetroArch's
+Open Questions record. N64, Dreamcast and Vectrex for mechanism -
+RetroArch's
 `video_driver_find_driver` forces a real GL driver whenever a core sets
 a hardware render context, so the null-driver override is discarded and
 the launch dies after the core log line is already printed (verified on
 the x86_64-linux builder: mupen64plus-next segfaults, flycast exits on
-"Cannot open video driver"). The log-line assertion also had to change:
+"Cannot open video driver"; vecx carries the same forced-GL signature).
+SNES is the sixth, and a different mechanism again: Snes9x hangs rather
+than exiting and had to be killed at the launch cap, which in an
+earlier run consumed the driver's entire one-hour global timeout before
+per-launch caps existed. The log-line assertion also had to change:
 the line the design first had in mind is echoed from the command line
 before the core is opened at all, so it proved nothing, and the test now
 requires a marker emitted only after content loads plus the absence of

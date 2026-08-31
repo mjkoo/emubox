@@ -30,7 +30,7 @@ file once avoids a second change that reopens all of them.
   secrets store; a missing or unreachable RA endpoint never blocks the
   session.
 - The VM test grows an assertion group: headless RetroArch runs a freely
-  redistributable homebrew ROM per BIOS-free core family, each
+  redistributable homebrew ROM per BIOS-free core family that has one, each
   standalone gets a smoke launch, and a mocked RA endpoint proves every
   config carries the token and follows the hardcore option.
 
@@ -51,7 +51,8 @@ file once avoids a second change that reopens all of them.
   box has an empty definition, since `modules/emulators` now
   contributes entries; the mechanism itself is unchanged.
 - `vm-test`: a new requirement that the VM proves emulator launches
-  (headless RetroArch per BIOS-free core family, standalone smoke
+  (headless RetroArch per BIOS-free core family with a licensed and
+  headless-capable core, standalone smoke
   launches) and, against a mocked RA endpoint, the token in every
   supporting config and the hardcore option's effect.
 

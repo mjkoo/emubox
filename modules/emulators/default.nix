@@ -405,6 +405,53 @@ let
     </systemList>
   '';
 
+  # ---------------------------------------------------------------------
+  # BIOS inventory (design D6): path under /data/bios, sha256 and a human
+  # name, for every system the design's system table marks "yes" (firmware
+  # required to run anything at all).
+  #
+  # Checked directly against source on 2026-08-30, one system at a time, for
+  # every "yes" row except Arcade (its BIOS is a per-game board ROM set
+  # beside each game's own files, not a single fixed firmware image an
+  # inventory entry can name):
+  #
+  # - Atari Lynx (lynxboot.img), Famicom Disk System (disksys.rom), Sega CD
+  #   (bios_CD_U.bin), Saturn (mpr-17933.bin), PCE CD (syscard3.pce) and
+  #   Amiga (e.g. kick34005.A500): docs.libretro.com's own per-core BIOS
+  #   pages publish only MD5 for every one of these.
+  # - PS1: DuckStation's own source carries an exhaustive hash table
+  #   (`src/core/bios.cpp`, `s_image_info_by_hash[]`, built through
+  #   `MakeHashFromString` from `common/md5_digest.h`) - read directly for
+  #   this design, not taken from a secondary source - and every entry in it
+  #   is a 32 hex-character MD5, not a sha256.
+  # - Nintendo DS (bios7.bin, bios9.bin, firmware.bin): the closest thing to
+  #   an authoritative reference (abdess.github.io/retrobios) publishes only
+  #   CRC32 for the two BIOS files and no checksum at all for the firmware.
+  # - PS2: PCSX2's own `pcsx2/ps2/BiosTools.cpp` - read directly - validates
+  #   a candidate BIOS only by file size and an internal "ROMVER" string; it
+  #   carries no cryptographic hash of any kind to borrow.
+  # - Intellivision (exec.bin, grom.bin): docs.libretro.com publishes only
+  #   MD5.
+  # - MSX and ColecoVision (blueMSX): there is no single hashable BIOS file
+  #   at all - blueMSX needs whole `Databases`/`Machines` folders copied
+  #   from a full standalone blueMSX install, which is a directory tree, not
+  #   an entry this inventory's shape (one path, one checksum) can express.
+  #
+  # None of those is a sha256 this design can honestly assert, and
+  # converting a published MD5 or CRC32 into a sha256 is not possible
+  # without the file itself - doing so would mean typing the *wrong*
+  # algorithm's digest into a field named `sha256`, which is worse than
+  # leaving the entry out: every future run of `emubox-check-bios` would
+  # report a correct file as a mismatch, forever, because the reference
+  # value was never actually a sha256 of anything. Per design D6's own
+  # instruction, this inventory ships empty rather than fabricated; every
+  # system above is a candidate to add the day a trustworthy sha256
+  # reference turns up for it (a project maintaining its own, computed from
+  # a copy of the file whose provenance is independently verified, would be
+  # sufficient - a translated MD5 would not).
+  biosInventory = { };
+  biosInventoryFile = pkgs.writeText "emubox-bios-inventory.json" (builtins.toJSON biosInventory);
+
   # RetroAchievements' per-emulator tables (design D1-D4). One attrset per
   # supporting emulator, each shaped exactly as `emubox-prepare`'s
   # `retroachievements.targets[]` entries (design D1) minus the `name`

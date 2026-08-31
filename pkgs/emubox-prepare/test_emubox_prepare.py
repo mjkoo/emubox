@@ -3099,13 +3099,65 @@ def test_apply_disabled_deletes_the_secret_file_token_and_the_cache(
     assert keys["AchievementsUserName"] is ep.REMOVE
 
 
-def test_apply_disabled_removing_absent_credentials_is_a_silent_no_op(
+def test_apply_disabled_prunes_the_directory_the_cache_lived_in(
+    tmp_path: Path,
+) -> None:
+    # The cache has a directory to itself (`retroachievements/` under the
+    # appdata root), so unlinking the file used to leave an empty directory
+    # behind on every box with the feature switched off. Cosmetic, but the
+    # box is meant to look like it never had the feature on.
+    cache_file = tmp_path / "retroachievements" / "token-cache"
+    cache_file.parent.mkdir()
+    cache_file.write_text("stale-cache-token")
+
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
+    )
+    ra["cache_file"] = str(cache_file)
+    ra["enabled"] = False
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    assert not cache_file.parent.exists()
+
+
+def test_apply_disabled_keeps_a_cache_directory_that_holds_anything_else(
+    tmp_path: Path,
+) -> None:
+    # `rmdir` removes only an empty directory, which is what makes the
+    # pruning above safe to run against a path the owned-values document
+    # chose: anything else living there keeps its home.
+    cache_file = tmp_path / "retroachievements" / "token-cache"
+    cache_file.parent.mkdir()
+    cache_file.write_text("stale-cache-token")
+    neighbour = cache_file.parent / "someone-elses.dat"
+    neighbour.write_text("not ours")
+
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
+    )
+    ra["cache_file"] = str(cache_file)
+    ra["enabled"] = False
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    assert not cache_file.exists()
+    assert neighbour.read_text() == "not ours"
+
+
+def test_apply_disabled_stages_its_removals_and_says_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # A box that never had the feature enabled, or one already switched
-    # off: nothing this loop touches exists at all, and neither removing an
-    # absent key nor unlinking an absent file may print anything - the
-    # invariant that keeps a permanently-disabled box's journal quiet.
+    # What this one covers is the cleanup call itself: it stages REMOVE
+    # entries into `files` and unlinks an absent token file, and neither of
+    # those may print anything - the invariant that keeps a
+    # permanently-disabled box's journal quiet. The keys really coming to
+    # nothing happens downstream in the editors, so the box that never had
+    # the feature enabled is covered end to end by
+    # `test_main_disabled_on_a_never_enabled_box_writes_nothing_at_all`
+    # rather than here.
     token_file = tmp_path / "ppsspp_retroachievements.dat"
     files: dict[str, object] = {
         "retroarch.cfg": {"format": "retroarch", "keys": {}},
@@ -3227,6 +3279,54 @@ def test_main_still_fails_the_session_on_a_malformed_document(
         locked.chmod(0o700)
 
     assert "api_url" in capsys.readouterr().err
+
+
+def test_main_disabled_on_a_never_enabled_box_writes_nothing_at_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The common case, end to end: RetroAchievements has never been on, so
+    # not one of the files the cleanup stages removals into exists. Every
+    # target shape is present - plain, ini, PCSX2's split across two files,
+    # PPSSPP's whole-file token - and the run must create nothing, remove
+    # nothing and print nothing, twice over. Asserted only indirectly
+    # before this: the apply-level test above sees `files` gain REMOVE
+    # entries, and it is the editors underneath it that turn those into
+    # nothing at all.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file = appdata / "ppsspp_retroachievements.dat"
+
+    ra = retroachievements_namespace(
+        tmp_path,
+        closed_port_url(),
+        [
+            plain_target("retroarch", "retroarch.cfg"),
+            ini_target("dolphin", "Dolphin.ini"),
+            pcsx2_target(),
+            secret_file_target(token_file),
+        ],
+    )
+    ra["enabled"] = False
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "retroarch.cfg": {"format": "retroarch", "keys": {}},
+                    "Dolphin.ini": {"format": "ini", "keys": {}},
+                    "PCSX2.ini": {"format": "ini", "keys": {}},
+                    "secrets.ini": {"format": "ini", "keys": {}},
+                    "ppsspp.ini": {"format": "ini", "keys": {}},
+                },
+                "retroachievements": ra,
+            }
+        )
+    )
+
+    for _ in range(2):
+        assert ep.main([str(values), ""]) == 0
+        assert not appdata.exists(), sorted(appdata.rglob("*"))
+        assert capsys.readouterr().err == ""
 
 
 def test_main_disabled_attempts_no_login_at_all(

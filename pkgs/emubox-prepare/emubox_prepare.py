@@ -802,18 +802,35 @@ def _write_credential(path: Path, content: str) -> bool:
     return True
 
 
-def _remove_credential(path: Path) -> None:
+def _remove_credential(path: Path, *, prune_empty_parent: bool = False) -> None:
     """Delete a credential file if there is one, noting a refusal.
 
     `unlink` on a directory, or in a directory that is not writable, is an
     `OSError` - and on the rejected-login path that exception would
     otherwise escape a step that must never cost more than the
     achievements.
+
+    `prune_empty_parent` is for the token cache, and only for it: the cache
+    has a directory of its own (`retroachievements/` under the appdata
+    root), so removing the file otherwise leaves an empty directory sitting
+    there on a box that has switched the feature off, which is meant to
+    look like a box that never had it on. `rmdir` removes an empty
+    directory and nothing else, so it cannot take a neighbour with it, and
+    it stays silent because a directory that is not empty - or not there -
+    is the ordinary case rather than a refusal worth a journal line. Not
+    passed for the emulators' own token files, which live in directories
+    the emulator owns.
     """
     try:
         path.unlink(missing_ok=True)
     except OSError as error:
         note(f"{path} could not be removed ({error}); continuing")
+        return
+    if prune_empty_parent:
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
 
 
 def _resolve_path(root: Path, value: str) -> Path:
@@ -1051,7 +1068,7 @@ def resolve_retroachievements_token(
 
     if outcome == "rejected":
         note("the RetroAchievements API rejected the login; dropping any cached token")
-        _remove_credential(cache_file)
+        _remove_credential(cache_file, prune_empty_parent=True)
         return None
 
     # outcome == "unreachable": fall back to the cache if one is readable;
@@ -1382,7 +1399,7 @@ def _apply_retroachievements_disabled_cleanup(
         token_file = target.get("token_file")
         if token_file:
             _remove_credential(_resolve_path(root, str(token_file)))
-    _remove_credential(cache_file)
+    _remove_credential(cache_file, prune_empty_parent=True)
 
 
 def apply_retroachievements(

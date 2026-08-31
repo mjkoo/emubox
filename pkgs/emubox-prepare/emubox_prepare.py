@@ -268,7 +268,14 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
     Every element the flake does not own keeps its type, its value and its
     position; an owned key that is absent is appended, and one that drifted -
     in value or in element type - is set back to what the flake declares.
+
+    A file with no owned keys at all is left alone, the same rule as the
+    other two editors: see `set_ini_settings` for why that is not merely a
+    shortcut.
     """
+    if not keys:
+        return False
+
     elements = _parse_esde(path)
     recreating = elements is None
     if elements is None:
@@ -358,7 +365,18 @@ def set_ini_settings(path: Path, sections: Mapping[str, Mapping[str, str]]) -> b
     Comments, blank lines, key order and every key the flake does not own are
     kept as they were. A key missing from a section it belongs to is appended
     to that section; a missing section is appended to the file.
+
+    A file in which nothing is owned is left alone entirely - not parsed,
+    not recreated, not mentioned. PCSX2 declares `secrets.ini` with no keys
+    of its own, and every launch that resolves no token (the spec's offline
+    scenario, and any box with RetroAchievements off) leaves it that way.
+    Without this guard `_render_ini({})` wrote a lone newline, which the
+    parser read back as an empty file, so the box rewrote it and logged
+    "is empty; recreating it" before every single launch, forever.
     """
+    if not any(sections.values()):
+        return False
+
     lines = _parse_ini(path)
     if lines is None:
         _write(path, _render_ini(sections))
@@ -454,9 +472,12 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str]) -> bool:
     """Assert owned keys in RetroArch's flat config. Returns whether it wrote.
 
     Same properties as the INI editor: comments, order and unowned keys are
-    preserved, a missing key is appended, and an unreadable file is recreated
-    carrying the owned keys.
+    preserved, a missing key is appended, an unreadable file is recreated
+    carrying the owned keys, and a file with no owned keys is left alone.
     """
+    if not keys:
+        return False
+
     lines = _parse_retroarch(path)
     if lines is None:
         _write(path, _render_retroarch(keys))

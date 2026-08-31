@@ -2366,3 +2366,74 @@ def test_apply_survives_a_secret_file_that_cannot_be_removed(
 
     assert ep.apply_retroachievements(files, ra, tmp_path) == 0
     assert "could not be removed" in capsys.readouterr().err
+
+
+def test_ini_does_not_create_a_file_when_nothing_is_owned(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # I5: PCSX2's secrets.ini is declared with no keys of its own, so every
+    # launch that resolves no token used to write a lone newline, read it
+    # back as empty and log "is empty; recreating it" - forever.
+    path = tmp_path / "secrets.ini"
+
+    assert ep.set_ini_settings(path, {}) is False
+    assert ep.set_ini_settings(path, {"Achievements": {}}) is False
+
+    assert not path.exists()
+    assert capsys.readouterr().err == ""
+
+
+def test_ini_leaves_an_existing_file_alone_when_nothing_is_owned(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "secrets.ini"
+    path.write_text("[Achievements]\nUsername = someone\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}) is False
+
+    assert unwritten(path)
+    assert capsys.readouterr().err == ""
+
+
+def test_retroarch_and_esde_also_leave_a_file_they_own_nothing_in_alone(
+    tmp_path: Path,
+) -> None:
+    cfg = tmp_path / "retroarch.cfg"
+    settings = tmp_path / "es_settings.xml"
+
+    assert ep.set_retroarch_settings(cfg, {}) is False
+    assert ep.set_esde_settings(settings, {}) is False
+
+    assert not cfg.exists()
+    assert not settings.exists()
+
+
+def test_main_leaves_a_keyless_secrets_file_alone_on_an_offline_box(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The same finding where it bites: PCSX2's split puts Username and Token
+    # in secrets.ini, so with no token resolved that file is owned but has
+    # nothing in it, on every launch of an offline box.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "PCSX2.ini": {"format": "ini", "keys": {}},
+                    "secrets.ini": {"format": "ini", "keys": {}},
+                },
+                "retroachievements": retroachievements_namespace(
+                    tmp_path, closed_port_url(), [pcsx2_target()]
+                ),
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 0
+    assert ep.main([str(values), ""]) == 0
+
+    assert not (appdata / "secrets.ini").exists()
+    assert "recreating" not in capsys.readouterr().err

@@ -172,6 +172,26 @@ the table itself; the design fixes which knobs are owned, not their
 spellings. PCSX2's split of achievements keys across `PCSX2.ini` and
 `secrets.ini` is verified there too.
 
+Read at apply time and recorded here because it changes the mechanism
+rather than a spelling: PPSSPP does not keep its RetroAchievements token
+in a settings key at all. `AchievementsToken` in `ppsspp.ini` is loaded
+into the config struct but the login path never reads it; the token
+PPSSPP actually uses is the entire contents of a separate raw file,
+`PSP/SYSTEM/ppsspp_retroachievements.dat`, with no key-and-value framing
+of any kind. Prepare therefore grows a third token encoding beside the
+plain and DuckStation ones: a whole-file write of the token at mode
+0600, deleted rather than left stale when no token resolves. The
+requirement is untouched - the token still reaches PPSSPP "in the form
+that emulator reads at rest" - but the claim that every owned value
+flows through the three settings-file editors no longer holds, and one
+file the flake writes is a credential rather than a settings file. Two
+neighbouring findings that are only spellings, kept here because each
+would otherwise look like a mistake: Dolphin keeps its achievements
+keys in a separate `RetroAchievements.ini` beside `Dolphin.ini`, and
+PCSX2 serialises `upscale_multiplier` as a shortest-decimal `1`, so
+asserting `1.000000` would rewrite the file before every launch and
+never converge.
+
 ### D5. Frontend overrides ride the existing custom-systems option
 
 `modules/emulators` contributes entries to `emubox.kiosk.customSystems`

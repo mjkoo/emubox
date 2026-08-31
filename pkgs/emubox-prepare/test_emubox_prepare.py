@@ -1526,8 +1526,10 @@ def test_apply_writes_enabled_and_hardcore_even_without_a_resolved_token(
     keys = files["retroarch.cfg"]["keys"]
     assert keys["cheevos_enable"] == "true"
     assert keys["cheevos_hardcore_mode_enable"] == "true"
-    assert "cheevos_username" not in keys
-    assert "cheevos_token" not in keys
+    # Marked for removal rather than omitted (I8): omitting them left
+    # whatever a previous, luckier run had written on disk.
+    assert keys["cheevos_username"] is ep.REMOVE
+    assert keys["cheevos_token"] is ep.REMOVE
 
 
 def test_apply_writes_username_and_token_for_a_plain_target(tmp_path: Path) -> None:
@@ -2555,3 +2557,145 @@ def test_apply_rejects_a_key_entry_that_carries_no_key(
 
     assert ep.apply_retroachievements(files, ra, tmp_path) == 1
     assert "'key'" in capsys.readouterr().err
+
+
+# --- Second review wave: no stale token survives a run (I8) ----------------
+
+
+def test_ini_removes_an_owned_key_and_keeps_everything_else(tmp_path: Path) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text(
+        "# a comment\n[Cheevos]\nEnabled = true\nToken = stale\n# trailing note\n"
+    )
+
+    assert ep.set_ini_settings(path, {"Cheevos": {"Token": ep.REMOVE}}) is True
+
+    text = path.read_text()
+    assert "Token" not in text
+    assert "Enabled = true" in text
+    assert "# a comment" in text
+    assert "# trailing note" in text
+
+
+def test_ini_removing_a_key_that_is_not_there_reports_no_write(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("[Cheevos]\nEnabled = true\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {"Cheevos": {"Token": ep.REMOVE}}) is False
+
+    assert unwritten(path)
+
+
+def test_retroarch_removes_an_owned_key_and_keeps_everything_else(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('# a comment\nvideo_fullscreen = "true"\ncheevos_token = "stale"\n')
+
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+
+    text = path.read_text()
+    assert "cheevos_token" not in text
+    assert 'video_fullscreen = "true"' in text
+    assert "# a comment" in text
+
+
+def test_retroarch_removing_a_key_that_is_not_there_reports_no_write(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('video_fullscreen = "true"\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is False
+
+    assert unwritten(path)
+
+
+def test_a_rejected_login_leaves_no_token_behind_in_retroarch(tmp_path: Path) -> None:
+    # I8, the reproduction: after a success then a rejection, retroarch.cfg
+    # still held the username, the token and cheevos_enable = "true". The
+    # spec says a rejection starts the session with achievements absent.
+    cfg = tmp_path / "retroarch.cfg"
+    cfg.write_text('# keep me\nvideo_fullscreen = "true"\n')
+
+    def run_once(payload: object) -> None:
+        with ra_server(_json_handler(200, payload)) as url:
+            files: dict[str, object] = {
+                "retroarch.cfg": {"format": "retroarch", "keys": {}}
+            }
+            ra = retroachievements_namespace(
+                tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
+            )
+            assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+        table = cast("dict[str, object]", files["retroarch.cfg"])
+        ep.set_retroarch_settings(cfg, cast("dict[str, str]", table["keys"]))
+
+    run_once({"Success": True, "Token": "tok-before"})
+    assert 'cheevos_token = "tok-before"' in cfg.read_text()
+
+    run_once({"Success": False, "Error": "bad creds"})
+
+    text = cfg.read_text()
+    assert "cheevos_token" not in text
+    assert "cheevos_username" not in text
+    assert "# keep me" in text
+    assert 'video_fullscreen = "true"' in text
+
+
+def test_an_offline_boot_with_no_cache_clears_a_duckstation_login(
+    tmp_path: Path,
+) -> None:
+    # The same for the encrypted encoding, LoginTimestamp included.
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("abc123\n")
+    ini_path = tmp_path / "settings.ini"
+
+    def run_once(url: str) -> None:
+        files: dict[str, object] = {"settings.ini": {"format": "ini", "keys": {}}}
+        ra = retroachievements_namespace(
+            tmp_path, url, [duckstation_target(machine_id_file, "settings.ini")]
+        )
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+        table = cast("dict[str, object]", files["settings.ini"])
+        ep.set_ini_settings(ini_path, cast("dict[str, dict[str, str]]", table["keys"]))
+
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-ds"})) as url:
+        run_once(url)
+    ini_path.write_text(ini_path.read_text() + "[GameList]\nRecentPath = /roms/x.chd\n")
+    assert "LoginTimestamp" in ini_path.read_text()
+
+    # No cached token either: the first run left one, and the cache is an
+    # offline fallback, not part of what is being cleared here.
+    (tmp_path / "cache" / "ra-token").unlink()
+
+    run_once(closed_port_url())
+
+    text = ini_path.read_text()
+    assert "Token" not in text
+    assert "Username" not in text
+    assert "LoginTimestamp" not in text
+    assert "Enabled = true" in text
+    assert "RecentPath = /roms/x.chd" in text
+
+
+def test_a_run_with_no_token_leaves_the_ppsspp_username_out_too(
+    tmp_path: Path,
+) -> None:
+    # The asymmetry that gave the finding away: PPSSPP's token file was
+    # already deleted when no token resolved, but the username key beside
+    # it in ppsspp.ini was merely omitted, so it stayed on disk.
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [secret_file_target(token_file)]
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    keys = cast("dict[str, object]", files["ppsspp.ini"])["keys"]
+    achievements = cast("dict[str, object]", keys)["Achievements"]
+    assert cast("dict[str, object]", achievements)["AchievementsUserName"] is ep.REMOVE

@@ -230,6 +230,35 @@ def _read_quietly(path: Path) -> str | None:
         return None
 
 
+# --- Removing an owned key ------------------------------------------------
+
+
+class Removal:
+    """The value that means "this key must not be in this file at all".
+
+    Not the empty string: to an emulator a present key with an empty value
+    is not the same thing as an absent one - RetroArch treats any
+    `cheevos_token` it finds as a token to try logging in with. Not `None`
+    either, so that a `null` finding its way into the owned-values JSON
+    cannot silently delete a key; this sentinel has no JSON spelling at
+    all, and the only thing that produces it is the retroachievements
+    merge in this same file.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "REMOVE"
+
+
+REMOVE = Removal()
+
+
+def _without_removals(keys: Mapping[str, str | Removal]) -> dict[str, str]:
+    """The keys that carry a value, for the branches that write a fresh file."""
+    return {key: value for key, value in keys.items() if isinstance(value, str)}
+
+
 # --- ES-DE settings XML ---------------------------------------------------
 
 
@@ -359,12 +388,18 @@ def _render_ini(sections: Mapping[str, Mapping[str, str]]) -> str:
     return "\n".join(blocks) + "\n"
 
 
-def set_ini_settings(path: Path, sections: Mapping[str, Mapping[str, str]]) -> bool:
+def set_ini_settings(
+    path: Path, sections: Mapping[str, Mapping[str, str | Removal]]
+) -> bool:
     """Assert owned keys in an INI file with sections. Returns whether it wrote.
 
     Comments, blank lines, key order and every key the flake does not own are
     kept as they were. A key missing from a section it belongs to is appended
     to that section; a missing section is appended to the file.
+
+    A key whose value is `REMOVE` is deleted from the file instead, with the
+    same properties: everything around it survives, and removing a key that
+    is not there is a no-op that reports no write.
 
     A file in which nothing is owned is left alone entirely - not parsed,
     not recreated, not mentioned. PCSX2 declares `secrets.ini` with no keys
@@ -379,19 +414,34 @@ def set_ini_settings(path: Path, sections: Mapping[str, Mapping[str, str]]) -> b
 
     lines = _parse_ini(path)
     if lines is None:
-        _write(path, _render_ini(sections))
+        fresh = {section: _without_removals(keys) for section, keys in sections.items()}
+        if not any(fresh.values()):
+            # Every owned key in this file is a removal and there is no
+            # readable file to remove them from: creating one to hold
+            # nothing would only be recreated on the next launch.
+            return False
+        _write(path, _render_ini(fresh))
         return True
 
     changed = False
     for section, keys in sections.items():
         bounds = _ini_section_bounds(lines, section)
         if bounds is None:
-            lines.extend(_render_ini({section: keys}).splitlines())
+            fresh_keys = _without_removals(keys)
+            if not fresh_keys:
+                continue  # nothing to add, and no section to remove from
+            lines.extend(_render_ini({section: fresh_keys}).splitlines())
             changed = True
             continue
         start, end = bounds
         for key, value in keys.items():
             index = _ini_key_index(lines, start, end, key)
+            if isinstance(value, Removal):
+                if index is not None:
+                    del lines[index]
+                    end -= 1
+                    changed = True
+                continue
             if index is None:
                 # After the section's last setting, so a following comment
                 # block stays attached to whatever it was written under.
@@ -468,24 +518,33 @@ def _render_retroarch(keys: Mapping[str, str]) -> str:
     return "".join(f'{key} = "{value}"\n' for key, value in keys.items())
 
 
-def set_retroarch_settings(path: Path, keys: Mapping[str, str]) -> bool:
+def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> bool:
     """Assert owned keys in RetroArch's flat config. Returns whether it wrote.
 
     Same properties as the INI editor: comments, order and unowned keys are
-    preserved, a missing key is appended, an unreadable file is recreated
-    carrying the owned keys, and a file with no owned keys is left alone.
+    preserved, a missing key is appended, a key valued `REMOVE` is deleted,
+    an unreadable file is recreated carrying the owned keys, and a file with
+    no owned keys is left alone.
     """
     if not keys:
         return False
 
     lines = _parse_retroarch(path)
     if lines is None:
-        _write(path, _render_retroarch(keys))
+        fresh = _without_removals(keys)
+        if not fresh:
+            return False
+        _write(path, _render_retroarch(fresh))
         return True
 
     changed = False
     for key, value in keys.items():
         index = _ini_key_index(lines, 0, len(lines), key)
+        if isinstance(value, Removal):
+            if index is not None:
+                del lines[index]
+                changed = True
+            continue
         quoted = f'"{value}"'
         if index is None:
             lines.append(f"{key} = {quoted}")
@@ -961,6 +1020,11 @@ def duckstation_login_values(
 # `encoding` discriminator below - which at-rest form a target's token
 # takes - never a key name or a file path, which arrive from the JSON.
 
+# The keys a resolved login fills in, and exactly the set removed when none
+# resolves. Names in this namespace's own vocabulary, not any emulator's:
+# each target maps them to its own spellings in its `keys` table.
+_LOGIN_KEYS = ("username", "token", "login_timestamp")
+
 
 def _target_validation_error(
     files: Mapping[str, object], target: Mapping[str, object]
@@ -1071,7 +1135,7 @@ def _target_validation_error(
 
 
 def _merge_target_key(
-    files: dict[str, object], entry: Mapping[str, object], value: str
+    files: dict[str, object], entry: Mapping[str, object], value: str | Removal
 ) -> None:
     """Fold one key entry's value into its file's own keys table, in place.
 
@@ -1180,25 +1244,47 @@ def apply_retroachievements(
         # enabled and hardcore are written unconditionally: the namespace
         # being non-null already means the feature is enabled (design D1),
         # and the emulators fail their own login harmlessly with no token.
-        values: dict[str, str] = {
+        values: dict[str, str | Removal] = {
             "enabled": str(booleans["true"]),
             "hardcore": str(booleans["true"] if hardcore else booleans["false"]),
         }
 
+        login_values: dict[str, str] = {}
         if encoding == "duckstation":
             if resolved is not None:
                 username, token = resolved
-                values.update(duckstation_login_values(root, target, username, token))
+                login_values = duckstation_login_values(root, target, username, token)
         elif encoding == "plain":
             if resolved is not None:
                 username, token = resolved
-                values["username"] = username
-                values["token"] = token
+                login_values = {"username": username, "token": token}
         elif encoding == "secret-file":
             if resolved is not None:
                 username, _token = resolved
-                values["username"] = username
+                login_values = {"username": username}
             _apply_secret_file_token(root, target, resolved)
+
+        if login_values:
+            values.update(login_values)
+        else:
+            # No login this run - offline with no cache, a rejection,
+            # credentials that could not be read, a machine id that could
+            # not be read. Every login-derived key is *removed*, not left
+            # and not blanked: the spec says a rejected login and an
+            # offline boot with no cached token both start the session with
+            # achievements absent, and a config still carrying yesterday's
+            # username and token does not. An empty string would not do
+            # either - RetroArch treats any `cheevos_token` it finds as a
+            # token to log in with. PPSSPP's whole-file token already had
+            # exactly this treatment; the other four now match it.
+            #
+            # `login_timestamp` is only ever *written* by the duckstation
+            # encoding, and only when the token changed (design D3), so it
+            # is removed here rather than in that branch: removing a key
+            # that is not there is a no-op, so one set serves every shape,
+            # and an unchanged token still leaves the file untouched.
+            for login_key in _LOGIN_KEYS:
+                values[login_key] = REMOVE
 
         for key_name, value in values.items():
             entry = keys.get(key_name)

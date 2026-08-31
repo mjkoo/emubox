@@ -68,6 +68,23 @@ let
   # just be another place for the same fact to drift.
   machineIdFile = "/etc/machine-id";
 
+  # Where every emulator on this box looks for firmware. Bound once, like
+  # every config path above it, because this literal is a config *value* in
+  # three separate owned-key tables below (RetroArch's `system_directory`,
+  # PCSX2's `Folders.Bios`, DuckStation's `BIOS.SearchDirectory`) and three
+  # copies of a path is three chances for two of them to disagree.
+  #
+  # It is deliberately not an option shared with `modules/library`, which is
+  # where the directory is actually created (its `systemd.tmpfiles.rules`
+  # entry `d /data/bios 2775 player player -`). A read-only option plumbed
+  # between two modules to carry one string constant costs more than it
+  # saves; what it buys - one place to change - is bought here by this
+  # comment instead. Change one and change the other. The kiosk VM test
+  # spells the path a third time on purpose and must NOT be pointed at this
+  # binding: a test that derives its expectation from the module under test
+  # proves only that the module agrees with itself.
+  biosDirectory = "/data/bios";
+
   # The flake's own cores bundle - the one source `libretro_directory`
   # below is allowed to name (spec: "the flake's packaged cores and no
   # other source"). Every `libretro-*` core derivation installs its .so
@@ -943,7 +960,7 @@ in
           # The literal "default" is magic in RetroArch's own parser and
           # gets cleared back to empty (configuration.c:4346-4347) - never
           # spell the BIOS directory that way.
-          system_directory = "/data/bios";
+          system_directory = biosDirectory;
           autosave_interval = "30";
           menu_driver = "ozone";
           # Both entries a family could otherwise use to pull unvetted
@@ -1100,7 +1117,7 @@ in
           # key PCSX2 falls back to its own `bios` folder under its data
           # root, never `/data/bios`, so `emubox-check-bios` reporting OK
           # would not mean PS2 can actually boot a game.
-          Folders.Bios = "/data/bios";
+          Folders.Bios = biosDirectory;
           # Native internal resolution. PCSX2 serializes this float with
           # plain `ostringstream` formatting - the shortest decimal, `1`,
           # never `1.000000` - so this exact literal is what has to be
@@ -1254,7 +1271,7 @@ in
           # section default plus the `"bios"` fallback), never
           # `/data/bios`, so `emubox-check-bios` reporting OK would not mean
           # PS1 can actually boot a game.
-          BIOS.SearchDirectory = "/data/bios";
+          BIOS.SearchDirectory = biosDirectory;
         };
       };
 

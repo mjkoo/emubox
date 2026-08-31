@@ -278,6 +278,20 @@ in
               type = lib.types.str;
               description = "Where prepare caches the last resolved login token (design D2), relative to the appdata root.";
             };
+            enabled = lib.mkOption {
+              type = lib.types.bool;
+              description = ''
+                Whether prepare attempts a login and writes its result, as
+                opposed to removing every credential it may have written
+                (emulators-retroachievements N2 fix). `modules/emulators`
+                sets this to `emubox.retroachievements.enable` and renders
+                this namespace either way, rather than falling back to
+                `null` when the feature is off: `null` skips this whole
+                namespace, credential removal included, which is not what
+                switching the box's feature off is supposed to do to an
+                account's token already on disk.
+              '';
+            };
             hardcore = lib.mkOption {
               type = lib.types.bool;
               description = "The single hardcore switch every target's own hardcore key follows (design D4).";
@@ -340,9 +354,15 @@ in
       internal = true;
       description = ''
         The owned-values document's `retroachievements` namespace (design
-        D1, emulators-retroachievements), or null when the feature is off.
-        This module never sets it; `modules/emulators` does, from
-        `emubox.retroachievements.enable`. It lives here rather than in
+        D1, emulators-retroachievements). This module never sets it;
+        `modules/emulators` does, always to a non-null value with its own
+        `enabled` field following `emubox.retroachievements.enable` (N2
+        fix) - `null` here would make `emubox-prepare` skip the whole
+        namespace, credential removal included, which is not what
+        switching the feature off is supposed to do to a token already on
+        disk. `null` stays this option's own default and a legal value of
+        its type regardless, for a caller with no RetroAchievements
+        support wired up at all. It lives here rather than in
         `modules/emulators` because `ownedValuesFile` below is what has to
         render it, and an internal option is how one module hands a value
         to another without either reading the other's private state.

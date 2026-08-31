@@ -796,14 +796,32 @@ let
   };
 
   # The retroachievements spec's Disabled scenario ("each supporting
-  # emulator's configuration has achievements disabled") with no dynamic
-  # write ever happening, since a null `retroachievements` namespace means
-  # `emubox-prepare` skips `apply_retroachievements` entirely: this module
-  # has to put the off values there itself, statically, as ordinary owned
-  # keys. Built from `raEmulators` above rather than a second copy of the
-  # same key spellings - only `enabled` and `hardcore` are forced off; a
-  # stale `username`/`token` is left alone, same as prepare's own behaviour
-  # when a login simply does not resolve one.
+  # emulator's configuration has achievements disabled") is split across
+  # two mechanisms that both run unconditionally, regardless of
+  # `cfg.enable`. This table is the static half: `enabled` and `hardcore`
+  # forced off as ordinary owned keys, folded into `emubox.kiosk.ownedFiles`
+  # below with no dynamic step involved at all, so those two keys are
+  # already right before `emubox-prepare` has read anything. Built from
+  # `raEmulators` above rather than a second copy of the same key
+  # spellings.
+  #
+  # Those two keys are all this table can reach, and used to be the whole
+  # story: a stale `username`/`token` was left exactly where a prior login
+  # wrote it, on the theory that this matched "prepare's own behaviour when
+  # a login simply does not resolve one" - which stopped being true once
+  # prepare started actively removing those keys on that path (finding I8).
+  # `enable = false` left a live bearer token sitting in every supporting
+  # emulator's config, PPSSPP's raw token file and the login cache, with no
+  # way for this static table to reach the latter two at all (they are not
+  # ordinary owned keys `emubox.kiosk.ownedFiles` can name). The other half
+  # is `retroachievementsNamespace` below, which now always renders a
+  # non-null namespace with its own `enabled` field following `cfg.enable`:
+  # `emubox-prepare`'s `apply_retroachievements` branches on it, and false
+  # skips the login entirely and instead removes every credential the
+  # namespace's `targets` can name - the account name and token in each
+  # target's own config, PPSSPP's whole-file token, and the cached login
+  # token. `enable = false` now means the account's credentials come off
+  # the box, not merely that their refresh stops.
   raDisabledFiles =
     let
       off =
@@ -905,11 +923,17 @@ in
     environment.etc."emubox/bios-inventory.json".source = biosInventoryFile;
 
     # The performance and hotkey tables (design D4) always apply; the
-    # RetroAchievements keys only get folded in statically when the
-    # feature is off (`raDisabledFiles`) - when it is on, prepare's own
-    # `apply_retroachievements` writes them at runtime from
-    # `retroachievementsNamespace` below, and this module never touches
-    # them directly.
+    # `enabled`/`hardcore` RetroAchievements keys only get folded in
+    # statically here, and only when the feature is off (`raDisabledFiles`)
+    # - when it is on, prepare's own `apply_retroachievements` writes them
+    # at runtime instead, from `retroachievementsNamespace` below, and this
+    # module never touches them directly. Every other RetroAchievements
+    # credential - the account name, the token, PPSSPP's whole-file token,
+    # the login cache - is prepare's alone either way: written at runtime
+    # when the feature is on, removed at runtime when it is off, and never
+    # a static key in this table (`raDisabledFiles`'s own comment has the
+    # full reasoning for why removal has to be prepare's job).
+
     emubox.kiosk.ownedFiles = lib.recursiveUpdate {
       "${retroarchConfigFile}" = {
         format = "retroarch";
@@ -1159,21 +1183,28 @@ in
     # it to a non-empty value on the shipped box.
     emubox.kiosk.customSystems = customSystems;
 
-    emubox.kiosk.retroachievementsNamespace =
-      if cfg.enable then
-        {
-          api_url = cfg.apiUrl;
-          username_file = config.sops.secrets.retroachievements_username.path;
-          password_file = config.sops.secrets.retroachievements_password.path;
-          # Relative, so it resolves under the appdata root (design D2: the
-          # root wipe must not be able to eat it) rather than under `/data`
-          # generally, which E5's backup design has not yet settled the
-          # inclusion of.
-          cache_file = "retroachievements/token-cache";
-          inherit (cfg) hardcore;
-          targets = lib.mapAttrsToList (name: ra: ra // { inherit name; }) raEmulators;
-        }
-      else
-        null;
+    # Always a non-null namespace, `enabled` following `cfg.enable` (N2
+    # fix): `username_file`/`password_file`/`api_url` come from options and
+    # secrets that exist regardless of whether the feature is on, so there
+    # is nothing this object needs that only an enabled box could supply.
+    # Rendering `null` when disabled - the shape this used to have - made
+    # `emubox-prepare` skip the namespace entirely, which left it with no
+    # way to remove the credentials a prior, enabled run had already
+    # written; see `raDisabledFiles`'s own comment above for the full
+    # reasoning. `emubox-prepare`'s own module docstring covers what
+    # `enabled: false` makes it do instead of logging in.
+    emubox.kiosk.retroachievementsNamespace = {
+      api_url = cfg.apiUrl;
+      username_file = config.sops.secrets.retroachievements_username.path;
+      password_file = config.sops.secrets.retroachievements_password.path;
+      # Relative, so it resolves under the appdata root (design D2: the
+      # root wipe must not be able to eat it) rather than under `/data`
+      # generally, which E5's backup design has not yet settled the
+      # inclusion of.
+      cache_file = "retroachievements/token-cache";
+      inherit (cfg) hardcore;
+      enabled = cfg.enable;
+      targets = lib.mapAttrsToList (name: ra: ra // { inherit name; }) raEmulators;
+    };
   };
 }

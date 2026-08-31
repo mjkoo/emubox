@@ -2750,3 +2750,206 @@ def test_the_login_posts_a_password_with_its_whitespace_intact(
         assert ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0) is not None
 
     assert received["p"] == [" hunter2 "]
+
+
+# --- N2 fix: switching RetroAchievements off removes every credential ------
+#
+# `enable = false` used to leave a stale username and a live bearer token
+# sitting in every supporting emulator's config, PPSSPP's raw token file and
+# the login cache - the same class of finding I8 already fixed for the
+# no-token-resolved case, just never applied to the disabled case at all
+# (raDisabledFiles, modules/emulators, only ever forced `enabled`/`hardcore`
+# off). These tests exercise the namespace's own `enabled: false` field
+# instead - the `_apply_retroachievements_disabled_cleanup` path apply_retroachievements
+# now takes when it is set.
+
+
+def test_apply_rejects_a_non_boolean_enabled(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
+    )
+    ra["enabled"] = "false"
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "enabled" in capsys.readouterr().err
+
+
+def test_apply_disabled_removes_login_keys_but_leaves_enabled_and_hardcore_alone(
+    tmp_path: Path,
+) -> None:
+    # Not touched here on purpose: `raDisabledFiles` already forces those
+    # two off as ordinary static owned keys with no runtime step at all, so
+    # writing them again from here would just be a second, redundant source
+    # for the same fact.
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "keys": {}},
+        "Dolphin.ini": {"format": "ini", "keys": {}},
+    }
+    ra = retroachievements_namespace(
+        tmp_path,
+        closed_port_url(),
+        [
+            plain_target("retroarch", "retroarch.cfg"),
+            ini_target("dolphin", "Dolphin.ini"),
+        ],
+    )
+    ra["enabled"] = False
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    retroarch_keys = cast("dict[str, object]", files["retroarch.cfg"]["keys"])
+    assert retroarch_keys["cheevos_username"] is ep.REMOVE
+    assert retroarch_keys["cheevos_token"] is ep.REMOVE
+    assert "cheevos_enable" not in retroarch_keys
+    assert "cheevos_hardcore_mode_enable" not in retroarch_keys
+
+    dolphin_section = cast("dict[str, object]", files["Dolphin.ini"]["keys"]["Cheevos"])
+    assert dolphin_section["Username"] is ep.REMOVE
+    assert dolphin_section["Token"] is ep.REMOVE
+    assert "Enabled" not in dolphin_section
+    assert "ChallengeMode" not in dolphin_section
+
+
+def test_apply_disabled_deletes_the_secret_file_token_and_the_cache(
+    tmp_path: Path,
+) -> None:
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    token_file.write_text("stale-token")
+    cache_file = tmp_path / "cache" / "ra-token"
+    cache_file.parent.mkdir()
+    cache_file.write_text("stale-cache-token")
+
+    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [secret_file_target(token_file)]
+    )
+    ra["cache_file"] = str(cache_file)
+    ra["enabled"] = False
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    assert not token_file.exists()
+    assert not cache_file.exists()
+    keys = cast("dict[str, object]", files["ppsspp.ini"]["keys"]["Achievements"])
+    assert keys["AchievementsUserName"] is ep.REMOVE
+
+
+def test_apply_disabled_removing_absent_credentials_is_a_silent_no_op(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A box that never had the feature enabled, or one already switched
+    # off: nothing this loop touches exists at all, and neither removing an
+    # absent key nor unlinking an absent file may print anything - the
+    # invariant that keeps a permanently-disabled box's journal quiet.
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "keys": {}},
+        "ppsspp.ini": {"format": "ini", "keys": {}},
+    }
+    ra = retroachievements_namespace(
+        tmp_path,
+        closed_port_url(),
+        [
+            plain_target("retroarch", "retroarch.cfg"),
+            secret_file_target(token_file),
+        ],
+    )
+    ra["enabled"] = False
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    assert not token_file.exists()
+    assert capsys.readouterr().err == ""
+
+
+def test_main_enabled_then_disabled_removes_every_credential_and_stays_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The end-to-end shape of the finding: a real login through `main`
+    # writes real credentials to real files, and switching the namespace to
+    # `enabled: false` and running `main` again has to take every one of
+    # them back off disk - and a THIRD run against that same disabled
+    # document must change nothing at all, the idempotency property this
+    # fix cares about most.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    username_file = tmp_path / "username"
+    password_file = tmp_path / "password"
+    username_file.write_text("alice\n")
+    password_file.write_text("hunter2\n")
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("deadbeefdeadbeef\n")
+    cache_file = tmp_path / "cache" / "ra-token"
+    token_file = appdata / "ppsspp_retroachievements.dat"
+
+    config_files = ["retroarch.cfg", "Dolphin.ini", "settings.ini", "ppsspp.ini"]
+
+    def document(*, enabled: bool, api_url: str) -> dict[str, object]:
+        return {
+            "files": {
+                name: {
+                    "format": "retroarch" if name == "retroarch.cfg" else "ini",
+                    "keys": {},
+                }
+                for name in config_files
+            },
+            "retroachievements": {
+                "api_url": api_url,
+                "username_file": str(username_file),
+                "password_file": str(password_file),
+                "cache_file": str(cache_file),
+                "hardcore": False,
+                "enabled": enabled,
+                "targets": [
+                    plain_target("retroarch", "retroarch.cfg"),
+                    ini_target("dolphin", "Dolphin.ini"),
+                    duckstation_target(machine_id_file, "settings.ini"),
+                    secret_file_target(token_file),
+                ],
+            },
+        }
+
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-live"})) as url:
+        values = tmp_path / "owned.json"
+        values.write_text(json.dumps(document(enabled=True, api_url=url)))
+        assert ep.main([str(values), ""]) == 0
+
+        # Sanity: the credentials are genuinely on disk before disabling.
+        assert 'cheevos_username = "alice"' in (appdata / "retroarch.cfg").read_text()
+        assert "Username = alice" in (appdata / "Dolphin.ini").read_text()
+        assert "Username = alice" in (appdata / "settings.ini").read_text()
+        assert "LoginTimestamp" in (appdata / "settings.ini").read_text()
+        assert token_file.read_text() == "tok-live"
+        assert cache_file.exists()
+
+        values.write_text(json.dumps(document(enabled=False, api_url=url)))
+        assert ep.main([str(values), ""]) == 0
+
+    retroarch_text = (appdata / "retroarch.cfg").read_text()
+    assert "cheevos_username" not in retroarch_text
+    assert "cheevos_token" not in retroarch_text
+    dolphin_text = (appdata / "Dolphin.ini").read_text()
+    assert "Username" not in dolphin_text
+    assert "Token" not in dolphin_text
+    duckstation_text = (appdata / "settings.ini").read_text()
+    assert "Username" not in duckstation_text
+    assert "Token" not in duckstation_text
+    assert "LoginTimestamp" not in duckstation_text
+    assert not token_file.exists()
+    assert not cache_file.exists()
+
+    # Idempotency: freeze every file this run touched (or removed), run the
+    # same disabled document through `main` a second time, and confirm
+    # nothing was rewritten and neither deleted file came back.
+    for name in config_files:
+        freeze(appdata / name)
+
+    assert ep.main([str(values), ""]) == 0
+
+    for name in config_files:
+        assert unwritten(appdata / name), name
+    assert not token_file.exists()
+    assert not cache_file.exists()

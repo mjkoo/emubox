@@ -854,19 +854,23 @@ assert lib.assertMsg (lib.length exemptFamilies == 4) ''
           # right and unapplied, or applied and wrong.
           owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
           # The document's shape itself is pinned here: `files` carries what
-          # this test already checked. `retroachievements` is no longer null
-          # since emulators-retroachievements (design D1): `modules/emulators`
-          # defaults `emubox.retroachievements.enable` to true, so this node
-          # carries a real namespace rather than the disabled sentinel. Only
-          # the namespace's own shape is pinned here - the api_url this node
-          # set, the declared-off hardcore default, and which five emulators
-          # own a target - not every key spelling, which is what
-          # test_emubox_prepare.py's own unit tests already pin per encoding
-          # (design D4: "verified at apply time").
+          # this test already checked. `retroachievements` is never null on
+          # a shipped box (N2 fix: a null namespace would make prepare skip
+          # credential removal along with the login, which is not what
+          # switching the feature off is supposed to do to a token already
+          # on disk) - `modules/emulators` always renders it, with its own
+          # `enabled` field following `emubox.retroachievements.enable`
+          # (default true, and this node never overrides it). Only the
+          # namespace's own shape is pinned here - the api_url this node
+          # set, the declared-off hardcore default, `enabled` itself, and
+          # which five emulators own a target - not every key spelling,
+          # which is what test_emubox_prepare.py's own unit tests already
+          # pin per encoding (design D4: "verified at apply time").
           ra = owned["retroachievements"]
           assert ra is not None, owned["retroachievements"]
           assert ra["api_url"] == RA_API_URL, ra["api_url"]
           assert ra["hardcore"] is False, ra["hardcore"]
+          assert ra["enabled"] is True, ra["enabled"]
           target_names = {t["name"] for t in ra["targets"]}
           assert target_names == {"retroarch", "dolphin", "pcsx2", "ppsspp", "duckstation"}, target_names
 
@@ -1370,6 +1374,86 @@ assert lib.assertMsg (lib.length exemptFamilies == 4) ''
           machine.wait_until_succeeds(
               "echo > /dev/tcp/127.0.0.1/${toString mockPort}", timeout=30
           )
+          rerun_prepare(OWNED_VALUES)
+
+      with subtest("Switching RetroAchievements off removes every credential from disk"):
+          # N2: `enable = false` used to leave a stale username and a live
+          # bearer token sitting in every supporting emulator's config,
+          # PPSSPP's raw token file and the login cache - `raDisabledFiles`
+          # (modules/emulators) only ever forced `enabled`/`hardcore` off,
+          # and could not reach the other two files at all. Reached here
+          # the same way the hardcore subtest above reaches its own
+          # alternate document: the namespace's `enabled` field flipped to
+          # false and prepare re-run against that document, rather than a
+          # second VM node.
+          #
+          # Placed right after a subtest that ends with every target
+          # holding a real, freshly-restored username and token and a real
+          # cache file on disk - the state this subtest needs in order to
+          # actually prove a removal happened, rather than passing because
+          # nothing was ever there to remove.
+          owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
+          ra = owned["retroachievements"]
+          cache_path = resolve(APPDATA, ra["cache_file"])
+          machine.succeed(f"test -e {cache_path}")  # the prior login wrote one
+          for target in ra["targets"]:
+              if target.get("token_file"):
+                  machine.succeed(f"test -e {resolve(APPDATA, target['token_file'])}")
+
+          disabled = dict(owned)
+          disabled["retroachievements"] = dict(ra, enabled=False)
+          payload = base64.b64encode(json.dumps(disabled).encode()).decode()
+          disabled_path = "/tmp/emubox-owned-values-ra-disabled.json"
+          machine.succeed(f"echo {payload} | base64 -d > {disabled_path}")
+
+          rerun_prepare(disabled_path)
+
+          for target in ra["targets"]:
+              assert read_target_value(target, "username") is None, target["name"]
+              assert read_target_value(target, "token") is None, target["name"]
+              if "login_timestamp" in target["keys"]:
+                  assert read_target_value(target, "login_timestamp") is None, target["name"]
+              if target.get("token_file"):
+                  machine.fail(f"test -e {resolve(APPDATA, target['token_file'])}")
+          machine.fail(f"test -e {cache_path}")
+
+          sweep_for_password(owned)
+
+          # Idempotency, the property this fix cares about most: every
+          # config file this pass could have touched, stat-frozen, then
+          # prepare re-run against the very same disabled document. Nothing
+          # left to remove means nothing should be rewritten at all. Every
+          # file any key entry of any target names, not just each target's
+          # `username`/`token` file - PCSX2 keeps `Enabled` in PCSX2.ini
+          # but `Username`/`Token` in a second file, `secrets.ini`, so the
+          # union of every key's own file is what actually covers every
+          # file this cleanup pass could touch.
+          config_paths = sorted(
+              {
+                  resolve(APPDATA, entry["file"])
+                  for target in ra["targets"]
+                  for entry in target["keys"].values()
+              }
+          )
+          before = {
+              path: machine.succeed(f"stat -c '%i %Y %a' {shlex.quote(path)}")
+              for path in config_paths
+          }
+
+          rerun_prepare(disabled_path)
+
+          for path in config_paths:
+              after = machine.succeed(f"stat -c '%i %Y %a' {shlex.quote(path)}")
+              assert after == before[path], f"{path}: {before[path]!r} != {after!r}"
+          machine.fail(f"test -e {cache_path}")
+          for target in ra["targets"]:
+              if target.get("token_file"):
+                  machine.fail(f"test -e {resolve(APPDATA, target['token_file'])}")
+
+          # Restore: a fresh login so every target's token and the cache
+          # exist again before the launches below, which assert nothing
+          # about RetroAchievements but should not inherit a disabled
+          # namespace this subtest itself introduced.
           rerun_prepare(OWNED_VALUES)
 
       with subtest("emubox-check-bios reports the declared BIOS files as missing from an empty /data/bios"):

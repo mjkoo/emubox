@@ -1,18 +1,32 @@
 # retroachievements spec's Disabled scenario ("each supporting emulator's
 # configuration has achievements disabled"), asserted at eval time with no
 # VM. When `emubox.retroachievements.enable = false`,
-# `emubox.kiosk.retroachievementsNamespace` is null, `emubox-prepare` skips
-# `apply_retroachievements` entirely (design D2), and
 # `modules/emulators`'s `raDisabledFiles` - static owned keys folded into
-# `emubox.kiosk.ownedFiles` - is the ONLY thing in the repository that ever
-# turns achievements off for these five emulators. Nothing else touches it:
-# not a unit test (owned by `pkgs/emubox-prepare/`'s own suite, which never
-# runs the RA step when the namespace is null), not the kiosk VM test
-# (whose node leaves the option at its true default throughout, per design
-# D7). Flipping the off spelling in that one helper would ship a box with
-# achievements enabled while the option says disabled, and every other
-# check in the repository would stay green - this is the one that would
-# not (finding IMPORTANT-4).
+# `emubox.kiosk.ownedFiles` - is the ONLY thing in the repository that turns
+# `enabled`/`hardcore` off for these five emulators, with no runtime step
+# involved at all. Nothing else touches those two keys: not a unit test
+# (owned by `pkgs/emubox-prepare/`'s own suite, which only ever exercises
+# `apply_retroachievements` directly, never through this module's rendered
+# document), not the kiosk VM test (whose node leaves the option at its true
+# default throughout, per design D7). Flipping the off spelling in that one
+# helper would ship a box with achievements enabled while the option says
+# disabled, and every other check in the repository would stay green - this
+# is the one that would not (finding IMPORTANT-4).
+#
+# `emubox.kiosk.retroachievementsNamespace` is checked here too (N2 fix): it
+# used to go null when the feature was off, which made `emubox-prepare` skip
+# the whole namespace - login *and* credential removal - so a box that had
+# been enabled once kept a live account name and token on disk after being
+# switched off. It is never null now; instead it carries its own `enabled`
+# field, which this file asserts is `false` here, the same way the load-
+# bearing off-spelling check above catches a regression in `raDisabledFiles`.
+# A regression that flips it back to null, or reintroduces a null-when-
+# disabled branch, would silently reopen the credential-removal gap with
+# every other check in the repository staying green - the eval-only half of
+# that guard; the VM-level proof that credential removal actually happens on
+# disk is tests/kiosk.nix's own "Switching RetroAchievements off removes
+# every credential from disk" subtest, which this cheap, no-VM check cannot
+# reach on its own.
 #
 # No VM and no cross-system build needed: `emubox.kiosk.ownedFiles` is
 # plain Nix data once the module tree is evaluated - file paths and
@@ -36,6 +50,7 @@ let
   };
   owned = disabledHost.config.emubox.kiosk.ownedFiles;
   home = disabledHost.config.users.users.player.home;
+  raNamespace = disabledHost.config.emubox.kiosk.retroachievementsNamespace;
 
   # One (file, key path, off-spelling) expectation per supporting
   # emulator's enabled/hardcore pair. File paths, section names, key
@@ -121,6 +136,13 @@ assert lib.assertMsg (failures == [ ]) ''
   tests/retroachievements-disabled.nix: emubox.retroachievements.enable = false
   did not turn achievements off in every supporting emulator's owned keys:
   ${lib.concatStringsSep "\n" failures}
+'';
+assert lib.assertMsg (raNamespace != null && raNamespace.enabled == false) ''
+  tests/retroachievements-disabled.nix: emubox.retroachievements.enable = false
+  did not leave emubox.kiosk.retroachievementsNamespace non-null with its own
+  `enabled` field false (N2 fix) - got ${builtins.toJSON raNamespace}. A null
+  namespace here would make emubox-prepare skip credential removal along
+  with the login, leaving a token from an earlier, enabled run on disk.
 '';
 # A trivial, always-succeeding build: the check is already fully decided by
 # the assertion above, which runs during evaluation of this derivation

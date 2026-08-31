@@ -34,27 +34,41 @@ later epics reach files outside it. The `keys` shape is the editor's:
 value}}` for `ini`, `{key: value}` for `retroarch`.
 
 `retroachievements` drives the shared RetroAchievements account (design
-D2). Null - or absent - means the feature is disabled, and there is no
-separate enabled flag inside it. Non-null, it carries `username_file`,
-`password_file` and `cache_file` (paths, never contents: this JSON is a
-world-readable store path), the `api_url`, the `hardcore` boolean, and a
-`targets` array with one entry per supporting emulator. A target names its
-`encoding` - `plain`, `duckstation` (the encrypted at-rest form of design
-D3, which also needs a `machine_id_file`) or `secret-file` (PPSSPP, whose
-token is a whole file named by `token_file` rather than a key) - the
-`booleans` spelling that emulator uses for true and false, and a `keys`
-table mapping this program's own vocabulary (`enabled`, `hardcore`,
-`username`, `token`, and `login_timestamp` for DuckStation) to a file in
-`files` and the key inside it.
+D2). Null - or absent - means this whole namespace is skipped: no login is
+attempted and nothing under it - not even a stale credential - is ever
+touched. Non-null, it carries `username_file`, `password_file` and
+`cache_file` (paths, never contents: this JSON is a world-readable store
+path), the `api_url`, the `hardcore` boolean, an `enabled` boolean
+(absent defaults to true, for every call site written before this field
+existed), and a `targets` array with one entry per supporting emulator. A
+target names its `encoding` - `plain`, `duckstation` (the encrypted
+at-rest form of design D3, which also needs a `machine_id_file`) or
+`secret-file` (PPSSPP, whose token is a whole file named by `token_file`
+rather than a key) - the `booleans` spelling that emulator uses for true
+and false, and a `keys` table mapping this program's own vocabulary
+(`enabled`, `hardcore`, `username`, `token`, and `login_timestamp` for
+DuckStation) to a file in `files` and the key inside it.
 
-What this program does with that: it logs in to the API once per run under
-a wall-clock timeout, caches the token at mode 0600, falls back to that
-cache only when the API cannot be reached, and drops it when the API
-rejects the credentials. The resulting values are folded into `files`
-before any editor runs, so the editors never learn that a key came from
-here rather than from the module that declared the file. When no token
-resolves at all, the login keys are removed from every target rather than
-left holding a stale account.
+What this program does with a non-null, `enabled` namespace: it logs in to
+the API once per run under a wall-clock timeout, caches the token at mode
+0600, falls back to that cache only when the API cannot be reached, and
+drops it when the API rejects the credentials. The resulting values are
+folded into `files` before any editor runs, so the editors never learn
+that a key came from here rather than from the module that declared the
+file. When no token resolves at all, the login keys are removed from
+every target rather than left holding a stale account.
+
+A non-null namespace with `enabled: false` is switched-off's own shape
+(the module that renders this document always emits one of these two,
+never null, once RetroAchievements is wired into a box at all): no login
+is attempted - the spec's own requirement - and every credential this
+program may ever have written is instead actively removed, the same
+per-target `keys` table pointing at where each one lives: the account
+name and token in every target's own config, PPSSPP's whole-file token,
+and the cached login token. Switching the feature off used to leave a
+stale username and token sitting in all of those places; this is what
+actually takes the account's bearer token off the box, rather than merely
+stopping its refresh.
 
 That whole step is bounded: any runtime failure in it - no network, no
 credentials, a full disk, an unforeseen exception - costs the achievements
@@ -1212,6 +1226,45 @@ def _apply_secret_file_token(
     _write_credential(token_file, token)
 
 
+def _apply_retroachievements_disabled_cleanup(
+    files: dict[str, object],
+    targets: Sequence[Mapping[str, object]],
+    root: Path,
+    cache_file: Path,
+) -> None:
+    """Remove every credential this program may have written, with no login.
+
+    Called instead of the ordinary login flow whenever the namespace's own
+    `enabled` field is false. `raDisabledFiles` (modules/emulators) already
+    forces `enabled`/`hardcore` off as ordinary static owned keys the
+    moment the option is flipped, with no runtime step involved - so this
+    function's whole job is the credentials those two keys don't touch:
+    the account name and token in every target's own config file (the same
+    `keys` table the enabled path writes them through), PPSSPP's
+    whole-file token, and the cached login token under the appdata root.
+    Before this existed, switching the feature off left a stale username
+    and a live bearer token sitting in every one of those places - `enable
+    = false` did not mean the account's credentials came off the box.
+
+    Every operation here is a `REMOVE` of a key that may already be absent
+    or an `unlink(missing_ok=True)` of a file that may already be gone -
+    exactly the two primitives the ordinary no-token-resolved path already
+    uses below - so a box that never had the feature enabled, or one
+    already switched off, changes nothing and logs nothing on a later run:
+    the same idempotency every other step in this program keeps.
+    """
+    for target in targets:
+        keys = cast("Mapping[str, object]", target["keys"])
+        for login_key in _LOGIN_KEYS:
+            entry = keys.get(login_key)
+            if isinstance(entry, dict):
+                _merge_target_key(files, cast("Mapping[str, object]", entry), REMOVE)
+        token_file = target.get("token_file")
+        if token_file:
+            _remove_credential(_resolve_path(root, str(token_file)))
+    _remove_credential(cache_file)
+
+
 def apply_retroachievements(
     files: dict[str, object], retroachievements: Mapping[str, object], root: Path
 ) -> int:
@@ -1224,6 +1277,13 @@ def apply_retroachievements(
     failures: they degrade to fewer keys written - enabled and hardcore
     always, username and token only when a login actually resolved one -
     never a non-zero return (design D2's whole point).
+
+    The namespace's own `enabled` field (default true, for every call site
+    that predates it) picks which of two things happens once every target
+    validates: true runs the login and writes its result as usual; false
+    skips the login entirely and instead removes every credential this
+    program may have written, through `_apply_retroachievements_disabled_cleanup`
+    above.
     """
     # The namespace's own fields, checked before anything reads them. Each
     # is subscripted bare further down - `ra["username_file"]` and the rest
@@ -1247,6 +1307,19 @@ def apply_retroachievements(
         )
         return 1
 
+    # Absent defaults to true rather than being required: every call site
+    # written before this field existed - this program's own test suite
+    # included - has no opinion on it, and true is what keeps every one of
+    # them exercising the ordinary login flow unchanged. False has to be
+    # spelled out on purpose.
+    enabled_value = retroachievements.get("enabled", True)
+    if not isinstance(enabled_value, bool):
+        note(
+            "retroachievements: expected 'enabled' to be a boolean, got "
+            f"{type(enabled_value).__name__}"
+        )
+        return 1
+
     targets = retroachievements.get("targets", [])
     if not isinstance(targets, list):
         note("retroachievements: expected 'targets' to be an array")
@@ -1264,19 +1337,43 @@ def apply_retroachievements(
             return 1
         validated.append(target)
 
+    if not enabled_value:
+        # No login attempted at all - the spec's own requirement for the
+        # disabled case - and the cache_file field was already confirmed a
+        # non-empty string above, so subscripting it bare here is safe.
+        cache_file = _resolve_path(root, str(retroachievements["cache_file"]))
+        _apply_retroachievements_disabled_cleanup(files, validated, root, cache_file)
+        return 0
+
     # The login happens once per run, ahead of every target, rather than
     # once per target: one account serves every supporting emulator.
     resolved = resolve_retroachievements_token(retroachievements, root)
     hardcore = hardcore_value
 
+    # Every mutation the loop below makes - `_merge_target_key` and
+    # `_apply_secret_file_token` - runs against a `target` that
+    # `_target_validation_error` has already confirmed matches its file's
+    # format, so the only way any of it could raise is a bug in that
+    # validation itself, not a runtime condition (network, credentials, a
+    # missing machine id) this loop's own callers already degrade
+    # gracefully instead of raising. `files` is mutated in place rather
+    # than built into a copy and swapped in on success for exactly that
+    # reason: a raise partway through would leave `files` holding a mix of
+    # targets already merged and targets not yet reached, but nothing left
+    # in this loop is reachably capable of raising once validation has
+    # passed, so that partial state is not a real failure mode to guard
+    # against - and `main`'s own blanket `except Exception` around this
+    # whole call exists for the unforeseen case anyway (design D2: any
+    # runtime failure here costs the achievements and nothing else).
     for target in validated:
         booleans = cast("Mapping[str, object]", target["booleans"])
         keys = cast("Mapping[str, object]", target["keys"])
         encoding = target["encoding"]
 
-        # enabled and hardcore are written unconditionally: the namespace
-        # being non-null already means the feature is enabled (design D1),
-        # and the emulators fail their own login harmlessly with no token.
+        # enabled and hardcore are written unconditionally: this loop only
+        # runs once the `enabled_value` check above has already selected
+        # the login path over the cleanup one, and the emulators fail
+        # their own login harmlessly with no token.
         values: dict[str, str | Removal] = {
             "enabled": str(booleans["true"]),
             "hardcore": str(booleans["true"] if hardcore else booleans["false"]),

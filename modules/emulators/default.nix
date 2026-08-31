@@ -713,7 +713,19 @@ in
       pkgs.azahar
       pkgs.scummvm
       pkgs.duckstation
+      # For the admin over SSH (design D6); `emubox-status` (E5+) is the
+      # only other consumer this design names, and it is not built yet.
+      pkgs.emubox-check-bios
     ];
+
+    # A stable path, not the inventory's own hash-addressed store path: an
+    # admin who has to look up a nix store hash before they can run the
+    # checker is exactly the manual step this project avoids everywhere
+    # else. `emubox-check-bios /etc/emubox/bios-inventory.json /data/bios`
+    # is the whole admin-facing command (design D6, "no options, no
+    # writes" - and this file itself is one of `environment.etc`'s writes,
+    # not the checker's).
+    environment.etc."emubox/bios-inventory.json".source = biosInventoryFile;
 
     # The performance and hotkey tables (design D4) always apply; the
     # RetroAchievements keys only get folded in statically when the

@@ -150,6 +150,7 @@
           # so the package is reached by callPackage on the file rather than
           # by importing ./pkgs, whose other entries are Linux-only.
           perSystem.emubox-prepare = (pkgsFor system).callPackage ./pkgs/emubox-prepare/package.nix { };
+          perSystem.emubox-check-bios = (pkgsFor system).callPackage ./pkgs/emubox-check-bios/package.nix { };
 
           # The host configuration extended with the test module: the VM
           # test installs and boots its toplevel, and the closure check greps

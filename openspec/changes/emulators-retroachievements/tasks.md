@@ -19,9 +19,9 @@
 
 ## 4. Frontend overrides and BIOS (design D5, D6)
 
-- [ ] 4.1 Diff ES-DE 3.4.1's bundled `es_systems.xml` against the system table, and contribute custom-systems entries for every divergence, PS1 with DuckStation primary and Beetle PSX HW alternate first
-- [ ] 4.2 Declare the BIOS inventory attrset and render it to JSON in the store
-- [ ] 4.3 Implement and package `emubox-check-bios` (report-only, exit status per spec) and add it to the system packages, with unit tests beside prepare's
+- [x] 4.1 Diff ES-DE 3.4.1's bundled `es_systems.xml` against the system table, and contribute custom-systems entries for every divergence, PS1 with DuckStation primary and Beetle PSX HW alternate first
+- [x] 4.2 Declare the BIOS inventory attrset and render it to JSON in the store
+- [x] 4.3 Implement and package `emubox-check-bios` (report-only, exit status per spec) and add it to the system packages, with unit tests beside prepare's
 
 ## 5. VM test (design D7)
 

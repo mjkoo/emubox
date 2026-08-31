@@ -1880,17 +1880,60 @@ assert lib.assertMsg
           # steered around it. That is a different failure from ScummVM's
           # below (a flag this project has simply never source-verified is
           # safe here, not a flag proven unable to help), but it lands in
-          # the same place: nothing launched can prove more for this binary
-          # than the install test already does - that it is present and
-          # executable. Restated here, not just relied on there, so this
-          # scenario's own record of "which one proves less and why" is
-          # self-contained.
+          # the same place: no launch of this binary can prove it reaches
+          # its own configuration, because it aborts before it reads one.
+          #
+          # What it CAN prove, and what the scenario asks for ("the test
+          # proves what it can - that the binary runs"), is that the binary
+          # is there, executes, gets far enough to say something, and then
+          # ends on its own. `test -x` alone proved only the first of those
+          # - a mode bit on a file - which would still have passed against a
+          # wrapper whose FHS environment or AppImage extraction was broken
+          # enough that nothing ever ran. So the binary is actually run
+          # here, in the foreground under a bound, and any exit status is
+          # accepted: the SIGABRT above is the expected one, but a future
+          # DuckStation that starts cleanly and exits 0 is not a regression
+          # this subtest should invent a failure for.
+          #
+          # `timeout -k 5 30`, and 124/137 rejected, is the whole assertion:
+          # those two statuses are `timeout`'s own (124 when the window
+          # expires, 137 when the process had to be SIGKILLed 5 s later),
+          # so rejecting them says "it terminated by itself inside 30 s"
+          # and accepts everything else. If DuckStation ever does come up
+          # and stay up here, this fails at the cap and the exemption above
+          # is the thing to revisit - which is the correct outcome, not a
+          # false alarm. 30 s rather than the 5 s settle the four launches
+          # above use, because nothing is being waited out: the bound only
+          # has to be past any plausible startup on a loaded CI runner.
           machine.succeed("test -x /run/current-system/sw/bin/duckstation")
+          duckstation_launch = (
+              "env QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy "
+              "timeout -k 5 30 duckstation 2>&1"
+          )
+          rc, out = machine.execute(
+              f"su player -s /bin/sh -c {shlex.quote(duckstation_launch)}",
+              timeout=120,
+          )
+          # Printed unconditionally: this launch's whole value is the crash
+          # it captures, and a journal that carries the signature is what a
+          # future bump gets to compare against.
+          print(f"duckstation exited {rc}:\n{out}")
+          assert rc not in (124, 137), (
+              "duckstation did not exit on its own within 30s - it was "
+              f"killed at the bound (status {rc}). The exemption above says "
+              "this binary aborts constructing QApplication; if it now "
+              f"stays up, that exemption needs rechecking\n{out}"
+          )
+          assert out.strip(), (
+              f"duckstation exited {rc} without writing a byte to stdout or "
+              "stderr - it did not get far enough to report anything, which "
+              "is weaker than the abort this exemption is written around"
+          )
 
-          # M8, honestly stated rather than fixed: this proves less than
-          # the four background launches above (DuckStation's check just
-          # above proves less again, for the unrelated reason its own
-          # comment gives). `--version` is well-established as safe for
+          # Honestly stated rather than fixed: this proves less than the
+          # four background launches above (DuckStation's launch just above
+          # proves less again, for the unrelated reason its own comment
+          # gives). `--version` is well-established as safe for
           # ScummVM specifically, with no display at all - it is handled
           # long before any toolkit init - but it never reads
           # `scummvm.ini`, so unlike the four background launches this is

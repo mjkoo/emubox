@@ -2437,3 +2437,72 @@ def test_main_leaves_a_keyless_secrets_file_alone_on_an_offline_box(
 
     assert not (appdata / "secrets.ini").exists()
     assert "recreating" not in capsys.readouterr().err
+
+
+# --- Second review wave: the token is data from the network (I6) -----------
+
+INJECTED_TOKENS = ["tok\nCheevos_evil = 1", "tok\nJUST-GARBAGE", "tok with space"]
+
+
+@pytest.mark.parametrize("token", INJECTED_TOKENS)
+def test_login2_refuses_a_token_that_is_not_one_safe_line(
+    token: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # I6: the token was accepted as any non-empty str and written into
+    # every config. A newline in it either grows the file by a line on
+    # every launch or sends it through the recreate path, destroying every
+    # unowned preference in it.
+    with ra_server(_json_handler(200, {"Success": True, "Token": token})) as url:
+        outcome = ep._login2_request(url, "alice", "hunter2", 5.0)
+
+    assert outcome == ("unreachable", None)
+    assert "will not write" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("token", INJECTED_TOKENS)
+def test_resolve_token_refuses_a_cached_token_that_is_not_one_safe_line(
+    token: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The second route in: `_read_cached_token` strips the ends but never
+    # the middle, so a corrupted cache poisons every boot until someone
+    # deletes it by hand.
+    ra, cache_file = ra_namespace(tmp_path, closed_port_url())
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(token)
+
+    result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result is None
+    assert "will not write" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("token", INJECTED_TOKENS[:2])
+def test_a_config_neither_grows_nor_loses_keys_to_an_injected_token(
+    token: str, tmp_path: Path
+) -> None:
+    # Both reproductions end to end: the file must be byte-identical after
+    # a second launch, with the unowned preference still in it.
+    cfg = tmp_path / "retroarch.cfg"
+    cfg.write_text('# a comment\nvideo_fullscreen = "true"\n')
+
+    def run_once() -> None:
+        with ra_server(_json_handler(200, {"Success": True, "Token": token})) as url:
+            files: dict[str, object] = {
+                "retroarch.cfg": {"format": "retroarch", "keys": {}}
+            }
+            ra = retroachievements_namespace(
+                tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
+            )
+            assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+        table = cast("dict[str, object]", files["retroarch.cfg"])
+        ep.set_retroarch_settings(cfg, cast("dict[str, str]", table["keys"]))
+
+    run_once()
+    first = cfg.read_text()
+    run_once()
+
+    assert cfg.read_text() == first
+    assert "# a comment" in first
+    assert 'video_fullscreen = "true"' in first
+    assert "evil" not in first
+    assert "GARBAGE" not in first

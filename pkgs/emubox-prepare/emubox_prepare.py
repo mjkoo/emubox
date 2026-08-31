@@ -529,6 +529,30 @@ _MAX_LOGIN_BODY = 65536
 _CACHE_MODE = 0o600
 
 
+def _is_usable_token(token: str) -> bool:
+    """Whether a token is a single line of characters safe to write to a config.
+
+    The value arrives from an HTTP response body and flows straight into
+    every supporting emulator's configuration, so a newline in it is an
+    injection with two shapes, both of them reproduced:
+
+    - `"tok\nCheevos_evil = 1"`: the injected line parses as a setting, so
+      the assert-and-compare never matches, so the file is rewritten and
+      grows by one line before every launch, forever.
+    - `"tok\nJUST-GARBAGE"`: the injected line fails the syntax check, so
+      from the second run the file goes through the recreate path and every
+      unowned preference in it is destroyed - real data loss, on every
+      launch, from one field of a response body.
+
+    RA's tokens are short printable ASCII, so demanding a non-empty
+    printable string with no whitespace costs nothing real and turns the
+    whole class into an ordinary "no token this run". `str.isprintable` is
+    already False for a newline or any other control character but True
+    for a plain space, which is what the second half covers.
+    """
+    return bool(token) and token.isprintable() and not any(c.isspace() for c in token)
+
+
 def _write_credential(path: Path, content: str) -> bool:
     """Write a bearer credential at mode 0600. Returns whether it wrote.
 
@@ -625,7 +649,17 @@ def _read_cached_token(path: Path) -> str | None:
     except (OSError, UnicodeDecodeError) as error:
         note(f"{path} could not be read ({error})")
         return None
-    return cached_text or None
+    cached = cached_text.strip()
+    if not cached:
+        return None
+    if not _is_usable_token(cached):
+        # The other route a hostile or corrupted token takes into the
+        # configs, and the one a bad login leaves behind on disk for every
+        # later run: validated here as well as at the login, or one
+        # scrambled cache file poisons every boot until someone deletes it.
+        note(f"{path} holds a token this program will not write to a config")
+        return None
+    return cached
 
 
 def _login2(
@@ -742,8 +776,15 @@ def _login2_request(
         return "unreachable", None
     if isinstance(payload, dict) and payload.get("Success") is True:
         token = payload.get("Token")
-        if isinstance(token, str) and token:
+        if isinstance(token, str) and _is_usable_token(token):
             return "success", token
+        if isinstance(token, str) and token:
+            note(
+                "the RetroAchievements API returned a token this program will not write to a config"
+            )
+            # Falls through to "unreachable" rather than "rejected": the
+            # credentials were fine, so nothing may drop the cache, and an
+            # offline-shaped outcome is exactly what this is.
     if isinstance(payload, dict) and payload.get("Success") is False:
         return "rejected", None
     return "unreachable", None

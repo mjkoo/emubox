@@ -108,6 +108,37 @@ def test_md5_entry_present_and_matching_exits_zero(
     assert "Test Console BIOS (md5)" in out
 
 
+def test_uppercase_declared_digest_still_matches_exits_zero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Every real entry this module ships is sourced from DuckStation's own
+    # bios.cpp table or docs.libretro.com's per-core BIOS pages, and every
+    # one of those publishes MD5 in mixed (often upper) case, while
+    # `digest_of` always returns lowercase hex. An admin who pastes a
+    # reference digest verbatim must not see a MISMATCH for a file that is
+    # actually byte-identical.
+    bios_dir = tmp_path / "bios"
+    bios_dir.mkdir()
+    (bios_dir / "console.bin").write_bytes(CORRECT_BYTES)
+    values = inventory_file(
+        tmp_path,
+        {
+            "console": {
+                "path": "console.bin",
+                "algorithm": "md5",
+                "digest": CORRECT_MD5.upper(),
+                "name": "Test Console BIOS (uppercase md5)",
+            }
+        },
+    )
+
+    assert ecb.main([str(values), str(bios_dir)]) == 0
+
+    out = capsys.readouterr().out
+    assert "OK" in out
+    assert "MISMATCH" not in out
+
+
 def test_crc32_entry_present_and_matching_exits_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

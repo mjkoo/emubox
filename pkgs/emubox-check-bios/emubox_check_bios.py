@@ -180,7 +180,15 @@ def check(inventory: dict[str, Entry], bios_dir: Path) -> tuple[list[str], bool]
         if digest is None:
             lines.append(f"MISSING  {entry['name']} ({entry['path']})")
             ok = False
-        elif digest != entry["digest"]:
+        # Case-insensitive: `digest_of` always returns lowercase hex (both
+        # `hashlib`'s `.hexdigest()` and the `crc32` branch's `f"{crc:08x}"`
+        # are lowercase by construction), but every reference this
+        # inventory is sourced from - DuckStation's own bios.cpp table,
+        # docs.libretro.com's per-core pages - publishes MD5 in mixed case.
+        # Comparing raw would flag a byte-identical file as MISMATCH just
+        # because an admin pasted a digest in the case the reference
+        # happened to print it in.
+        elif digest != entry["digest"].lower():
             lines.append(
                 f"MISMATCH {entry['name']} ({entry['path']}): "
                 f"expected {entry['algorithm']}:{entry['digest']}, got {digest}"

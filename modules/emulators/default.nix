@@ -1098,22 +1098,35 @@ in
             firstStart = "false";
             "firstStart\\default" = "false";
           };
-          Miscellaneous = {
-            # A kiosk box should not have an emulator quietly phoning home
-            # for its own updates at every launch. `check_for_update_on_start`
-            # is a real, live setting at the pinned nixpkgs revision
-            # (azahar-emu/azahar tag "2124", the exact source nixpkgs'
-            # `pkgs/by-name/az/azahar/package.nix` fetches at this flake's
-            # locked revision): declared in
-            # `src/citra_qt/uisettings.h:86` and read/written under
-            # `[Miscellaneous]` by `QtConfig::ReadMiscellaneousValues` /
-            # `SaveMiscellaneousValues` (`config.cpp:564-572,1134-1142`).
-            # Re-verify this against the currently locked nixpkgs revision
-            # (`pkgs.azahar.version`) before trusting it on a bump; a build
-            # newer than 2124 could rename or remove it.
-            check_for_update_on_start = "false";
-            "check_for_update_on_start\\default" = "false";
-          };
+          # No `[Miscellaneous] check_for_update_on_start` key here, on
+          # purpose. A prior version of this comment pinned it, citing
+          # azahar-emu/azahar tag "2124" and calling the setting "a real,
+          # live setting" - re-verified at the currently locked nixpkgs
+          # revision (`pkgs.azahar.version` = "2125.1.2", the exact source
+          # `pkgs/by-name/az/azahar/package.nix` fetches), the setting is
+          # still there under that same name
+          # (`src/citra_qt/uisettings.h:93`) and still read/written by
+          # `QtConfig::ReadMiscellaneousValues`/`SaveMiscellaneousValues`
+          # (`config.cpp:581,1164`) - but the prior comment never checked
+          # whether this flake's build actually compiles any of that in,
+          # and it does not. Every one of those call sites, and the one
+          # place the value is ever acted on -
+          # `if (UISettings::values.check_for_update_on_start)` in
+          # `citra_qt.cpp:499` - sits behind `#ifdef
+          # ENABLE_QT_UPDATE_CHECKER` (`src/citra_qt/CMakeLists.txt:214-217`
+          # gates the `#define` on a CMake option that defaults OFF,
+          # `CMakeLists.txt:117`). Upstream's own release CI turns that
+          # option on (`.ci/linux.sh:20`); nixpkgs' `azahar` package.nix
+          # never passes `-DENABLE_QT_UPDATE_CHECKER=ON` or any equivalent,
+          # so this flake's binary has no update-checker code path compiled
+          # in at all - there is nothing here for the key to suppress.
+          # Writing it anyway would be inert configuration for a feature
+          # that cannot run, which is worse than no comment: it would read
+          # as this module having verified the setting matters when the one
+          # fact that would have shown it does not was never checked. If a
+          # future bump ever turns `ENABLE_QT_UPDATE_CHECKER` on - in
+          # nixpkgs' package.nix, or by this flake overriding it - this key
+          # needs to come back.
         };
       };
 

@@ -242,7 +242,100 @@ in
     };
 
     retroachievementsNamespace = lib.mkOption {
-      type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+      # A submodule, not the looser `attrsOf anything` this option used to
+      # carry: that shape is exactly the failure mode `ownedFiles` above
+      # was redesigned to prevent, and it was live here, not theoretical -
+      # a deliberately malformed override applied through `extendModules`
+      # did not conflict with this module's own definition, it silently
+      # MERGED into it (an artifact of `types.anything`'s recursive merge),
+      # and a namespace missing every required field still sailed through
+      # `nix eval`. The only place it was ever caught was
+      # `emubox-prepare` at boot, ending the session at a greeter - the
+      # same class of failure `ownedFiles`'s own comment gives as the
+      # reason for its submodule. `keys` inside each target stays
+      # `attrsOf anything`, mirroring `ownedFiles.keys` for the same
+      # reason that option gives: the shape already varies by encoding
+      # (retroarch's flat keys carry no `section`; every ini-backed
+      # emulator's do; duckstation's carries an extra `login_timestamp`
+      # the others don't), and `emubox-prepare`, not this module, is what
+      # enforces it (`_target_validation_error`).
+      type = lib.types.nullOr (
+        lib.types.submodule {
+          options = {
+            api_url = lib.mkOption {
+              type = lib.types.str;
+              description = "The RetroAchievements API endpoint prepare posts its `login2` request to (design D2).";
+            };
+            username_file = lib.mkOption {
+              type = lib.types.str;
+              description = "Store path to the RetroAchievements account username secret.";
+            };
+            password_file = lib.mkOption {
+              type = lib.types.str;
+              description = "Store path to the RetroAchievements account password secret.";
+            };
+            cache_file = lib.mkOption {
+              type = lib.types.str;
+              description = "Where prepare caches the last resolved login token (design D2), relative to the appdata root.";
+            };
+            hardcore = lib.mkOption {
+              type = lib.types.bool;
+              description = "The single hardcore switch every target's own hardcore key follows (design D4).";
+            };
+            targets = lib.mkOption {
+              type = lib.types.listOf (
+                lib.types.submodule {
+                  options = {
+                    name = lib.mkOption {
+                      type = lib.types.str;
+                      description = "The supporting emulator this target writes into (design D1).";
+                    };
+                    encoding = lib.mkOption {
+                      type = lib.types.enum [
+                        "plain"
+                        "duckstation"
+                        "secret-file"
+                      ];
+                      description = "Which at-rest form this target's token takes - design D4's three encodings.";
+                    };
+                    booleans = lib.mkOption {
+                      type = lib.types.submodule {
+                        options = {
+                          "true" = lib.mkOption {
+                            type = lib.types.str;
+                            description = "The literal this emulator's own config file spells its boolean true as.";
+                          };
+                          "false" = lib.mkOption {
+                            type = lib.types.str;
+                            description = "The literal this emulator's own config file spells its boolean false as.";
+                          };
+                        };
+                      };
+                      description = "This target's own true/false spelling - not every supporting emulator agrees (design D4).";
+                    };
+                    keys = lib.mkOption {
+                      type = lib.types.attrsOf lib.types.anything;
+                      default = { };
+                      description = "The enabled/hardcore/username/[token] key entries this target writes, shaped per its file's format (see emubox-prepare).";
+                    };
+                    token_file = lib.mkOption {
+                      type = lib.types.nullOr lib.types.str;
+                      default = null;
+                      description = "The secret-file encoding's whole-file token path (PPSSPP only); unset for every other encoding.";
+                    };
+                    machine_id_file = lib.mkOption {
+                      type = lib.types.nullOr lib.types.str;
+                      default = null;
+                      description = "The duckstation encoding's machine-id source path (design D3); unset for every other encoding.";
+                    };
+                  };
+                }
+              );
+              description = "One entry per RetroAchievements-supporting emulator (design D1).";
+            };
+          };
+        }
+      );
       default = null;
       internal = true;
       description = ''
@@ -261,7 +354,28 @@ in
       default = pkgs.writeText "emubox-owned-values.json" (
         builtins.toJSON {
           files = cfg.ownedFiles;
-          retroachievements = cfg.retroachievementsNamespace;
+          retroachievements =
+            if cfg.retroachievementsNamespace == null then
+              null
+            else
+              cfg.retroachievementsNamespace
+              // {
+                # `token_file` and `machine_id_file` are declared as
+                # `nullOr str, default = null` on the target submodule
+                # above so every target can share one type regardless of
+                # its encoding; the module system fills the unset one in
+                # with a literal `null` rather than omitting it, which
+                # would change this document's shape from before the
+                # namespace had a type at all (`raEmulators` in
+                # `modules/emulators` never gave a target a key it didn't
+                # need). Stripped back to "key absent" here so the
+                # rendered JSON stays byte-identical either way - the only
+                # two fields on a target that can ever be null; every
+                # other field is required by the submodule itself.
+                targets = map (
+                  target: lib.filterAttrs (_: value: value != null) target
+                ) cfg.retroachievementsNamespace.targets;
+              };
         }
       );
       readOnly = true;

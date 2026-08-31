@@ -198,6 +198,30 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
+def _read_quietly(path: Path) -> str | None:
+    """The file's text, or None if it is absent, unreadable or not UTF-8.
+
+    Silent where `_read_text` is loud, because the callers differ: this one
+    is only ever asking "what is already on disk?" so it can decide whether
+    a write is needed at all, and a file that cannot be read simply means
+    "nothing to compare against". Printing a recreation notice here would
+    put a line in the journal before this run has decided to write
+    anything.
+
+    `UnicodeDecodeError` is a `ValueError` subclass rather than an
+    `OSError` one, so it has to be named: DuckStation copies ROM paths and
+    memory card names into `settings.ini` verbatim, so a single latin-1
+    byte off a FAT stick makes this file undecodable, and an escaping
+    exception here would end every launch at the greeter forever - before
+    the editors, so the recreate policy that exists to absorb exactly this
+    would never get to run.
+    """
+    try:
+        return path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 # --- ES-DE settings XML ---------------------------------------------------
 
 
@@ -685,9 +709,8 @@ def _current_ini_value(path: Path, section: str, key: str) -> str | None:
     unreadable one or a key that is not there all mean the same thing here:
     there is nothing to compare against, so treat it as changed.
     """
-    try:
-        text = path.read_text()
-    except OSError:
+    text = _read_quietly(path)
+    if text is None:
         return None
     lines = _lines(text.rstrip("\n"))
     bounds = _ini_section_bounds(lines, section)
@@ -1051,7 +1074,11 @@ def main(argv: Sequence[str]) -> int:
     # than a stack trace, which is what an admin reading `journalctl` needs.
     try:
         document = json.loads(Path(owned_values).read_text())
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
+        # RecursionError joins the two obvious ones because `json.loads`
+        # raises it rather than a ValueError on a deeply nested document,
+        # and this branch's whole promise is a journal line instead of a
+        # traceback.
         note(f"{owned_values} is not readable owned-values JSON ({error})")
         return 1
     if not isinstance(document, dict):

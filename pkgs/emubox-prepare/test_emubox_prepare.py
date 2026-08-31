@@ -1876,3 +1876,47 @@ def test_apply_never_leaks_the_password_across_every_target_shape(
         assert "hunter2" not in json.dumps(table["keys"]), relative
     assert b"hunter2" not in ppsspp_token_file.read_bytes()
     assert "hunter2" not in capsys.readouterr().err
+
+
+# --- Second review wave: the crash boundary (C1-C3) -------------------------
+
+
+def test_main_survives_a_settings_ini_that_is_not_valid_utf8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # C1: DuckStation writes ROM paths and memory card names into
+    # settings.ini verbatim, so one latin-1 byte off a FAT stick makes the
+    # file undecodable. The read that change-gates LoginTimestamp happens
+    # before any editor runs, so a UnicodeDecodeError escaping there ends
+    # every launch at the greeter and the recreate policy never gets its
+    # turn. Driven through main() because that is where the damage lands.
+    appdata = tmp_path / "es-de"
+    appdata.mkdir()
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("abc123\n")
+    ini_path = appdata / "settings.ini"
+    ini_path.write_bytes(
+        b"[Cheevos]\nToken = abc\n\n[GameList]\nRecentPath = /roms/Pok\xe9mon.chd\n"
+    )
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-utf8"})) as url:
+        values = tmp_path / "owned.json"
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {"settings.ini": {"format": "ini", "keys": {}}},
+                    "retroachievements": retroachievements_namespace(
+                        tmp_path,
+                        url,
+                        [duckstation_target(machine_id_file, "settings.ini")],
+                    ),
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 0
+
+    # Recreated by the editors' ordinary policy, carrying the owned keys.
+    assert "Username = alice" in ini_path.read_text()
+    assert "unreadable" in capsys.readouterr().err

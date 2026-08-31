@@ -17,6 +17,16 @@
       admin_password_hash.neededForUsers = true;
       wifi_ssid = { };
       wifi_psk = { };
+
+      # Read by `emubox-prepare` running as `player` (modules/kiosk's session
+      # loop), not by a system service, so sops-nix's default - root, mode
+      # 0400 - would leave prepare unable to read either file and every
+      # login would fail silently on real hardware while the VM test, which
+      # points prepare at its own mock credentials, kept passing. `owner`
+      # rather than a wider `mode` keeps the file unreadable to anyone else
+      # on the box, same as the default would if `player` were root.
+      retroachievements_username.owner = "player";
+      retroachievements_password.owner = "player";
     };
 
     # Rendered on /run at boot; NetworkManager's ensure-profiles unit loads

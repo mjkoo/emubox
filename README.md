@@ -137,6 +137,102 @@ patch that shows it and, in kiosk mode, offers only those two entries:
 quitting the frontend would just be relaunched by the loop, and the box
 refuses to suspend.
 
+## BIOS files
+
+Emulators read firmware and BIOS images from `/data/bios`, a directory
+`modules/library` lays down as `2775 player player`: group `player` with the
+setgid bit set, the same layout `/data/roms` uses and for the same reason -
+whatever the admin copies in over SSH lands group-owned `player` with no
+separate `chown` needed to make it readable by the session that runs as
+`player`. The flake declares which files belong there as a nix attrset (a
+short id, a path under `/data/bios`, a human name and a checksum with the
+algorithm that produced it - sha256, md5 or crc32, matching whichever
+algorithm the real published reference for that file actually uses),
+rendered to `/etc/emubox/bios-inventory.json` on the running system. Getting
+the actual files onto the box is still the admin's job - copyrighted BIOS
+and firmware images are exactly what nothing in this repository or its
+public cache may redistribute - the inventory only lets the box tell the
+admin whether what they put there is the file it expects. A file under
+`/data/bios` the inventory does not name is harmless: it is neither
+validated nor required, only reported as an informational extra.
+
+The inventory covers the systems that cannot run anything at all without
+firmware. It does not (yet) cover three of them, and that gap is deliberate
+rather than an oversight: PCSX2 validates a BIOS only by file size and an
+internal `ROMVER` string, never a hash, so there is nothing to check
+against; blueMSX needs whole `Databases`/`Machines` directory trees copied
+from a full install rather than one file with one checksum; Arcade's BIOS is
+a per-game board ROM set that lives beside each game's own files, not a
+single fixed image an inventory entry can name. For systems that could in
+principle be checked, an entry is only added once a source this project can
+stand behind publishes a checksum for it - see
+`modules/emulators/default.nix` for the current inventory and which systems
+are still waiting on one.
+
+Systems whose BIOS is optional are not declared either, and for a different
+reason: they play games without it. Atari 7800 and GBA both run fine with no
+BIOS image, and Dreamcast uses Flycast's HLE BIOS by default. Nothing in the
+inventory names them, so `emubox-check-bios` will never ask for those files
+or report them missing - an admin who drops one in gets an `EXTRA` line and
+the emulator picks it up regardless.
+
+### Checking what's there
+
+`emubox-check-bios` reads the inventory and reports on `/data/bios` without
+changing anything:
+
+```
+emubox-check-bios /etc/emubox/bios-inventory.json /data/bios
+```
+
+- `OK` - the file is present and its checksum matches.
+- `MISMATCH` - the file is present but its checksum does not match; both the
+  expected and the actual value are printed.
+- `MISSING` - the file is absent, or present but unreadable.
+- `EXTRA` - the file is present under `/data/bios` but not declared in the
+  inventory; purely informational.
+
+`EXTRA` lines never affect the exit status. The command exits successfully
+only when every declared file is `OK`, and non-zero if anything declared is
+`MISSING` or a `MISMATCH`, so a script can gate on it. It never writes to
+`/data/bios` or anywhere else.
+
+## RetroAchievements
+
+One RetroAchievements account is shared by the whole box; there is no
+per-player login. The credentials live in `secrets/secrets.yaml` as
+`retroachievements_username` and `retroachievements_password`,
+`REPLACE-BEFORE-INSTALL` placeholders in the committed file until an admin
+fills them in with `just secrets-edit`; `just install` refuses to run while
+either still holds a placeholder, the same guard that protects the WiFi and
+admin-password secrets (see Install, below).
+
+`emubox.retroachievements.enable` defaults to true and `.hardcore` defaults
+to false: a freshly installed box with real credentials and a working
+network unlocks achievements everywhere with nobody touching an emulator
+menu, and hardcore's stricter rules (no save states, no rewind, no cheats)
+are opt-in rather than the default. `emubox.retroachievements.apiUrl`
+defaults to the real RetroAchievements API and only needs setting to point
+`emubox-prepare`'s login at a different endpoint - a mock server in the
+kiosk VM test, or a self-hosted RetroAchievements-compatible service; it
+must be an `http://` or `https://` URL, since `emubox-prepare` posts the
+login there directly. The account password itself never
+reaches any emulator's configuration file - only the session token the
+login exchanges it for does, and DuckStation gets that token in the
+encrypted form it expects to find on disk rather than in plain text (see
+the bump runbook in `pkgs/duckstation/package.nix` for the scheme).
+Setting `emubox.retroachievements.enable = false` does more than stop new
+logins: on the next launch it actively removes the account's credentials
+from the box - the account name and session token in every supporting
+emulator's configuration, PPSSPP's separate token file, and the cached login
+token under `/data` - so switching the feature off takes the token off the
+disk rather than leaving the last one there unused.
+
+RetroAchievements being unreachable, offline, rejected, or simply disabled
+all cost only the achievements: the frontend still starts on its normal
+schedule, and a failed or skipped login is recorded in the journal rather
+than shown to whoever is holding the controller.
+
 ## Install
 
 One command over Ethernet installs or reinstalls the box from the flake,
@@ -245,7 +341,10 @@ no user data. Fix the disk, or reinstall.
 Items that need the physical box, the real TV or a controller in hand, and
 so are settled at bring-up rather than in CI. The `TODO(bring-up)` comments
 in `hosts/emubox/facts.nix` mark the two facts; this list is where the rest
-live, and there is no second list.
+live, and there is no second list. Where an item exists because a test
+stopped short of covering something, the evidence for stopping lives beside
+that test and is linked from the item - the item itself is still here, so
+this list stays the one place to read what is unproven.
 
 - The four USB-A `ID_PATH` values in physical port order, and the connector
   the TV is actually on (`hdmiOutput`): both `TODO(bring-up)` in
@@ -265,3 +364,40 @@ live, and there is no second list.
 - The unlock sequence entered on a controller. The kiosk VM test proves the
   configured passkey reaches the settings file; that entering it unlocks
   the full menu is ES-DE's own behaviour and needs real input.
+- One game launched per system that needs firmware, once the files are in
+  `/data/bios` and `emubox-check-bios` reports them `OK`. Nothing in CI can
+  load any of these, because neither this repository nor its cache may
+  carry the firmware: Atari Lynx, Famicom Disk System, Sega CD, Saturn,
+  PS1, PC Engine CD, Arcade, Nintendo DS, PS2, Amiga, MSX, Intellivision
+  and ColecoVision. A clean `emubox-check-bios` is not evidence for PS2,
+  MSX, ColecoVision or Arcade in particular: the inventory declares nothing
+  for those four on purpose, for the reasons the BIOS section above gives,
+  so their firmware is unchecked as well as unproven.
+- One game launched per core family the kiosk VM test names exempt from its
+  headless launches. Six of the eighteen BIOS-free families never actually
+  run a ROM in CI: Atari 7800 and Neo Geo Pocket, for want of a homebrew
+  ROM carrying an author's own licence; N64, Dreamcast and Vectrex, whose
+  cores force a real GL or Vulkan driver that a headless VM has none of;
+  and SNES, where the fixture hangs for a reason nobody has yet pinned on
+  either the core or that particular ROM. `exemptFamilies` in
+  `tests/kiosk.nix` carries each family's evidence and what would return it
+  to CI.
+- ScummVM and DuckStation coming up full screen against their written
+  configuration. The other four standalones are smoke-launched against
+  theirs in the VM; these two cannot be. ScummVM only answers `--version`,
+  which never opens `scummvm.ini`, and DuckStation crashes constructing its
+  QApplication before it reads argv at all, so CI proves only that the
+  binary runs.
+- A RetroAchievements achievement actually unlocking, on RetroArch and on
+  DuckStation. The kiosk VM test asserts what the flake wrote - RetroArch's,
+  Dolphin's and PCSX2's tokens read back from their settings files,
+  PPSSPP's from the raw file it keeps its token in, and DuckStation's by
+  decrypting it with a second implementation of the scheme - which is not
+  the same as any emulator accepting one. DuckStation is the one to check
+  first: its token is the only one this project encrypts itself, so it is
+  the only one a future DuckStation bump could silently invalidate.
+- Real performance per system. The VM asserts that PCSX2 is set to native
+  internal resolution and DuckStation to PGXP with upscaling, never that
+  either holds frame rate on this box's iGPU. A system that disappoints
+  here is settled by changing its values in `modules/emulators`, not by
+  anything CI can catch first.

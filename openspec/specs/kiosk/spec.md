@@ -68,7 +68,7 @@ The configuration SHALL accept a custom systems definition (`emubox.kiosk.custom
 - **THEN** the file is removed before the frontend launches
 
 #### Scenario: Definition empty and no file present
-- **WHEN** `emubox.kiosk.customSystems` is empty and no custom systems file exists, which is every launch of the frontend on the box as shipped
+- **WHEN** `emubox.kiosk.customSystems` is empty and no custom systems file exists
 - **THEN** none is created, and the session goes on to launch the frontend rather than treating the absent file as a failure
 
 ### Requirement: The frontend is kept up, and a broken frontend ends at the greeter

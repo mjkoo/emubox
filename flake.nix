@@ -150,6 +150,18 @@
           # so the package is reached by callPackage on the file rather than
           # by importing ./pkgs, whose other entries are Linux-only.
           perSystem.emubox-prepare = (pkgsFor system).callPackage ./pkgs/emubox-prepare/package.nix { };
+          perSystem.emubox-check-bios = (pkgsFor system).callPackage ./pkgs/emubox-check-bios/package.nix { };
+
+          # The retroachievements spec's Disabled scenario, asserted at eval
+          # time. Per-system like the two above rather than under `hostOnly`,
+          # and for the same reason: it needs no VM and no x86_64-linux
+          # builder, so the admin's Mac catches a wrong "off" spelling
+          # without waiting for CI. What it guards is the one code path in
+          # the repository that nothing else touches - see the file's header.
+          perSystem.retroachievements-disabled = import ./tests/retroachievements-disabled.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
 
           # The host configuration extended with the test module: the VM
           # test installs and boots its toplevel, and the closure check greps
@@ -216,6 +228,15 @@
         system:
         let
           pkgs = pkgsFor system;
+          # emubox-prepare's own interpreter, carrying pytest to run its
+          # tests by hand and cryptography for the DuckStation token
+          # transform it imports - one environment, not python3 plus a
+          # separately-wrapped python3.pkgs.pytest, so `import cryptography`
+          # works from the same `pytest` this shell puts on PATH.
+          preparePython = pkgs.python3.withPackages (ps: [
+            ps.pytest
+            ps.cryptography
+          ]);
         in
         {
           default = pkgs.mkShell {
@@ -236,8 +257,7 @@
               # emubox-prepare: what its checkPhase runs, so the same
               # commands are available by hand. `nix fmt` reaches ruff
               # through the formatter override, but only for formatting.
-              python3
-              python3.pkgs.pytest
+              preparePython
               ruff
               ty
               # binary cache (`just cache-push`)

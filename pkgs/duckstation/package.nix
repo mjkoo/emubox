@@ -18,8 +18,31 @@
 # restated), not a rewritten copy of upstream's file; the icon is copied
 # verbatim.
 #
-# Bumping: edit `version` to the new release tag (without the leading v),
-# set `hash = lib.fakeHash`, rebuild, and record the hash the failed fetch
+# Bumping: before touching `version`, diff the new release's
+# `src/core/achievements.cpp` token functions against the scheme recorded
+# in `openspec/changes/emulators-retroachievements/design.md` (Context and
+# decision D3) and reproduced by `emubox-prepare`'s DuckStation encoder -
+# SHA-256 over the raw bytes of `/etc/machine-id` followed by the username,
+# 100 further SHA-256 rounds over that digest (101 hash calls total),
+# AES-128-CBC keyed on digest bytes 0-15 with IV bytes 16-31, the token
+# zero-padded to a 16-byte block multiple, ciphertext base64-encoded. If
+# upstream changed any step, `emubox-prepare` needs the matching change or
+# the token it writes silently stops decrypting and RetroAchievements
+# quietly goes dark on DuckStation only - nothing else in the session
+# fails, so nothing else will tell you. The kiosk VM test decrypts the
+# written value with its own independent implementation of the same
+# scheme, so a real mismatch between the recorded scheme and prepare fails
+# loudly there - but only if that test's implementation is updated to
+# match too; it will not catch a scheme change nobody told it about.
+# Also re-check that `wrapType2`'s FHS wrapper still does not run
+# DuckStation in portable mode (`modules/emulators/default.nix` records
+# today's verdict and how it was checked): portable mode drops the machine
+# id from the key derivation, which would break every existing token the
+# same way a scheme change would.
+#
+# Once the scheme is confirmed unchanged, the actual bump is: edit
+# `version` to the new release tag (without the leading v), set
+# `hash = lib.fakeHash`, rebuild, and record the hash the failed fetch
 # reports. The URL derives from `version`, so nothing else changes.
 #
 # Attribution: DuckStation by Connor McLaughlin (stenzek) and contributors,

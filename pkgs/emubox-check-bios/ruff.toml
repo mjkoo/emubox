@@ -1,0 +1,8 @@
+# Defaults plus ARG: an unused argument here is almost always an
+# inventory entry's field or a directory that stopped being threaded
+# through to the hashing, which would silently narrow what this tool
+# checks rather than fail. The same rule is enabled for emubox-prepare
+# next door, for the same reason in its own vocabulary.
+# Under `[lint]` rather than at the top level, which this ruff deprecates.
+[lint]
+extend-select = ["ARG"]

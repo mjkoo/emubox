@@ -13,35 +13,27 @@ let
   # resolves under ESDE_APPDATA_DIR. Everything ES-DE writes that is not
   # named here is left exactly as the frontend last wrote it, which is what
   # lets a preference changed in its own menus survive a reboot.
+  #
+  # This module contributes only its own file, `settings/es_settings.xml`,
+  # to `emubox.kiosk.ownedFiles` below; `modules/emulators` contributes every
+  # emulator's config file to the same option (design D4,
+  # emulators-retroachievements). The two merge through the module system's
+  # ordinary attrset merging, which is why the option's type has to be one
+  # that merges rather than a plain let-bound value.
   esdeString = value: {
     type = "string";
     inherit value;
   };
-  ownedValues = {
-    "settings/es_settings.xml" = {
-      format = "esde-xml";
-      keys = {
-        # The restriction itself, reasserted before every launch: an admin
-        # who unlocked the full menu last time gets kiosk mode this time.
-        UIMode = esdeString "kiosk";
-        UIMode_passkey = esdeString cfg.passkey;
-        ROMDirectory = esdeString "/data/roms";
-        MediaDirectory = esdeString "/data/media";
-        Theme = esdeString "linear-es-de";
-        ApplicationLanguage = esdeString "en_US";
-        # Makes the QUIT entry open the patched menu (pkgs/es-de) rather
-        # than a bare "really quit?" box.
-        ShowQuitMenu = {
-          type = "bool";
-          value = "true";
-        };
-      };
-    };
-  };
 
-  # The empty string, not a store path to an empty file: the empty value is
-  # what selects prepare's removal branch, so a path here would leave that
-  # branch unreachable on the box as shipped (design D6).
+  # The empty string, not a store path to an empty file: the empty value
+  # itself is what selects prepare's removal branch, so writing an empty
+  # document to the store and passing its path would leave that branch
+  # unreachable for every configuration, whatever `customSystems` held
+  # (design D6). Not "unreachable on the box as shipped" - the shipped box
+  # takes the other branch, since `modules/emulators` sets `customSystems`
+  # to a real document. The removal branch is what a box whose
+  # configuration drops back to the empty default relies on, and it is the
+  # kiosk spec's own "Definition empty" scenario.
   customSystemsPath =
     if cfg.customSystems == "" then "" else pkgs.writeText "emubox-es_systems.xml" cfg.customSystems;
 
@@ -117,10 +109,22 @@ let
           exec startplasma-wayland
         fi
 
-        # Not guarded: prepare's recreate policy already absorbs every
-        # failure the box can produce, so a non-zero exit here is a bug in
-        # prepare or an unwritable /data, and both should stop at a greeter
-        # the admin can log into rather than loop invisibly (design D1).
+        # Not guarded, and what that does and does not cover is worth
+        # stating exactly. prepare's recreate policy absorbs the runtime
+        # failures a box actually produces - a missing, unreadable or
+        # malformed settings file is replaced, and a file that cannot be
+        # written costs that file's keys and nothing more, noted on stderr
+        # while the run carries on (`emubox_prepare.py`'s error policy, and
+        # the `OSError` guards around its editor loop and the custom-systems
+        # install). An unwritable /data therefore does NOT end up here; it
+        # ends up in the journal with the frontend still launching, which is
+        # deliberate (design D2: the alternative is a family staring at a
+        # greeter). What is left to reach this line is the broken-call-site
+        # class prepare refuses to paper over - an owned-values document
+        # that is unreadable or the wrong shape, an unset ESDE_APPDATA_DIR,
+        # an unreadable custom-systems store path - and for those the
+        # greeter an admin can log into is the right destination (design
+        # D1), because no relaunch of the same call would do any better.
         emubox-prepare ${cfg.ownedValuesFile} "${customSystemsPath}"
 
         # The loop needs the run's length, not its status, but the status is
@@ -213,9 +217,205 @@ in
       '';
     };
 
+    ownedFiles = lib.mkOption {
+      # A submodule per file, not the looser `attrsOf (attrsOf anything)`:
+      # a module that forgets `format` or misspells it as `"ini "` gets a
+      # named-option eval error at the file and line that set it, rather
+      # than a value that only fails once `emubox-prepare` reads the
+      # rendered JSON on the box. The `keys` shape still varies by format
+      # (esde-xml's `{name: {type, value}}`, ini's `{section: {key:
+      # value}}`, retroarch's flat `{key: value}}`) and prepare, not this
+      # module, is what enforces that shape - `anything` here is honest
+      # about the limit of what Nix can usefully check.
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            format = lib.mkOption {
+              type = lib.types.enum [
+                "esde-xml"
+                "ini"
+                "retroarch"
+              ];
+              description = "The emubox-prepare editor this file's keys are written through.";
+            };
+            keys = lib.mkOption {
+              type = lib.types.attrsOf lib.types.anything;
+              default = { };
+              description = "The keys this file owns, shaped per `format` (see emubox-prepare).";
+            };
+          };
+        }
+      );
+      default = { };
+      internal = true;
+      description = ''
+        Every config file the flake owns a value in, keyed by that file's
+        path (a relative path resolves under `appdataDir`, an absolute one
+        is used as written - the same convention `emubox-prepare` uses
+        throughout). `modules/kiosk` and `modules/emulators` each add their
+        own entries here; the attrset merge across modules is the whole
+        mechanism (design D4, emulators-retroachievements) - no module
+        reads another's entries, they just both write into this one option.
+      '';
+    };
+
+    retroachievementsNamespace = lib.mkOption {
+      # A submodule, not the looser `attrsOf anything` this option used to
+      # carry: that shape is exactly the failure mode `ownedFiles` above
+      # was redesigned to prevent, and it was live here, not theoretical -
+      # a deliberately malformed override applied through `extendModules`
+      # did not conflict with this module's own definition, it silently
+      # MERGED into it (an artifact of `types.anything`'s recursive merge),
+      # and a namespace missing every required field still sailed through
+      # `nix eval`. The only place it was ever caught was
+      # `emubox-prepare` at boot, ending the session at a greeter - the
+      # same class of failure `ownedFiles`'s own comment gives as the
+      # reason for its submodule. `keys` inside each target stays
+      # `attrsOf anything`, mirroring `ownedFiles.keys` for the same
+      # reason that option gives: the shape already varies by encoding
+      # (retroarch's flat keys carry no `section`; every ini-backed
+      # emulator's do; duckstation's carries an extra `login_timestamp`
+      # the others don't), and `emubox-prepare`, not this module, is what
+      # enforces it (`_target_validation_error`).
+      type = lib.types.nullOr (
+        lib.types.submodule {
+          options = {
+            api_url = lib.mkOption {
+              type = lib.types.str;
+              description = "The RetroAchievements API endpoint prepare posts its `login2` request to (design D2).";
+            };
+            username_file = lib.mkOption {
+              type = lib.types.str;
+              description = "Store path to the RetroAchievements account username secret.";
+            };
+            password_file = lib.mkOption {
+              type = lib.types.str;
+              description = "Store path to the RetroAchievements account password secret.";
+            };
+            cache_file = lib.mkOption {
+              type = lib.types.str;
+              description = "Where prepare caches the last resolved login token (design D2), relative to the appdata root.";
+            };
+            enabled = lib.mkOption {
+              type = lib.types.bool;
+              description = ''
+                Whether prepare attempts a login and writes its result,
+                as opposed to removing every credential it may previously
+                have written. `modules/emulators` sets this to
+                `emubox.retroachievements.enable` and renders this
+                namespace either way, rather than falling back to `null`
+                when the feature is off: `null` skips this whole namespace,
+                credential removal included, which is not what switching
+                the box's feature off is supposed to do to an account's
+                token already on disk.
+              '';
+            };
+            hardcore = lib.mkOption {
+              type = lib.types.bool;
+              description = "The single hardcore switch every target's own hardcore key follows (design D4).";
+            };
+            targets = lib.mkOption {
+              type = lib.types.listOf (
+                lib.types.submodule {
+                  options = {
+                    name = lib.mkOption {
+                      type = lib.types.str;
+                      description = "The supporting emulator this target writes into (design D1).";
+                    };
+                    encoding = lib.mkOption {
+                      type = lib.types.enum [
+                        "plain"
+                        "duckstation"
+                        "secret-file"
+                      ];
+                      description = "Which at-rest form this target's token takes - design D4's three encodings.";
+                    };
+                    booleans = lib.mkOption {
+                      type = lib.types.submodule {
+                        options = {
+                          "true" = lib.mkOption {
+                            type = lib.types.str;
+                            description = "The literal this emulator's own config file spells its boolean true as.";
+                          };
+                          "false" = lib.mkOption {
+                            type = lib.types.str;
+                            description = "The literal this emulator's own config file spells its boolean false as.";
+                          };
+                        };
+                      };
+                      description = "This target's own true/false spelling - not every supporting emulator agrees (design D4).";
+                    };
+                    keys = lib.mkOption {
+                      type = lib.types.attrsOf lib.types.anything;
+                      default = { };
+                      description = "The enabled/hardcore/username/[token] key entries this target writes, shaped per its file's format (see emubox-prepare).";
+                    };
+                    token_file = lib.mkOption {
+                      type = lib.types.nullOr lib.types.str;
+                      default = null;
+                      description = "The secret-file encoding's whole-file token path (PPSSPP only); unset for every other encoding.";
+                    };
+                    machine_id_file = lib.mkOption {
+                      type = lib.types.nullOr lib.types.str;
+                      default = null;
+                      description = "The duckstation encoding's machine-id source path (design D3); unset for every other encoding.";
+                    };
+                  };
+                }
+              );
+              description = "One entry per RetroAchievements-supporting emulator (design D1).";
+            };
+          };
+        }
+      );
+      default = null;
+      internal = true;
+      description = ''
+        The owned-values document's `retroachievements` namespace (design
+        D1, emulators-retroachievements). This module never sets it;
+        `modules/emulators` does, always to a non-null value with its own
+        `enabled` field following `emubox.retroachievements.enable` -
+        `null` here would make `emubox-prepare` skip the whole
+        namespace, credential removal included, which is not what
+        switching the feature off is supposed to do to a token already on
+        disk. `null` stays this option's own default and a legal value of
+        its type regardless, for a caller with no RetroAchievements
+        support wired up at all. It lives here rather than in
+        `modules/emulators` because `ownedValuesFile` below is what has to
+        render it, and an internal option is how one module hands a value
+        to another without either reading the other's private state.
+      '';
+    };
+
     ownedValuesFile = lib.mkOption {
       type = lib.types.path;
-      default = pkgs.writeText "emubox-owned-values.json" (builtins.toJSON ownedValues);
+      default = pkgs.writeText "emubox-owned-values.json" (
+        builtins.toJSON {
+          files = cfg.ownedFiles;
+          retroachievements =
+            if cfg.retroachievementsNamespace == null then
+              null
+            else
+              cfg.retroachievementsNamespace
+              // {
+                # `token_file` and `machine_id_file` are declared as
+                # `nullOr str, default = null` on the target submodule
+                # above so every target can share one type regardless of
+                # its encoding; the module system fills the unset one in
+                # with a literal `null` rather than omitting it, which
+                # would change this document's shape from before the
+                # namespace had a type at all (`raEmulators` in
+                # `modules/emulators` never gave a target a key it didn't
+                # need). Stripped back to "key absent" here so the
+                # rendered JSON stays byte-identical either way - the only
+                # two fields on a target that can ever be null; every
+                # other field is required by the submodule itself.
+                targets = map (
+                  target: lib.filterAttrs (_: value: value != null) target
+                ) cfg.retroachievementsNamespace.targets;
+              };
+        }
+      );
       readOnly = true;
       internal = true;
       description = ''
@@ -228,6 +428,26 @@ in
   };
 
   config = {
+    emubox.kiosk.ownedFiles."settings/es_settings.xml" = {
+      format = "esde-xml";
+      keys = {
+        # The restriction itself, reasserted before every launch: an admin
+        # who unlocked the full menu last time gets kiosk mode this time.
+        UIMode = esdeString "kiosk";
+        UIMode_passkey = esdeString cfg.passkey;
+        ROMDirectory = esdeString "/data/roms";
+        MediaDirectory = esdeString "/data/media";
+        Theme = esdeString "linear-es-de";
+        ApplicationLanguage = esdeString "en_US";
+        # Makes the QUIT entry open the patched menu (pkgs/es-de) rather
+        # than a bare "really quit?" box.
+        ShowQuitMenu = {
+          type = "bool";
+          value = "true";
+        };
+      };
+    };
+
     # A real `player` group: the /data layout (modules/library) is owned
     # `player player` with setgid on roms/ and bios/, so that admin's ingest
     # over the admin link lands group-owned (design 8). isNormalUser alone

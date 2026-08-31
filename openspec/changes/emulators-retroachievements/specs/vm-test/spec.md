@@ -11,12 +11,17 @@ smoke launch asserting the process starts against the asserted
 configuration. A core family SHALL be exempt from the headless launch
 when no ROM for it carries an explicit licence or redistribution grant
 from its author, since the fixtures are fetched by a public CI run and
-pushed through a public binary cache, or when the core cannot run
+pushed through a public binary cache; or when the core cannot run
 headless at all - a core that demands a hardware render context has no
-VM to demand it of. The configuration SHALL name each exempt family and
-which of the two reasons applies, so an exemption is a deliberate line
-someone added rather than a family the test quietly skipped. An exempt
-family is a hardware checklist item, like the BIOS-dependent cores.
+VM to demand it of; or when the launch failed in a way nobody has yet
+attributed to either the core or the fixture, which is an admission of
+ignorance rather than a finding and SHALL be recorded as one. The
+configuration SHALL name each exempt family, which reason applies, and
+what would return it to the tested set, so an exemption is a deliberate
+line someone added rather than a family the test quietly skipped, and so
+no exemption is permanent merely because nothing prompts anyone to
+revisit it. An exempt family is a hardware checklist item, like the
+BIOS-dependent cores.
 Chasing a headless launch for a core that resists one is explicitly not
 required: the VM proves the configuration the flake writes, and an
 emulator's own runtime behaviour is a checklist item by design.
@@ -45,6 +50,13 @@ checklist items, not VM assertions.
 - **THEN** the configuration names that family as exempt, the test
   launches nothing for it and stays green, and the family is covered by
   the hardware checklist instead
+
+#### Scenario: A family whose failure nobody has explained
+- **WHEN** a BIOS-free core family's headless launch fails and it is not
+  known whether the core or the fixture is at fault
+- **THEN** the configuration records the exemption as unattributed
+  rather than as a property of the core, states what was actually
+  observed, and names what would settle it
 
 #### Scenario: Tokens asserted against a mock
 - **WHEN** the VM test boots with RetroAchievements enabled, test

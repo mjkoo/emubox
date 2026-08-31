@@ -27,7 +27,7 @@
 
 - [x] 5.1 Add the mock RA endpoint and test credentials to the kiosk VM test and assert every supporting config carries the mock token (DuckStation's via independent decrypt), no config carries the password, and both hardcore positions
 - [x] 5.2 Pin one freely redistributable homebrew ROM per BIOS-free core family as fetched fixtures and assert headless RetroArch exit 0 plus a core log line per family (delivered for 12 of 18: six families are named exempt, two for licensing and four because their cores cannot run headless at all, per the amended vm-test requirement)
-- [x] 5.3 Add the standalone smoke launches and the offline-no-cache boot assertion (frontend up, journal records the failed login)
+- [x] 5.3 Add the standalone smoke launches and the offline-no-cache boot assertion (frontend up, journal records the failed login) (four of six standalones get the real launch-and-hold check; ScummVM and DuckStation cannot start far enough headless and are recorded as proving less, per the amended vm-test requirement)
 
 ## 6. Docs and runbook
 

@@ -181,7 +181,7 @@ bundle, `system_directory=/data/bios`, `autosave_interval=30`,
 fullscreen, ozone menu, online-updater menu entries off, the uniform
 hotkey combo set; Dolphin Wii dual core off and fullscreen; PCSX2
 native internal resolution; DuckStation PGXP and a 1080p-appropriate
-upscale; PPSSPP, Azahar, ScummVM fullscreen and quiet-start keys. The
+upscale; PPSSPP, Azahar and ScummVM fullscreen, and quiet-start keys for those that have one. Read at apply time: PPSSPP has none - its `FirstRun` gates a single OSD toast, not a dialog - so it gets fullscreen alone, and the module records that where the key would otherwise look forgotten. The
 exact key spellings and file paths are read from each emulator's source
 at apply time, the way E3 read ES-DE's, and recorded in the module as
 the table itself; the design fixes which knobs are owned, not their
@@ -276,10 +276,12 @@ per-launch caps existed. The log-line assertion also had to change:
 the line the design first had in mind is echoed from the command line
 before the core is opened at all, so it proved nothing, and the test now
 requires a marker emitted only after content loads plus the absence of
-the content-failure marker. And one standalone, ScummVM, cannot be
-started far enough headless to read its config, so its smoke launch is
-a version check that proves less; the requirement now says so, and the
-test says which one and why. The group also proves the offline
+the content-failure marker. And two standalones cannot be started far
+enough headless to read their config, so their checks prove less: ScummVM
+runs but only answers `--version`, which never opens `scummvm.ini`, and
+DuckStation crashes constructing its QApplication before it looks at argv
+at all, so it is only proven to start rather than to run. The requirement
+now says so, and the test says which two and why. The group also proves the offline
 path: a boot with no cached token and no route to the endpoint asserts
 the frontend still arrives and the journal records the failed login.
 Because `modules/emulators` now contributes custom-systems entries
@@ -321,7 +323,7 @@ E12 line.
   and Neo Geo Pocket for licensing, after two independent searches:
   binaries exist, but none is paired with a written grant, and the
   fixtures are fetched by public CI and pushed through a public binary
-  cache. N64, Dreamcast, Vectrex and SNES for mechanism: the first three
+  cache. N64, Dreamcast and Vectrex for mechanism, SNES unattributed: the first three
   force a real GL driver the moment their core asks for a hardware
   render context, discarding the null-driver override, and Snes9x hangs
   rather than exiting and had to be killed at the launch cap. All six

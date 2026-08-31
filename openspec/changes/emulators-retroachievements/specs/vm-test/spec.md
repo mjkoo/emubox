@@ -9,12 +9,17 @@ assert a successful exit and a
 log line proving the core ran; each standalone emulator SHALL get a
 smoke launch asserting the process starts against the asserted
 configuration. A core family SHALL be exempt from the headless launch
-only when no ROM for it carries an explicit licence or redistribution
-grant from its author, since the fixtures are fetched by a public CI
-run and pushed through a public binary cache; the configuration SHALL
-name each exempt family, so an exemption is a deliberate line someone
-added rather than a family the test quietly skipped. An exempt family
-is a hardware checklist item, like the BIOS-dependent cores.
+when no ROM for it carries an explicit licence or redistribution grant
+from its author, since the fixtures are fetched by a public CI run and
+pushed through a public binary cache, or when the core cannot run
+headless at all - a core that demands a hardware render context has no
+VM to demand it of. The configuration SHALL name each exempt family and
+which of the two reasons applies, so an exemption is a deliberate line
+someone added rather than a family the test quietly skipped. An exempt
+family is a hardware checklist item, like the BIOS-dependent cores.
+Chasing a headless launch for a core that resists one is explicitly not
+required: the VM proves the configuration the flake writes, and an
+emulator's own runtime behaviour is a checklist item by design.
 Against a RetroAchievements endpoint mocked inside the
 test network, the test SHALL assert that each supporting emulator's
 configuration carries the account name and token - DuckStation's by

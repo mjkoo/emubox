@@ -2153,12 +2153,15 @@ def test_login2_does_not_leave_its_abandoned_request_running(
         return thread
 
     with ra_server(_sleepy_handler(10.0), threaded=True) as url:
-        # Patched around this call only. `created` still ends up holding
-        # more than just `_login2`'s own worker - `ThreadingHTTPServer`
-        # spawns its own per-connection thread on the server side while
-        # this call is in flight - so the worker is picked out by the one
-        # name `_login2` gives it, not by position, leaving the filter as
-        # the only thing (beyond the name itself) this test still trusts.
+        # `monkeypatch.setattr` on `threading.Thread` is process-global, so
+        # the window is kept to this one statement and undone the moment it
+        # returns. Inside that window a live `ThreadingHTTPServer` is
+        # spawning per-connection threads of its own, so `created` holds
+        # more than `_login2`'s worker and the worker is picked out by the
+        # one name `_login2` gives it, not by position. Nothing else runs
+        # concurrently with the window - pytest is single-threaded and the
+        # only other threads alive are this test's own server - so the
+        # capture cannot pick up a thread from anywhere else.
         monkeypatch.setattr(threading, "Thread", capturing_thread)
         assert ep._login2(url, "alice", "hunter2", timeout=0.2) == (
             "unreachable",
@@ -2169,12 +2172,18 @@ def test_login2_does_not_leave_its_abandoned_request_running(
     workers = [t for t in created if t.name == "emubox-ra-login2"]
     assert len(workers) == 1, created
     worker = workers[0]
-    # 30 s is generous headroom over the 0.2 s per-socket timeout passed to
-    # `_login2` above - the worker's own recv() gives up on that schedule,
-    # so this bound exists only to cap a genuine leak, not to describe how
-    # long a passing run takes: `join` returns the moment the thread
-    # actually finishes, so a fast pass costs nothing extra here.
-    worker.join(timeout=30.0)
+    # The bound has to sit BELOW the handler's hold - 10 s, above - and
+    # that is the only thing that makes this a test at all. The abandoned
+    # worker leaves recv() early because of the per-socket timeout; without
+    # one it stays there until the server finally answers, so any bound
+    # above the hold sees the worker finish on its own either way and
+    # asserts nothing. A 30 s bound did exactly that: deleting
+    # `timeout=timeout` from the urlopen call left this test green.
+    #
+    # 5 s is comfortably under the 10 s hold and comfortably over the 0.2 s
+    # per-socket schedule the worker really gives up on, and `join` returns
+    # the moment the thread finishes, so a passing run does not wait here.
+    worker.join(timeout=5.0)
     assert not worker.is_alive(), "abandoned login2 worker thread is still running"
 
 

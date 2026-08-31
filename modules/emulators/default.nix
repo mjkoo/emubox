@@ -1,5 +1,33 @@
-# Design section 6: RetroArch cores for everything through the disc
-# generations, standalone only where the core is weak or absent.
+# The emulator layer: which program plays each system, how it is
+# configured, and what firmware it needs.
+#
+# Design section 6 gives the shape - RetroArch cores for everything through
+# the disc generations, standalone only where the core is weak or absent -
+# but this file has grown well past that one sentence. Its sections, in the
+# order they appear:
+#
+# 1. Paths and packages. Each emulator's own config file path, verified
+#    against that emulator's source at the pinned revision, bound exactly
+#    once so no two call sites can drift apart; the RetroArch build and the
+#    cores directory that follows from it.
+# 2. Frontend overrides (design D5). Every system whose assigned emulator
+#    differs from ES-DE's bundled default, copied verbatim from the pinned
+#    upstream `es_systems.xml` with only the command order rewritten, and
+#    contributed to `emubox.kiosk.customSystems`.
+# 3. BIOS inventory (design D6). One entry per firmware-required system
+#    that has a citable published checksum, rendered to
+#    `/etc/emubox/bios-inventory.json` for `emubox-check-bios`.
+# 4. RetroAchievements tables (design D1-D4). `raEmulators` names, per
+#    emulator, where each credential and switch lives; `raDisabledFiles`
+#    is the static half of the disabled path.
+# 5. `config`. The packages, the owned-values tables that
+#    `emubox-prepare` asserts before every launch, and the
+#    retroachievements namespace handed to `modules/kiosk`.
+#
+# If this file is ever split, those five are the seams: 2, 3 and 4 each
+# stand alone and are consumed through a single binding
+# (`customSystems`, `biosInventoryFile`, `raEmulators`), while 1 and 5 are
+# what actually need to stay together.
 {
   config,
   lib,

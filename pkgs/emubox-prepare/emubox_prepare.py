@@ -19,15 +19,23 @@ the frontend itself reads; if it is unset or empty this program writes
 nothing and exits non-zero, because that is a broken call site rather than a
 broken configuration and the session ending at the greeter is the point.
 
-The owned-values JSON maps a settings file to the format of that file and
-the keys owned in it:
+The owned-values JSON is an object with two keys (design D1):
 
-    {"settings/es_settings.xml": {"format": "esde-xml", "keys": {...}}}
+    {
+        "files": {"settings/es_settings.xml": {"format": "esde-xml", "keys": {...}}},
+        "retroachievements": null
+    }
 
-A relative path resolves under the appdata root; an absolute one is used as
-written, which is how later epics reach files outside it. The `keys` shape
-is the editor's: `{name: {"type": ..., "value": ...}}` for `esde-xml`,
-`{section: {key: value}}` for `ini`, `{key: value}` for `retroarch`. Later
+`files` maps a settings file to the format of that file and the keys owned
+in it, exactly as the bare map once did on its own. A relative path resolves
+under the appdata root; an absolute one is used as written, which is how
+later epics reach files outside it. The `keys` shape is the editor's:
+`{name: {"type": ..., "value": ...}}` for `esde-xml`, `{section: {key:
+value}}` for `ini`, `{key: value}` for `retroarch`. `retroachievements`,
+when not null, carries the tables a later epic uses to drive the
+RetroAchievements integration; a null value means the feature is disabled,
+and there is no separate enabled flag inside the namespace. This program
+does not yet read `retroachievements` beyond checking its shape. Later
 epics extend the tables, not the editors.
 
 Error policy: recreate, not fail. A file that is missing, unreadable or
@@ -507,13 +515,32 @@ def main(argv: Sequence[str]) -> int:
     # end at the greeter. It still ends with a line in the journal rather
     # than a stack trace, which is what an admin reading `journalctl` needs.
     try:
-        tables = json.loads(Path(owned_values).read_text())
+        document = json.loads(Path(owned_values).read_text())
     except (OSError, ValueError) as error:
         note(f"{owned_values} is not readable owned-values JSON ({error})")
         return 1
+    if not isinstance(document, dict):
+        note(
+            f"{owned_values}: expected an object with 'files' and "
+            f"'retroachievements', got {type(document).__name__}"
+        )
+        return 1
+    tables = document.get("files")
     if not isinstance(tables, dict):
         note(
-            f"{owned_values}: expected an object of files, got {type(tables).__name__}"
+            f"{owned_values}: expected 'files' to be an object, "
+            f"got {type(tables).__name__}"
+        )
+        return 1
+    # `retroachievements` is not read yet - this group only owns the shape - but
+    # a document a later epic will produce must already be rejected here if it
+    # is malformed, rather than passing this program only to fail the one that
+    # reads it (design D1: missing is equivalent to null).
+    retroachievements = document.get("retroachievements")
+    if retroachievements is not None and not isinstance(retroachievements, dict):
+        note(
+            f"{owned_values}: expected 'retroachievements' to be an object or "
+            f"null, got {type(retroachievements).__name__}"
         )
         return 1
     for relative, table in tables.items():

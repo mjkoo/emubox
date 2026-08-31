@@ -244,7 +244,12 @@ in
           # what the table says. Neither alone is enough: the table could be
           # right and unapplied, or applied and wrong.
           owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
-          keys = owned["settings/es_settings.xml"]["keys"]
+          # The document's shape itself is pinned here: `files` carries what
+          # this test already checked, and `retroachievements` is null until
+          # the emulators-retroachievements change's later groups give the
+          # module something to put there (design D1).
+          assert owned["retroachievements"] is None, owned["retroachievements"]
+          keys = owned["files"]["settings/es_settings.xml"]["keys"]
 
           # Pinned here, literally, and deliberately not derived from the
           # module: the loop below compares the settings file against this

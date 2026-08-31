@@ -443,7 +443,14 @@ def test_custom_systems_empty_argument_with_no_file_is_not_an_error(
 def owned_values_file(tmp_path: Path) -> Path:
     path = tmp_path / "owned.json"
     path.write_text(
-        json.dumps({"settings/es_settings.xml": {"format": "esde-xml", "keys": OWNED}})
+        json.dumps(
+            {
+                "files": {
+                    "settings/es_settings.xml": {"format": "esde-xml", "keys": OWNED}
+                },
+                "retroachievements": None,
+            }
+        )
     )
     return path
 
@@ -699,8 +706,70 @@ def test_main_reports_an_unknown_format_without_a_traceback(
 ) -> None:
     monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
     values = tmp_path / "owned.json"
-    values.write_text(json.dumps({"f.conf": {"format": "toml", "keys": {}}}))
+    values.write_text(json.dumps({"files": {"f.conf": {"format": "toml", "keys": {}}}}))
 
     assert ep.main([str(values), ""]) == 1
 
     assert "unknown format" in capsys.readouterr().err
+
+
+# --- The owned-values document shape (design D1) --------------------------
+
+
+def test_main_rejects_a_top_level_value_that_is_not_an_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(json.dumps([]))
+
+    assert ep.main([str(values), ""]) == 1
+
+    assert "object" in capsys.readouterr().err
+
+
+def test_main_rejects_owned_values_missing_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(json.dumps({"retroachievements": None}))
+
+    assert ep.main([str(values), ""]) == 1
+
+    assert "files" in capsys.readouterr().err
+
+
+def test_main_rejects_files_that_is_not_an_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(json.dumps({"files": [], "retroachievements": None}))
+
+    assert ep.main([str(values), ""]) == 1
+
+    assert "files" in capsys.readouterr().err
+
+
+def test_main_rejects_retroachievements_that_is_not_an_object_or_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(json.dumps({"files": {}, "retroachievements": "enabled"}))
+
+    assert ep.main([str(values), ""]) == 1
+
+    assert "retroachievements" in capsys.readouterr().err
+
+
+def test_main_treats_an_absent_retroachievements_key_as_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # design D1: missing is equivalent to null, not an error.
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(json.dumps({"files": {}}))
+
+    assert ep.main([str(values), ""]) == 0

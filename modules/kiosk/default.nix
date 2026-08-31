@@ -17,7 +17,7 @@ let
     type = "string";
     inherit value;
   };
-  ownedValues = {
+  ownedFiles = {
     "settings/es_settings.xml" = {
       format = "esde-xml";
       keys = {
@@ -37,6 +37,14 @@ let
         };
       };
     };
+  };
+  # The owned-values document emubox-prepare reads. `retroachievements` is a
+  # second namespace beside `files` (design D1, emulators-retroachievements);
+  # this module has no RetroAchievements configuration yet, so it is always
+  # null, which is what tells prepare the feature is disabled.
+  ownedValues = {
+    files = ownedFiles;
+    retroachievements = null;
   };
 
   # The empty string, not a store path to an empty file: the empty value is

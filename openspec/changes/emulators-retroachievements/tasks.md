@@ -5,10 +5,10 @@
 
 ## 2. Prepare: RetroAchievements login and tokens (design D2, D3)
 
-- [ ] 2.1 Implement token resolution in prepare: `login2` POST on every run with 5 s timeout against the JSON's API URL, cache refresh 0600 on success, cache fallback on network failure, invalid-credentials cache drop, and the skip-tokens-and-continue path, with unit tests using a fake HTTP handler for each branch
-- [ ] 2.2 Implement the RA-derived table merge: username, token, enabled and hardcore keys folded into the owned tables for RetroArch, Dolphin, PCSX2, PPSSPP; enabled-off tables when `retroachievements` is null (null means disabled, per design D1); tests per emulator target
-- [ ] 2.3 Implement the DuckStation token transform (machine-id raw bytes + username through SHA-256 and 100 rounds, AES-128-CBC via `cryptography`, zero padding, base64) plus `Username` and change-gated `LoginTimestamp`, with a round-trip test against an independent decrypt implementation and a fixed-vector test
-- [ ] 2.4 Add `cryptography` to the prepare package and confirm ruff, ty and pytest pass under `nix flake check` on macOS
+- [x] 2.1 Implement token resolution in prepare: `login2` POST on every run with 5 s timeout against the JSON's API URL, cache refresh 0600 on success, cache fallback on network failure, invalid-credentials cache drop, and the skip-tokens-and-continue path, with unit tests using a fake HTTP handler for each branch
+- [x] 2.2 Implement the RA-derived table merge: username, token, enabled and hardcore keys folded into the owned tables for RetroArch, Dolphin, PCSX2, PPSSPP; enabled-off tables when `retroachievements` is null (null means disabled, per design D1); tests per emulator target
+- [x] 2.3 Implement the DuckStation token transform (machine-id raw bytes + username through SHA-256 and 100 rounds, AES-128-CBC via `cryptography`, zero padding, base64) plus `Username` and change-gated `LoginTimestamp`, with a round-trip test against an independent decrypt implementation and a fixed-vector test
+- [x] 2.4 Add `cryptography` to the prepare package and confirm ruff, ty and pytest pass under `nix flake check` on macOS
 
 ## 3. Emulator owned tables and options (design D4)
 

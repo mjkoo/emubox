@@ -85,7 +85,254 @@ let
     http.server.HTTPServer(("127.0.0.1", ${toString mockPort}), Handler).serve_forever()
   '';
 
+  # --- Homebrew ROM fixtures (design D7; vm-test spec "Core families launch
+  # headless") -----------------------------------------------------------
+  #
+  # One freely-redistributable ROM per BIOS-free RetroArch core family,
+  # fetched by URL and SRI hash as a test-only input - never part of the
+  # system closure (design's risk list: "fixtures are test-only inputs, not
+  # part of the system closure"). Every hash below was independently
+  # re-verified by actually building the `fetchurl`/`fetchzip` expression
+  # against the live URL, not copied from a research note on trust; two of
+  # them (Virtual Boy, Genesis Plus GX) turned out to need a different hash
+  # than a plain `nix-prefetch-url --unpack` reports for the same archive -
+  # `fetchzip`'s own unpack normalises permissions slightly differently for
+  # those two zips, so the hash that actually matters is the one `fetchzip`
+  # itself produces, confirmed by building it. `stripRoot = false` appears
+  # wherever the archive is a flat file listing with no single wrapping
+  # directory - `fetchzip`'s default strip errors on exactly that shape
+  # ("zip file must contain a single file or directory"), confirmed by
+  # trying the default first.
+  #
+  # Two families with no qualifying candidate after two independent searches
+  # (below, `exemptFamilies`) are named exempt rather than silently skipped.
+
+  # Shared between the two PC Engine-family cores below: the SuperGrafx core
+  # is a PCE-compatible superset and ES-DE's own supergrafx extension list
+  # already includes `.pce`, so one HuCard test ROM loads on both.
+  pceHuCardTestSuite = "${
+    pkgs.fetchzip {
+      # GPL-2.0; GPLv2.txt is shipped inside the archive itself (Artemio
+      # Urbina's 240p Test Suite, PC Engine HuCard port v1.10).
+      url = "https://downloads.sourceforge.net/project/testsuite240p/OldFiles/PCE-TG16-SCD/240pSuite_1.10_HuCard.zip";
+      stripRoot = false;
+      hash = "sha256-POoV8MjrAxztetq2jxwh19Fp/ykgI1Dv5IcuL9sleq4=";
+    }
+  }/240pSuite.pce";
+
+  # The zip holds two executables at its root (a Covox DAC build and a
+  # PC-speaker build); DOSBox Pure shows an exe-picker menu instead of
+  # auto-running when more than one is present, so the fixture is the single
+  # PC-speaker build extracted on its own.
+  dosboxPureFixture = "${
+    pkgs.fetchzip {
+      # MIT; the repo's LICENSE file (vsariola/tubiform, a 256-byte
+      # demoscene intro released at Lovebyte 2022).
+      url = "https://github.com/vsariola/tubiform/releases/download/rc1/tubiform.zip";
+      stripRoot = false;
+      hash = "sha256-O6nmc2kGp2mYDVCZzYXSh4c8q3p57Kwqz5wzX5fz8qM=";
+    }
+  }/spkrtubi.com";
+
+  homebrewFixtures = [
+    {
+      family = "Atari 2600 (Stella)";
+      core = "stella_libretro.so";
+      rom = pkgs.fetchurl {
+        # CC0-1.0; the repository's LICENSE file is the full CC0 legal text
+        # (murilomgrosso/Core-Escape, commit 8cdce9b).
+        url = "https://raw.githubusercontent.com/murilomgrosso/Core-Escape/8cdce9be1d4df120ba5a8fa3b8608876d287467f/bin/core-escape.asm.bin";
+        hash = "sha256-4PZcSDXr/HCatnENeeBKc0HDfeKam7Q5p0DAL3ibDnU=";
+      };
+    }
+    {
+      family = "NES (Mesen)";
+      core = "mesen_libretro.so";
+      rom = pkgs.fetchurl {
+        # GPL-2.0-or-later; pinobatch/240p-test-mini v0.23's LICENSE file
+        # and its README both state the ports are free software under GPLv2
+        # or later.
+        url = "https://github.com/pinobatch/240p-test-mini/releases/download/v0.23/240pee.nes";
+        hash = "sha256-BPAdc3L2bqK+/jJbm9ZVqfzDlaMfpG2UZihruPnS5i4=";
+      };
+    }
+    {
+      family = "SNES (Snes9x)";
+      core = "snes9x_libretro.so";
+      rom = "${
+        pkgs.fetchzip {
+          # GPL-2.0; GPLv2.txt is shipped inside the archive itself (the
+          # same 240p Test Suite project as the NES entry, SNES port v1.03).
+          url = "https://downloads.sourceforge.net/project/testsuite240p/OldFiles/SNES_SFC/240pSuite-SNES-1.03.zip";
+          stripRoot = false;
+          hash = "sha256-/XXd3avvbpk+NJjsiy2oq4Sw4ZehWRNRJzU9PIgXRoI=";
+        }
+      }/240pSuite.sfc";
+    }
+    {
+      family = "N64 (Mupen64Plus-Next)";
+      core = "mupen64plus_next_libretro.so";
+      rom = pkgs.fetchurl {
+        # Unlicense (public domain dedication); the repo's LICENSE file
+        # (PeterLemon/N64, a bare-metal demo collection).
+        url = "https://raw.githubusercontent.com/PeterLemon/N64/334d939e8c217df63cc99748b7346f3bcc5f9e14/CP1/Fractal/32BPP/320X240/Mandelbrot/Single/Mandelbrot32BPP320X240.N64";
+        hash = "sha256-8V/5PxRnq/iy3Ntprb3v8j7ljgZ930xqsLaw+NlyOds=";
+      };
+    }
+    {
+      family = "GB/GBC (Gambatte)";
+      core = "gambatte_libretro.so";
+      rom = pkgs.fetchurl {
+        # GPL-2.0-or-later, same 240p-test-mini v0.23 project as the NES entry.
+        url = "https://github.com/pinobatch/240p-test-mini/releases/download/v0.23/gb240p.gb";
+        hash = "sha256-cz625+wHGXUt3V/NpOcVwvLiD0rEvJccS9HUknL5uwQ=";
+      };
+    }
+    {
+      family = "GBA (mGBA)";
+      core = "mgba_libretro.so";
+      rom = pkgs.fetchurl {
+        # GPL-2.0-or-later, same 240p-test-mini v0.23 project.
+        url = "https://github.com/pinobatch/240p-test-mini/releases/download/v0.23/240pee_mb.gba";
+        hash = "sha256-R4RPcUBzigb487wJeA2jqwlVOaJQuHD2FP7tVh2dbzQ=";
+      };
+    }
+    {
+      family = "Virtual Boy (Beetle VB)";
+      core = "mednafen_vb_libretro.so";
+      rom = "${
+        pkgs.fetchzip {
+          # MIT; the repo's LICENSE file (VUEngine/VUE-MASTER v1.1 demo
+          # reel). A single-file zip, so no `stripRoot` override is
+          # needed - but its hash, unusually, is NOT what
+          # `nix-prefetch-url --unpack` reports for the same URL; the one
+          # below is what `fetchzip` itself actually produces, confirmed
+          # by building it (see the section comment above).
+          url = "https://github.com/VUEngine/VUE-MASTER/releases/download/v1.1/VUE-MASTER-Demo-Reel_v1_1.vb.zip";
+          hash = "sha256-9evcGjGfgci4JLTppBI41yjbhve0jB1QDvYOEfRqfv4=";
+        }
+      }/VUE-MASTER-Demo-Reel_v1_1.vb";
+    }
+    {
+      family = "WonderSwan (Beetle Cygne)";
+      core = "mednafen_wswan_libretro.so";
+      rom = pkgs.fetchurl {
+        # GPL-3.0-or-later; the project's README states it explicitly
+        # (asiekierka/240p-test-ws v0.2.4).
+        url = "https://github.com/asiekierka/240p-test-ws/releases/download/v0.2.4/144p-test-ws.wsc";
+        hash = "sha256-BwXRDdz9B4SGYT9mZl4ANdRCkaf1JtTZcvZe8IPRaV8=";
+      };
+    }
+    {
+      family = "SMS/Game Gear/Genesis (Genesis Plus GX)";
+      core = "genesis_plus_gx_libretro.so";
+      rom = "${
+        pkgs.fetchzip {
+          # GPL-2.0, same 240p Test Suite project/version family as the
+          # SNES and PC Engine entries (GPLv2.txt shipped in sibling
+          # archives of the same suite). Its hash also had to be taken
+          # from an actual `fetchzip` build rather than
+          # `nix-prefetch-url --unpack`, the same VUE-MASTER situation
+          # above.
+          url = "https://downloads.sourceforge.net/project/testsuite240p/OldFiles/Sega_Genesis-MegaDrive-SegaCD_MegaCD/240pSuite-GenesisMD-1.21.zip";
+          stripRoot = false;
+          hash = "sha256-IzRRAJct+jrA+O8SLuc0qZ+hV5IlWSo7KoTDFjeE6FQ=";
+        }
+      }/240pSuite-1.21.bin";
+    }
+    {
+      family = "Sega 32X (PicoDrive)";
+      core = "picodrive_libretro.so";
+      rom = pkgs.fetchurl {
+        # MIT; the repo's LICENSE file (pw32x/barebones32xproject).
+        url = "https://github.com/pw32x/barebones32xproject/releases/download/barebones32xproject/project.32x";
+        hash = "sha256-fK5LqlSC2ZG84JOSJTu+yktymtXOVsVZLcPfLVMUNxs=";
+      };
+    }
+    {
+      family = "Dreamcast (Flycast)";
+      core = "flycast_libretro.so";
+      rom = "${
+        pkgs.fetchzip {
+          # GPL-2.0, same 240p Test Suite project/version family.
+          url = "https://downloads.sourceforge.net/project/testsuite240p/OldFiles/Dreamcast/240p-DC-PVR-1.25.zip";
+          stripRoot = false;
+          hash = "sha256-zAyHR5ivzjZxNAjYFt1jiFjyL0oU0jkoIc3vc+WRLnI=";
+        }
+      }/240pSuite.cdi";
+    }
+    {
+      family = "PC Engine/TurboGrafx-16 (Beetle PCE Fast)";
+      core = "mednafen_pce_fast_libretro.so";
+      rom = pceHuCardTestSuite;
+    }
+    {
+      family = "SuperGrafx (Beetle SuperGrafx)";
+      core = "mednafen_supergrafx_libretro.so";
+      rom = pceHuCardTestSuite;
+    }
+    {
+      family = "DOS (DOSBox Pure)";
+      core = "dosbox_pure_libretro.so";
+      # A looping demoscene intro with music that never exits on its own;
+      # `--max-frames` (the test script, below) is what forces every
+      # fixture - including this one and Vectrex's - to a clean exit, which
+      # is this design's practical form of "assert liveness over frames
+      # rather than expecting a still image".
+      rom = dosboxPureFixture;
+    }
+    {
+      family = "C64 (VICE x64)";
+      core = "vice_x64_libretro.so";
+      rom = pkgs.fetchurl {
+        # MIT; the repo's LICENSE file (celso/c64, "C64 Christmas Demo").
+        url = "https://raw.githubusercontent.com/celso/c64/e16dcccf6e14d4fb8d0270600a19b4a17d8e587e/card.prg";
+        hash = "sha256-j8G4Ud1YgWYM/Lr9aAlwFOFYblql4MWfP9rioyIJUwA=";
+      };
+    }
+    {
+      family = "Vectrex (vecx)";
+      core = "vecx_libretro.so";
+      # A continuously-animating bouncing-box demo, not a static screen
+      # (verified from the fetched bytes' own cartridge header and the
+      # tutorial series' description) - same "assert liveness over frames"
+      # treatment as DOSBox Pure above.
+      rom = pkgs.fetchurl {
+        # GPL-3.0; both the repo's LICENSE file and the source file's own
+        # header comment agree (JoakimLarsson/VectrexTutorial, "bouncer6").
+        url = "https://raw.githubusercontent.com/JoakimLarsson/VectrexTutorial/82170ef24864f30957eb55af919fda8dcc51fd98/bin/bouncer6.bin";
+        hash = "sha256-MOMfxdG40RCouhj1XzKNVaZnErXymlFBVgh8V3ymreQ=";
+      };
+    }
+  ];
+
+  # Named-exempt core families (vm-test spec: "the configuration SHALL name
+  # each exempt family"). After two independent searches, no homebrew ROM
+  # for either family carries an explicit licence or redistribution grant
+  # from its author, and these fixtures would be fetched by a public CI run
+  # and pushed through a public binary cache - so neither gets a headless
+  # launch here. Both move to the E12 hardware checklist instead (design D7:
+  # "an exempt family is a hardware checklist item, like the BIOS-dependent
+  # cores").
+  exemptFamilies = [
+    {
+      family = "Atari 7800 (ProSystem)";
+      reason = "every compiled .a78 binary found sits in a repo with no LICENSE file and no redistribution statement; every repo with an explicit permissive licence ships source only, with no compiled ROM in the repo or in Releases";
+    }
+    {
+      family = "Neo Geo Pocket / Color (Beetle NeoPop)";
+      reason = "no NGP/NGPC homebrew was found that combines a real named title, an explicit author licence or redistribution statement, and a stable direct URL; 'PD' tags on individually found ROMs are third-party cataloguing, not author grants";
+    }
+  ];
 in
+assert lib.assertMsg (lib.length homebrewFixtures == 16) ''
+  tests/kiosk.nix: expected 16 pinned homebrew fixtures (the vm-test spec's
+  core-family coverage), got ${toString (lib.length homebrewFixtures)}.
+'';
+assert lib.assertMsg (lib.length exemptFamilies == 2) ''
+  tests/kiosk.nix: expected 2 named-exempt core families, got
+  ${toString (lib.length exemptFamilies)}.
+'';
 {
   name = "emubox-kiosk";
 
@@ -727,5 +974,46 @@ in
           # should not leave the machine in a state a later subtest did not
           # itself choose.
           rerun_prepare(OWNED_VALUES)
+
+      # --- emulators: BIOS-free core families launch headless (design D7) --
+
+      with subtest("Every BIOS-free core family with a licensed ROM runs headless"):
+          # video_driver overridden per run (design D7), not baked into the
+          # frontend's own owned copy of retroarch.cfg, which stays
+          # fullscreen for the box; only this ad hoc run needs a driver that
+          # produces no GPU output at all. audio_driver is overridden the
+          # same way - this VM has no real audio device, and RetroArch's
+          # default driver would otherwise just log an ALSA failure and
+          # continue, noise this test has no reason to invite.
+          override = "/tmp/emubox-retroarch-headless-override.cfg"
+          machine.succeed(
+              f"printf '%s\\n' 'video_driver = \"null\"' 'audio_driver = \"null\"' > {override}"
+          )
+          for fixture in ${
+            py (
+              map (f: {
+                inherit (f) family core;
+                rom = "${f.rom}";
+              }) homebrewFixtures
+            )
+          }:
+              cmd = (
+                  "retroarch "
+                  f"-L /run/current-system/sw/lib/retroarch/cores/{fixture['core']} "
+                  f"{shlex.quote(fixture['rom'])} "
+                  f"--appendconfig {override} --max-frames 60 --verbose 2>&1"
+              )
+              # 60 frames is enough to prove the core loaded and ran without
+              # paying more than a couple of seconds of CI time per family;
+              # `--max-frames` is also what forces even the two fixtures that
+              # never exit on their own (DOSBox Pure's looping demo,
+              # Vectrex's free-running animation) to a clean exit 0 - this
+              # design's "assert liveness over frames" in practice, since
+              # RetroArch itself decides to quit, not the content.
+              out = machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+              assert fixture["core"] in out, (
+                  f"{fixture['family']}: expected {fixture['core']!r} in the RetroArch log\n{out}"
+              )
+
     '';
 }

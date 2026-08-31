@@ -203,7 +203,12 @@ admin-password secrets (see Install, below).
 to false: a freshly installed box with real credentials and a working
 network unlocks achievements everywhere with nobody touching an emulator
 menu, and hardcore's stricter rules (no save states, no rewind, no cheats)
-are opt-in rather than the default. The account password itself never
+are opt-in rather than the default. `emubox.retroachievements.apiUrl`
+defaults to the real RetroAchievements API and only needs setting to point
+`emubox-prepare`'s login at a different endpoint - a mock server in the
+kiosk VM test, or a self-hosted RetroAchievements-compatible service; it
+must be an `http://` or `https://` URL, since `emubox-prepare` posts the
+login there directly. The account password itself never
 reaches any emulator's configuration file - only the session token the
 login exchanges it for does, and DuckStation gets that token in the
 encrypted form it expects to find on disk rather than in plain text (see

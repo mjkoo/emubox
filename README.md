@@ -156,17 +156,25 @@ admin whether what they put there is the file it expects. A file under
 `/data/bios` the inventory does not name is harmless: it is neither
 validated nor required, only reported as an informational extra.
 
-The inventory does not (yet) cover every BIOS-needing system, and that gap
-is deliberate rather than an oversight: PCSX2 validates a BIOS only by file
-size and an internal `ROMVER` string, never a hash, so there is nothing to
-check against; blueMSX needs whole `Databases`/`Machines` directory trees
-copied from a full install rather than one file with one checksum; Arcade's
-BIOS is a per-game board ROM set that lives beside each game's own files,
-not a single fixed image an inventory entry can name. For systems that
-could in principle be checked, an entry is only added once a source this
-project can stand behind publishes a checksum for it - see
+The inventory covers the systems that cannot run anything at all without
+firmware. It does not (yet) cover three of them, and that gap is deliberate
+rather than an oversight: PCSX2 validates a BIOS only by file size and an
+internal `ROMVER` string, never a hash, so there is nothing to check
+against; blueMSX needs whole `Databases`/`Machines` directory trees copied
+from a full install rather than one file with one checksum; Arcade's BIOS is
+a per-game board ROM set that lives beside each game's own files, not a
+single fixed image an inventory entry can name. For systems that could in
+principle be checked, an entry is only added once a source this project can
+stand behind publishes a checksum for it - see
 `modules/emulators/default.nix` for the current inventory and which systems
 are still waiting on one.
+
+Systems whose BIOS is optional are not declared either, and for a different
+reason: they play games without it. Atari 7800 and GBA both run fine with no
+BIOS image, and Dreamcast uses Flycast's HLE BIOS by default. Nothing in the
+inventory names them, so `emubox-check-bios` will never ask for those files
+or report them missing - an admin who drops one in gets an `EXTRA` line and
+the emulator picks it up regardless.
 
 ### Checking what's there
 
@@ -213,6 +221,13 @@ reaches any emulator's configuration file - only the session token the
 login exchanges it for does, and DuckStation gets that token in the
 encrypted form it expects to find on disk rather than in plain text (see
 the bump runbook in `pkgs/duckstation/package.nix` for the scheme).
+Setting `emubox.retroachievements.enable = false` does more than stop new
+logins: on the next launch it actively removes the account's credentials
+from the box - the account name and session token in every supporting
+emulator's configuration, PPSSPP's separate token file, and the cached login
+token under `/data` - so switching the feature off takes the token off the
+disk rather than leaving the last one there unused.
+
 RetroAchievements being unreachable, offline, rejected, or simply disabled
 all cost only the achievements: the frontend still starts on its normal
 schedule, and a failed or skipped login is recorded in the journal rather

@@ -11,16 +11,90 @@
 #
 # What it proves is design D5's coverage table, which is the change's single
 # enumeration of what proves each kiosk scenario. An assertion added or
-# dropped here starts as an edit there.
+# dropped here starts as an edit there. The emulator and RetroAchievements
+# assertions appended at the end of this file are design D7's group instead -
+# the vm-test and retroachievements specs' own enumeration of what a fresh
+# box proves without hardware.
 { self }:
 let
   # The one test hook the session script carries (design D5). A number here,
   # rendered into the node's environment and into the script's waits, so the
   # two cannot drift.
   crashWindow = 30;
+
+  # The host's own package set (nixpkgsConfig, the overlay, unfree cores
+  # allowed) rather than a bare `import <nixpkgs> {}`: the same trick
+  # flake.nix's own `hostPkgs` uses, so a ROM fixture or the mock server
+  # script is built with the exact packages the box itself would see, not a
+  # second nixpkgs evaluation that happens to agree with it.
+  pkgs = self.nixosConfigurations.emubox.pkgs;
+  inherit (pkgs) lib;
+
+  # The single source for every plaintext test value (tests/values.nix's own
+  # header); `raUsername`/`raPassword` are the mock RetroAchievements
+  # account's credentials.
+  values = import ./values.nix;
+
+  # design D7's mock RA endpoint (below): a static token and a fixed port.
+  # Not a secret - it is server-side data the mock always returns, never a
+  # credential read from the secrets store - so it lives here rather than in
+  # tests/values.nix, whose header reserves that file for actual test input
+  # values.
+  mockToken = "emubox-mock-ra-token-0123456789abcdef";
+  mockPort = 8080;
+
+  # The mock `login2` endpoint (design D7): a static Python HTTP server, on
+  # the node's own loopback interface rather than a second VM node.
+  #
+  # Design D7 reads "a python HTTP server on the test network"; this project
+  # has no KVM anywhere in its own toolchain (VM tests are CI-only, per the
+  # repository's own working notes), so a second node's networking - vlans,
+  # static addressing, NetworkManager's `unmanaged` interface list to keep it
+  # off an interface this project has never exercised together before - is
+  # exactly the kind of thing that would have to be debugged blind, one full
+  # CI cycle at a time. Loopback and a systemd service this test starts and
+  # stops explicitly gets the same three behaviours the specs actually ask
+  # for - reachable-with-a-good-login, reachable-with-a-rejection (not used
+  # by this change) and unreachable - with no networking surface this
+  # project has not already proven elsewhere. `_login2`'s own error handling
+  # (emubox_prepare.py) treats a connection refused identically to a routed
+  # timeout: both are "unreachable", so the scenario this stands in for is
+  # exercised faithfully, just not over a wire.
+  mockServerScript = pkgs.writeText "emubox-mock-ra-server.py" ''
+    import http.server
+    import json
+
+    TOKEN = ${builtins.toJSON mockToken}
+
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)  # the login2 body is never inspected
+            body = json.dumps({"Success": True, "Token": TOKEN}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass  # keep the journal free of one line per prepare run
+
+
+    http.server.HTTPServer(("127.0.0.1", ${toString mockPort}), Handler).serve_forever()
+  '';
+
 in
 {
   name = "emubox-kiosk";
+
+  # DuckStation's token-decrypt round-trip (design D3, D7) is written from
+  # scratch in the test script below rather than imported from
+  # emubox_prepare.py - the whole point of an independent implementation -
+  # so it needs its own `cryptography` in the driver's own Python, not the
+  # guest's.
+  extraPythonPackages = ps: [ ps.cryptography ];
 
   nodes.machine =
     { lib, ... }:
@@ -78,7 +152,19 @@ in
       # SDDM, cage and ES-DE under llvmpipe. 2 GB and a virtio GPU are what
       # nixpkgs' own cage test uses; both are one-line adjustments if the
       # frontend turns out to need more.
-      virtualisation.memorySize = 2048;
+      #
+      # Bumped to 3 GB for emulators-retroachievements (design D7 explicitly
+      # allows this): the RetroArch and standalone launches appended at the
+      # end of this test run one process at a time, after the kiosk session
+      # is already up (cage + es-de stay resident throughout), so the extra
+      # headroom only has to cover one emulator's peak footprint on top of
+      # the session, not the sum of all of them. Chosen without a way to
+      # measure on real hardware - VM tests are CI-only for this project -
+      # so a generous, round bump rather than a tightly tuned one; a second
+      # node was the other option design D7 named, and was rejected because
+      # it would double this test's boot cost in CI for every run, not just
+      # the ones that touch emulators.
+      virtualisation.memorySize = 3072;
       virtualisation.qemu.options = [ "-vga none -device virtio-gpu-pci" ];
 
       # The one test hook the session script carries. SDDM's PAM stack
@@ -132,6 +218,28 @@ in
           </system>
         </systemList>
       '';
+
+      # design D7: prepare's login2 call is pointed at the mock server
+      # above instead of the real service, with no patching. The service
+      # itself starts stopped (below) - the test script starts it only for
+      # the subtests that need a reachable endpoint - so every boot and
+      # relaunch before that point in the test genuinely has no route to
+      # it, which is what proves the offline-with-no-cache scenario without
+      # a second, dedicated boot.
+      emubox.retroachievements.apiUrl = "http://127.0.0.1:${toString mockPort}/dorequest.php";
+
+      systemd.services.emubox-mock-retroachievements = {
+        description = "Mock RetroAchievements login2 endpoint for the kiosk VM test (design D7)";
+        # No `wantedBy`: this unit is never started at boot. The test script
+        # starts and stops it explicitly, which is what makes "no route to
+        # the endpoint" and "a reachable endpoint" both provable from the
+        # same node.
+        serviceConfig = {
+          ExecStart = "${pkgs.python3.interpreter} ${mockServerScript}";
+          Restart = "always";
+          DynamicUser = true;
+        };
+      };
     };
 
   testScript =
@@ -143,18 +251,42 @@ in
         passkey
         customSystems
         ;
+      inherit (nodes.machine.emubox.retroachievements) apiUrl;
+      inherit (nodes.machine.users.users.player) home;
       py = builtins.toJSON;
+
+      # The store path `modules/kiosk`'s own `customSystemsPath` computes
+      # internally for this exact node (same `writeText` name, same
+      # content) - recomputed here rather than exposed as a new option,
+      # since this is the only place outside that module that ever needs a
+      # custom-systems argument for a manual `emubox-prepare` invocation,
+      # and it has to be the real one: passing "" here instead would repeat
+      # the existing "empty definition removes the file" subtest by
+      # accident, which is not what any of the group 5 subtests below are
+      # about.
+      customSystemsPath = pkgs.writeText "emubox-es_systems.xml" customSystems;
     in
     ''
+      import base64
+      import hashlib
       import json
       import re
       import shlex
       import xml.etree.ElementTree as ET
 
+      from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
       APPDATA = ${py appdataDir}
       OWNED_VALUES = ${py ownedValuesFile}
       SETTINGS = f"{APPDATA}/settings/es_settings.xml"
       CUSTOM_SYSTEMS = f"{APPDATA}/custom_systems/es_systems.xml"
+      CUSTOM_SYSTEMS_PATH = ${py customSystemsPath}
+      PLAYER_HOME = ${py home}
+
+      RA_API_URL = ${py apiUrl}
+      RA_USERNAME = ${py values.raUsername}
+      RA_PASSWORD = ${py values.raPassword}
+      MOCK_TOKEN = ${py mockToken}
 
       def esde_pids():
           rc, out = machine.execute("pgrep -x es-de")
@@ -208,6 +340,107 @@ in
               for e in ET.fromstring(f"<r>{body}</r>")
           }
 
+      def ini_value(text, section, key):
+          """The value of one `key = value` line, or None if it is absent.
+
+          `section=None` reads a sectionless file (RetroArch's flat config)
+          by never leaving the "in section" state; otherwise only lines
+          under the matching `[section]` header count, mirroring
+          emubox-prepare's own `_ini_section_bounds` shape without importing
+          it - this is a plain reader, not the independent-implementation
+          concern (that is the DuckStation decrypt below).
+          """
+          in_section = section is None
+          for line in text.splitlines():
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  in_section = stripped[1:-1] == section
+                  continue
+              if not in_section or "=" not in stripped:
+                  continue
+              k, _, v = stripped.partition("=")
+              if k.strip() == key:
+                  return v.strip()
+          return None
+
+      def resolve(root, value):
+          """A path from the retroachievements namespace, root-relative or
+          absolute - the same convention emubox_prepare.py's `_resolve_path`
+          uses."""
+          return value if value.startswith("/") else f"{root}/{value}"
+
+      def read_target_value(target, key_name):
+          """The on-disk value for one retroachievements target's key.
+
+          None if the target's table does not declare this key at all (e.g.
+          "token" for the ppsspp target, which carries it in `token_file`
+          instead) or if the file does not have it written. RetroArch's flat
+          format quotes its values; every other declared format here is
+          `ini`, so the two are told apart by whether the entry carries a
+          `section`, exactly as emubox_prepare.py's own validation does.
+          """
+          entry = target["keys"].get(key_name)
+          if entry is None:
+              return None
+          text = machine.succeed(f"cat {resolve(APPDATA, entry['file'])}")
+          if "section" in entry:
+              return ini_value(text, entry["section"], entry["key"])
+          value = ini_value(text, None, entry["key"])
+          return value if value is None else value.strip('"')
+
+      def duckstation_decrypt(machine_id, username, ciphertext_b64):
+          """The plaintext DuckStation v0.1-11752 would recover from
+          `Cheevos.Token` - a second, from-scratch implementation of design
+          D3's scheme (SHA-256 over the machine-id file's raw bytes and the
+          username, 100 further rounds, AES-128-CBC with key = digest[0:16]
+          and IV = digest[16:32], zero padding, base64), written without
+          reading emubox_prepare.py's own encrypt_duckstation_token so a
+          real scheme mismatch fails loudly instead of both sides agreeing
+          with themselves. Verified locally against a fixed vector computed
+          from prepare's own implementation before this file was committed:
+          machine_id=b"deadbeefdeadbeefdeadbeefdeadbeef\\n",
+          username="emubox-test-ra", token="emubox-mock-ra-token-0123456789abcdef"
+          encrypts to "wsbpyqL9fPkm7teZx7BEZQ4FgEhRYZEC9uA8O2L6meiaDe2kFWrXHd1xX7k9h39f",
+          and this function recovers the same token from it.
+          """
+          digest = hashlib.sha256(machine_id + username.encode()).digest()
+          for _ in range(100):
+              digest = hashlib.sha256(digest).digest()
+          key, iv = digest[:16], digest[16:32]
+          ciphertext = base64.b64decode(ciphertext_b64)
+          decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+          plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+          # DuckStation zero-pads to a 16-byte boundary rather than PKCS#7
+          # (design D3), so the padding is stripped the same way.
+          return plaintext.rstrip(b"\x00").decode()
+
+      def rerun_prepare(owned_values_path):
+          """Re-run prepare as `player` against a given owned-values JSON,
+          with the real custom-systems path (not the empty-removal one the
+          "empty definition" subtest above uses)."""
+          cmd = (
+              f"ESDE_APPDATA_DIR={APPDATA} emubox-prepare "
+              f"{owned_values_path} {CUSTOM_SYSTEMS_PATH}"
+          )
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+
+      def sweep_for_password(owned):
+          """Every file the flake owns a value in, plus the two credential
+          files prepare writes outside that map (the ppsspp token file, the
+          login cache) - none of them may ever contain the account
+          password. A missing file (the cache before any successful login)
+          is not an error here; there is simply nothing to check yet."""
+          paths = {resolve(APPDATA, relative) for relative in owned["files"]}
+          ra = owned["retroachievements"]
+          paths.add(resolve(APPDATA, ra["cache_file"]))
+          for target in ra["targets"]:
+              if target.get("token_file"):
+                  paths.add(resolve(APPDATA, target["token_file"]))
+          for path in paths:
+              rc, out = machine.execute(f"cat {shlex.quote(path)}")
+              if rc == 0:
+                  assert RA_PASSWORD not in out, f"{path} contains the RA password"
+
       machine.wait_for_unit("multi-user.target")
 
       # --- vm-test: the session comes up ------------------------------------
@@ -252,10 +485,22 @@ in
           # right and unapplied, or applied and wrong.
           owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
           # The document's shape itself is pinned here: `files` carries what
-          # this test already checked, and `retroachievements` is null until
-          # the emulators-retroachievements change's later groups give the
-          # module something to put there (design D1).
-          assert owned["retroachievements"] is None, owned["retroachievements"]
+          # this test already checked. `retroachievements` is no longer null
+          # since emulators-retroachievements (design D1): `modules/emulators`
+          # defaults `emubox.retroachievements.enable` to true, so this node
+          # carries a real namespace rather than the disabled sentinel. Only
+          # the namespace's own shape is pinned here - the api_url this node
+          # set, the declared-off hardcore default, and which five emulators
+          # own a target - not every key spelling, which is what
+          # test_emubox_prepare.py's own unit tests already pin per encoding
+          # (design D4: "verified at apply time").
+          ra = owned["retroachievements"]
+          assert ra is not None, owned["retroachievements"]
+          assert ra["api_url"] == RA_API_URL, ra["api_url"]
+          assert ra["hardcore"] is False, ra["hardcore"]
+          target_names = {t["name"] for t in ra["targets"]}
+          assert target_names == {"retroarch", "dolphin", "pcsx2", "ppsspp", "duckstation"}, target_names
+
           keys = owned["files"]["settings/es_settings.xml"]["keys"]
 
           # Pinned here, literally, and deliberately not derived from the
@@ -407,5 +652,80 @@ in
           machine.wait_for_unit("display-manager.service")
           retry(lambda _: session_on_seat("player"), timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)
+
+      # --- emulators/retroachievements: design D7 ---------------------------
+      #
+      # Everything below runs after the kiosk session mechanism above is
+      # already proven, and deliberately never disturbs it: every manual
+      # `emubox-prepare` re-run passes CUSTOM_SYSTEMS_PATH (the real,
+      # non-empty document), not the empty string the "empty definition"
+      # subtest used, and nothing here kills or restarts es-de itself.
+
+      with subtest("Tokens asserted against the mock: hardcore off"):
+          machine.succeed("systemctl start emubox-mock-retroachievements.service")
+          # Not `wait_for_open_port`: it shells out to `nc`, which nothing in
+          # this project's modules installs, so relying on it would be
+          # betting on a package happening to be pulled in as someone else's
+          # dependency. Bash's own `/dev/tcp` pseudo-device needs no extra
+          # binary and every guest command already runs through bash.
+          machine.wait_until_succeeds(
+              "echo > /dev/tcp/127.0.0.1/${toString mockPort}", timeout=30
+          )
+
+          rerun_prepare(OWNED_VALUES)
+
+          owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
+          ra = owned["retroachievements"]
+          machine_id = machine.succeed("cat /etc/machine-id").encode()
+
+          for target in ra["targets"]:
+              booleans = target["booleans"]
+              assert read_target_value(target, "enabled") == booleans["true"], target["name"]
+              assert read_target_value(target, "hardcore") == booleans["false"], target["name"]
+              assert read_target_value(target, "username") == RA_USERNAME, target["name"]
+
+              if target["encoding"] == "duckstation":
+                  ciphertext = read_target_value(target, "token")
+                  recovered = duckstation_decrypt(machine_id, RA_USERNAME, ciphertext)
+                  assert recovered == MOCK_TOKEN, (target["name"], recovered)
+                  # LoginTimestamp is change-gated (design D3): it is written
+                  # once the token changes from absent to present, which just
+                  # happened.
+                  assert read_target_value(target, "login_timestamp") is not None, target["name"]
+              elif target["encoding"] == "plain":
+                  assert read_target_value(target, "token") == MOCK_TOKEN, target["name"]
+              elif target["encoding"] == "secret-file":
+                  token_path = resolve(APPDATA, target["token_file"])
+                  assert machine.succeed(f"cat {token_path}") == MOCK_TOKEN, target["name"]
+
+          sweep_for_password(owned)
+
+      with subtest("Both hardcore positions are reflected in every configuration"):
+          # design D7's "re-render and re-run prepare inside the test with a
+          # different owned-values document" option, chosen over a second
+          # node: `ownedValuesFile` is exactly the readOnly option the kiosk
+          # module exposes for this (its own description: "a test
+          # interpolates one source of truth rather than scraping the
+          # session script or re-rendering the JSON and agreeing with
+          # itself"). Cheaper in VM memory than a second graphical node,
+          # which would pay this whole file's session-boot cost twice for
+          # one boolean.
+          owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
+          owned["retroachievements"]["hardcore"] = True
+          payload = base64.b64encode(json.dumps(owned).encode()).decode()
+          hardcore_path = "/tmp/emubox-owned-values-hardcore.json"
+          machine.succeed(f"echo {payload} | base64 -d > {hardcore_path}")
+
+          rerun_prepare(hardcore_path)
+
+          for target in owned["retroachievements"]["targets"]:
+              booleans = target["booleans"]
+              assert read_target_value(target, "hardcore") == booleans["true"], target["name"]
+
+          # Restore the off position (the module's own default) before the
+          # emulator launches below, which assert nothing about hardcore but
+          # should not leave the machine in a state a later subtest did not
+          # itself choose.
+          rerun_prepare(OWNED_VALUES)
     '';
 }

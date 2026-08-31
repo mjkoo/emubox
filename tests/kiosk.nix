@@ -705,15 +705,25 @@ assert lib.assertMsg (lib.length exemptFamilies == 4) ''
 
           None if the target's table does not declare this key at all (e.g.
           "token" for the ppsspp target, which carries it in `token_file`
-          instead) or if the file does not have it written. RetroArch's flat
-          format quotes its values; every other declared format here is
-          `ini`, so the two are told apart by whether the entry carries a
-          `section`, exactly as emubox_prepare.py's own validation does.
+          instead), if the file does not have it written, or if the file
+          itself does not exist at all. That last case is not a special
+          case bolted on for one finding: a target's `keys` table only
+          records where a value would live if it were ever written, and a
+          file with nothing ever written to it - PCSX2's `secrets.ini`
+          before any token has resolved, say, the file its only owned key
+          is `token` - simply is not there yet, which this function's own
+          docstring already treats the same as "does not have it written".
+          RetroArch's flat format quotes its values; every other declared
+          format here is `ini`, so the two are told apart by whether the
+          entry carries a `section`, exactly as emubox_prepare.py's own
+          validation does.
           """
           entry = target["keys"].get(key_name)
           if entry is None:
               return None
-          text = machine.succeed(f"cat {resolve(APPDATA, entry['file'])}")
+          rc, text = machine.execute(f"cat {resolve(APPDATA, entry['file'])}")
+          if rc != 0:
+              return None
           if "section" in entry:
               return ini_value(text, entry["section"], entry["key"])
           value = ini_value(text, None, entry["key"])
@@ -983,18 +993,53 @@ assert lib.assertMsg (lib.length exemptFamilies == 4) ''
               if path == "settings/es_settings.xml":
                   continue  # its own pin-then-walk above already covers it
               fmt = entry["format"]
-              text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
               if fmt == "retroarch":
-                  for key, expected in entry["keys"].items():
-                      got = owned_file_value(fmt, text, None, key)
-                      assert got == expected, f"{path}: {key}: {got!r} != {expected!r}"
+                  assertions = [(None, key, expected) for key, expected in entry["keys"].items()]
               elif fmt == "ini":
-                  for section, keys in entry["keys"].items():
-                      for key, expected in keys.items():
-                          got = owned_file_value(fmt, text, section, key)
-                          assert got == expected, f"{path} [{section}]: {key}: {got!r} != {expected!r}"
+                  assertions = [
+                      (section, key, expected)
+                      for section, keys in entry["keys"].items()
+                      for key, expected in keys.items()
+                  ]
               else:
                   raise AssertionError(f"{path}: unhandled owned-file format {fmt!r}")
+
+              if not assertions:
+                  # A file the flake owns zero static keys in - PCSX2's
+                  # `secrets.ini` and Dolphin's `RetroAchievements.ini`, both
+                  # declared with `keys = { }` in modules/emulators because
+                  # their only content is retroachievements namespace keys
+                  # (token, or enabled/hardcore/username/token) written at
+                  # runtime rather than through this static table (design
+                  # D1-D4). There is nothing this walk could check here even
+                  # if the file existed, and IMPORTANT-5's prepare-side fix
+                  # (the ini/retroarch editors now leave a file alone
+                  # entirely rather than touching it for zero keys) means
+                  # such a file is legitimately absent until something
+                  # actually needs writing into it - a `cat` here would fail
+                  # on an absence that is correct, not a bug (this is what
+                  # broke this subtest in CI against PCSX2's `secrets.ini`
+                  # before a token had ever resolved). Skip it explicitly
+                  # rather than loosen the walk to "cat if it exists" for
+                  # every file: a file that DOES own a static key still has
+                  # to exist and carry it, unconditionally, below.
+                  #
+                  # Not asserted absent here either, deliberately: Dolphin's
+                  # `RetroAchievements.ini` has the same empty static table
+                  # but is not reliably absent at this point - its
+                  # enabled/hardcore keys are written unconditionally by
+                  # `apply_retroachievements` regardless of network (design
+                  # D2), unlike PCSX2's, whose only key is the token itself.
+                  # A blanket "must be absent whenever there are no static
+                  # keys" would be wrong for one of these two files, not
+                  # merely early - so this walk stays silent on existence
+                  # for a zero-key file rather than asserting either way.
+                  continue
+
+              text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
+              for section, key, expected in assertions:
+                  got = owned_file_value(fmt, text, section, key)
+                  assert got == expected, f"{path} [{section}]: {key}: {got!r} != {expected!r}"
 
       # --- kiosk: custom systems, both branches -----------------------------
 

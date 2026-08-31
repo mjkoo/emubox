@@ -736,6 +736,80 @@ def test_custom_systems_removes_a_dangling_symlink(tmp_path: Path) -> None:
     assert not target.is_symlink()
 
 
+def test_main_survives_a_custom_systems_file_it_cannot_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The custom systems step reaches the disk through the same `_write` the
+    # editors do, so it meets the same runtime conditions: /data full, or
+    # remounted read-only after a power cut, which is what btrfs does on
+    # ENOSPC. The editor loop above it has carried a guard for exactly that
+    # since a credential removal proved it reachable; this call had none, so
+    # an OSError here ended the session at the greeter under the session
+    # script's `set -e`.
+    #
+    # Only live once the box actually ships a custom systems document: with
+    # an empty source this takes the removal branch and never writes at all,
+    # which is why nothing caught it earlier.
+    #
+    # The read-only directory stands in for the read-only /data: nix runs
+    # this suite as an unprivileged user, so the mode is enforced.
+    appdata = tmp_path / "es-de"
+    (appdata / "settings").mkdir(parents=True)
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    locked = appdata / "custom_systems"
+    locked.mkdir()
+    locked.chmod(0o500)
+    source = tmp_path / "es_systems.xml"
+    source.write_text("<systemList />")
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "settings/es_settings.xml": {
+                        "format": "esde-xml",
+                        "keys": {"Theme": {"type": "string", "value": "slate"}},
+                    }
+                },
+                "retroachievements": None,
+            }
+        )
+    )
+
+    try:
+        assert ep.main([str(values), str(source)]) == 0
+    finally:
+        locked.chmod(0o700)
+
+    err = capsys.readouterr().err
+    assert "custom systems" in err
+    assert "Traceback" not in err
+    # The step that could run still ran: one unwritable file costs that
+    # file, not the family's evening at the greeter.
+    assert "slate" in (appdata / "settings" / "es_settings.xml").read_text()
+
+
+def test_install_custom_systems_still_raises_on_a_target_it_cannot_replace(
+    tmp_path: Path,
+) -> None:
+    # The counterpart to the guard in `main`: the function itself keeps
+    # raising, so the two callers that are not the session - a test, or an
+    # admin driving it by hand - still see the failure rather than a return
+    # value that says "no change" and means "could not write".
+    source = tmp_path / "es_systems.xml"
+    source.write_text("<systemList />")
+    locked = tmp_path / "custom_systems"
+    locked.mkdir()
+    target = locked / "es_systems.xml"
+    locked.chmod(0o500)
+
+    try:
+        with pytest.raises(OSError):
+            ep.install_custom_systems(target, str(source))
+    finally:
+        locked.chmod(0o700)
+
+
 # --- main()'s diagnostics --------------------------------------------------
 
 

@@ -1576,13 +1576,22 @@ def install_custom_systems(target: Path, source: str) -> bool:
     This step carries the editors' error policy too, and reaches the target
     only through `_read_text`: a target that is unreadable or not UTF-8 is
     treated as "not what we want" and rewritten, rather than raising and
-    ending the session at the greeter. A target that is a *directory* is the
-    one case still left to raise, deliberately - it cannot be replaced, and
-    like an unwritable `/data` it is the kind of breakage that should stop at
-    a greeter an admin can log into. `os.path.lexists` rather
-    than `Path.exists` on the removal branch, because the latter follows a
-    symlink and would leave a dangling one in place - exactly the stale entry
-    this branch exists to clear.
+    ending the session at the greeter.
+
+    Two failures do still raise out of here, and they are not the same kind
+    of thing. An unreadable *source* raises `SystemExit`, because the source
+    is a store path the module rendered and nothing but a broken call site
+    can make it unreadable; that one ends the session on purpose. Everything
+    the write itself can fail with - a full or read-only `/data`, a target
+    that is a directory and so cannot be replaced - raises `OSError`, which
+    `main` catches and degrades to a journal line, the same as it does for
+    every owned file. Keeping the raise here rather than swallowing it
+    inside means a caller that is not the session - a test, or an admin
+    running `emubox-prepare` by hand - still learns that the write failed.
+
+    `os.path.lexists` rather than `Path.exists` on the removal branch,
+    because the latter follows a symlink and would leave a dangling one in
+    place - exactly the stale entry this branch exists to clear.
     """
     if not source:
         if not os.path.lexists(target):
@@ -1726,7 +1735,36 @@ def main(argv: Sequence[str]) -> int:
             # greeter is still the correct answer to.
             note(f"{relative} could not be updated ({error}); continuing")
 
-    install_custom_systems(root / "custom_systems" / "es_systems.xml", custom_systems)
+    try:
+        install_custom_systems(
+            root / "custom_systems" / "es_systems.xml", custom_systems
+        )
+    except OSError as error:
+        # The editor loop's guard, extended to the step that follows it,
+        # because this one reaches the disk through the very same `_write`
+        # and so meets the very same runtime conditions: `/data` full, or
+        # remounted read-only after a power cut - which is what btrfs does
+        # on ENOSPC. A custom systems file that cannot be written costs the
+        # extra systems it declares, not the family's evening at the greeter
+        # (design D2).
+        #
+        # Live only since the box began shipping a real custom systems
+        # document (design D5): with an empty source this call takes the
+        # removal branch and never writes, which is why the editor loop got
+        # its guard first.
+        #
+        # This deliberately swallows the target-is-a-directory case too,
+        # which `install_custom_systems` still raises for. Nothing about a
+        # directory in the way is more recoverable at a greeter than a full
+        # disk is, and the recreate-not-fail policy this program applies
+        # everywhere else says the box keeps going and says so in the
+        # journal. The function keeps raising so that a caller that is not
+        # the session - a test, or an admin running `emubox-prepare` by
+        # hand - still sees it; it is only the session that is protected
+        # from it. `SystemExit` for an unreadable *source* store path is
+        # not an OSError and so still ends the session, which is correct:
+        # that is a broken call site, not a broken configuration.
+        note(f"the custom systems file could not be updated ({error}); continuing")
     return 0
 
 

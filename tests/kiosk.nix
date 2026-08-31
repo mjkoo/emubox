@@ -36,7 +36,7 @@ let
   # document so the kiosk subtests can prove the custom-systems mechanism
   # against something they control (design D7). That `mkForce` is exactly
   # why nothing else in this file, or anywhere else, ever parses the
-  # shipped ~400-line document - finding IMPORTANT-6's "the shipped
+  # shipped 218-line document - finding IMPORTANT-6's "the shipped
   # custom-systems XML is never parsed by anything". `shippedCustomSystems`
   # exists so the standalone check near the top of `testScript` below can
   # do that, with no VM node needed.
@@ -269,27 +269,42 @@ let
   ];
 
   # Named-exempt core families (vm-test spec: "the configuration SHALL name
-  # each exempt family"). `kind` distinguishes the two reasons the spec now
-  # allows for an exemption: `"licensing"` (no homebrew ROM for the family
-  # carries an explicit licence or redistribution grant, so fetching one
-  # through public CI onto the public binary cache is not this project's
-  # call to make) and `"mechanism"` (the core cannot run headless at all
-  # under this test's null-driver override, independent of any ROM). Every
-  # family here moves to the E12 hardware checklist instead (design D7: "an
-  # exempt family is a hardware checklist item, like the BIOS-dependent
-  # cores").
+  # each exempt family"). `kind` distinguishes the reasons an exemption is
+  # allowed here: `"licensing"` (no homebrew ROM for the family carries an
+  # explicit licence or redistribution grant, so fetching one through public
+  # CI onto the public binary cache is not this project's call to make),
+  # `"mechanism"` (the core cannot run headless at all under this test's
+  # null-driver override, independent of any ROM - a forced hardware-render
+  # context no VM can supply, CI-confirmed for the specific core), and
+  # `"unresolved"` (this test observed a launch fail without exiting and
+  # does not yet know whether the core or the fixture is at fault - a
+  # strictly weaker claim than `"mechanism"`, on purpose: a review round
+  # found the SNES entry below filed under `"mechanism"` on evidence that
+  # only supports "something is wrong", not "this specific core cannot run
+  # headless at all", and its own reason string already conceded the
+  # ambiguity before its `kind` did). Every family here moves to the E12
+  # hardware checklist instead (design D7: "an exempt family is a hardware
+  # checklist item, like the BIOS-dependent cores"), and every entry below
+  # also carries `recheck`: honest prose, read by nobody programmatically,
+  # stating what would put the family back on the headless-launch side of
+  # that line. Nothing else in this repository ever revisits an exemption
+  # on its own, so without this field every exemption here is permanent by
+  # construction - the field does not fix that on its own, but it is what
+  # lets a human looking for stale exemptions know where to start.
   exemptFamilies = [
     {
       family = "Atari 7800 (ProSystem)";
       core = "prosystem_libretro.so";
       kind = "licensing";
       reason = "every compiled .a78 binary found sits in a repo with no LICENSE file and no redistribution statement; every repo with an explicit permissive licence ships source only, with no compiled ROM in the repo or in Releases";
+      recheck = "a compiled .a78 ROM appearing (in a repo, or in that repo's Releases) paired with an explicit author licence or redistribution grant - not a third-party 'PD' tag on an existing find, which is cataloguing, not a grant";
     }
     {
       family = "Neo Geo Pocket / Color (Beetle NeoPop)";
       core = "mednafen_ngp_libretro.so";
       kind = "licensing";
       reason = "no NGP/NGPC homebrew was found that combines a real named title, an explicit author licence or redistribution statement, and a stable direct URL; 'PD' tags on individually found ROMs are third-party cataloguing, not author grants";
+      recheck = "an NGP/NGPC ROM appearing with an explicit author licence or redistribution grant attached, the same bar the reason above already applies";
     }
     {
       # finding IMPORTANT-2. RetroArch 1.22.2's `video_driver_find_driver`
@@ -314,6 +329,7 @@ let
       core = "mupen64plus_next_libretro.so";
       kind = "mechanism";
       reason = "forced to the glcore HW-render driver regardless of the null video_driver override, and glcore then segfaults (exit 139) in a headless environment with no display server, DRM device or XDG_RUNTIME_DIR - confirmed by reproducing the exact launch on the x86_64-linux remote builder outside a VM";
+      recheck = "a headless GL path this VM's null-driver setup could satisfy - a software or off-screen GL context glcore would accept in place of a real display server, DRM device or XDG_RUNTIME_DIR";
     }
     {
       # Same mechanism as N64 above, reproduced the same way: Flycast
@@ -326,21 +342,35 @@ let
       core = "flycast_libretro.so";
       kind = "mechanism";
       reason = "forced to the vulkan HW-render driver regardless of the null video_driver override, and then exits with \"Cannot open video driver\" (exit 1) in a headless environment with no display server - confirmed by reproducing the exact launch on the x86_64-linux remote builder outside a VM";
+      recheck = "a headless GL path this VM's null-driver setup could satisfy - the same shape of fix as N64's above, for Flycast's Vulkan requirement instead of glcore's";
     }
     {
       # CI has proven this one directly, not by the same forced-HW-render
-      # mechanism as the three entries above: the 240pSuite.sfc launch hangs
-      # under Snes9x rather than exiting, and CI run 33359693788 killed it
-      # at the launch subtest's own 60 s per-launch cap with exit 124. In an
-      # earlier run, before that per-launch timeout existed, the same hang
-      # consumed the driver's entire one-hour global timeout instead. Mesen's
-      # fixture above is a port of the same 240p Test Suite and passes, so
-      # the hang is specific to this core (or this particular port), not to
-      # the suite.
+      # mechanism as the three `"mechanism"` entries above: the
+      # 240pSuite.sfc launch hangs under Snes9x rather than exiting, and CI
+      # run 33359693788 killed it at the launch subtest's own 60 s
+      # per-launch cap with exit 124. In an earlier run, before that
+      # per-launch timeout existed, the same hang consumed the driver's
+      # entire one-hour global timeout instead.
+      #
+      # `kind = "mechanism"` here was a review finding, not this entry's
+      # original spelling: a hang killed at a timeout is evidence that
+      # *something* is wrong, not evidence of *what* - unlike N64,
+      # Dreamcast and Vectrex, nothing here pins the failure to
+      # `video_driver_find_driver` or to any other specific mechanism this
+      # test's override cannot reach, and this reason string already said
+      # so ("specific to this core (or this particular port)") while the
+      # `kind` field claimed otherwise. `"unresolved"` is the honest
+      # spelling: it hung and was killed at the cap, and that is the whole
+      # of what CI has actually shown. Mesen's fixture above is a port of
+      # the same 240p Test Suite and passes, which rules out the suite
+      # itself as the cause and narrows the remaining question to "this
+      # core" vs. "this specific port of it" - not further than that.
       family = "SNES (Snes9x)";
       core = "snes9x_libretro.so";
-      kind = "mechanism";
-      reason = "the 240pSuite.sfc launch hangs rather than exiting and was killed at the launch subtest's 60 s per-launch cap with exit 124 in CI run 33359693788; in an earlier run, before that per-launch timeout existed, the same hang consumed the driver's entire one-hour global timeout; Mesen's fixture is also a 240p Test Suite port and passes, so this is specific to this core or this port rather than the suite";
+      kind = "unresolved";
+      reason = "the 240pSuite.sfc launch hangs rather than exiting and was killed at the launch subtest's 60 s per-launch cap with exit 124 in CI run 33359693788 (an earlier run, before that per-launch timeout existed, saw the same hang consume the driver's entire one-hour global timeout instead); it is not known whether the Snes9x core or this particular fixture/port is at fault - Mesen passes on the same 240p Test Suite, which rules out the suite itself but not which of the other two it is";
+      recheck = "trying a second, licence-clean 240p-style fixture against Snes9x - a second hang would implicate the core; a clean run would implicate the first fixture or its port instead";
     }
     {
       # A builder sweep (x86_64-linux remote builder, not CI) found vecx
@@ -354,10 +384,25 @@ let
       # mechanism itself is already CI-confirmed for two other cores - which
       # is what makes it credible despite the sweep's other results not
       # being.
+      #
+      # What makes this specific observation trustworthy, stated plainly
+      # rather than left implicit in "before that stage": the same sweep's
+      # own controls - Stella (the Atari 2600 core `homebrewFixtures` above
+      # already proves headless-clean) and Mesen (same, for NES) - aborted
+      # LATER in the sweep, at the audio-init stage itself, not before it.
+      # A sweep whose video stage was already broken would have taken down
+      # Stella and Mesen at the same point vecx failed, or earlier; instead
+      # they got past video and only fell over at audio, which is what
+      # establishes the sweep's video stage was healthy at the moment vecx
+      # hit it. vecx failing where two known-good controls did not fail
+      # yet is the differential that makes this one result usable out of an
+      # otherwise-discarded run, not just an assertion that it happens to
+      # fire early.
       family = "Vectrex (vecx)";
       core = "vecx_libretro.so";
       kind = "mechanism";
-      reason = "observed on the x86_64-linux remote builder, not in CI, during a sweep that is otherwise unusable - but the failure fires before the audio-init stage that invalidates the rest of that sweep, and it carries the same forced-HW-render signature (\"[Video] Using HW render, OpenGL driver forced.\") already CI-confirmed for N64 and Dreamcast above";
+      reason = "observed on the x86_64-linux remote builder, not in CI, during a sweep that is otherwise unusable - but the failure fires before the audio-init stage that invalidates the rest of that sweep, and its own controls (Stella, Mesen - both known headless-clean from homebrewFixtures above) got past video and only aborted at that later audio stage, which is what shows the sweep's video stage was still healthy when vecx hit it; it also carries the same forced-HW-render signature (\"[Video] Using HW render, OpenGL driver forced.\") already CI-confirmed for N64 and Dreamcast above";
+      recheck = "confirming this in CI once a KVM runner exists for this project - the builder sweep is credible but was never a CI run, unlike N64 and Dreamcast's confirmations above";
     }
   ];
 
@@ -391,15 +436,38 @@ let
 in
 assert lib.assertMsg (lib.length homebrewFixtures == 12) ''
   tests/kiosk.nix: expected 12 pinned homebrew fixtures (the vm-test spec's
-  core-family coverage minus the four families now exempt for mechanism
-  reasons - N64 and Dreamcast (finding IMPORTANT-2), and SNES and Vectrex
-  (CI-observed hang and the same forced-HW-render signature)), got
+  core-family coverage minus the six families now exempt - two for
+  licensing, N64 and Dreamcast for the forced-HW-render mechanism (finding
+  IMPORTANT-2), Vectrex for the same mechanism (builder-sweep evidence),
+  and SNES for an unresolved core-or-fixture hang, CI-observed), got
   ${toString (lib.length homebrewFixtures)}.
 '';
 assert lib.assertMsg (lib.length exemptFamilies == 6) ''
-  tests/kiosk.nix: expected 6 named-exempt core families (2 licensing, 4
-  mechanism), got ${toString (lib.length exemptFamilies)}.
+  tests/kiosk.nix: expected 6 named-exempt core families (2 licensing, 3
+  mechanism, 1 unresolved), got ${toString (lib.length exemptFamilies)}.
 '';
+# MINOR finding: the count message just above claims a specific partition
+# by `kind` (2 licensing, 3 mechanism, 1 unresolved) that nothing checked -
+# `kind` and `reason` are never read by any assertion in this file, so a
+# future edit that changes an entry's `kind` without updating that prose
+# would leave a message that is simply wrong. This makes it true by
+# construction: change the partition, and this assertion's own message
+# (not just the one above) fails until both are updated together.
+assert lib.assertMsg
+  (
+    let
+      countKind = kind: lib.count (f: f.kind == kind) exemptFamilies;
+    in
+    countKind "licensing" == 2 && countKind "mechanism" == 3 && countKind "unresolved" == 1
+  )
+  ''
+    tests/kiosk.nix: the exempt-family count message above claims 2
+    licensing, 3 mechanism and 1 unresolved, but the actual partition by
+    `kind` is licensing=${toString (lib.count (f: f.kind == "licensing") exemptFamilies)},
+    mechanism=${toString (lib.count (f: f.kind == "mechanism") exemptFamilies)},
+    unresolved=${toString (lib.count (f: f.kind == "unresolved") exemptFamilies)}.
+    Update the message above and this assertion together.
+  '';
 {
   name = "emubox-kiosk";
 
@@ -794,7 +862,7 @@ assert lib.assertMsg (lib.length exemptFamilies == 6) ''
       # `machine.wait_for_unit` below ever touches the VM, because the
       # `mkForce` on this node's own `emubox.kiosk.customSystems` (further
       # down this file) is deliberate for what the kiosk subtests prove, and
-      # that leaves the ~400-line document `modules/emulators` actually
+      # that leaves the 218-line document `modules/emulators` actually
       # contributes to a real box unparsed by anything else in this
       # repository. A malformed `<system>` block in it would otherwise
       # surface only as a file ES-DE silently ignores on hardware.
@@ -927,6 +995,30 @@ assert lib.assertMsg (lib.length exemptFamilies == 6) ''
       # RetroArch's own flat, sectionless format (`ini_value`'s own
       # convention above).
       #
+      # A later review round found this table guarded key PRESENCE only -
+      # `names - actual.keys()` - never the value sitting behind a present
+      # name. That is exactly the shape of the two shipped Criticals this
+      # same round of review had already fixed below: `BIOS.SearchDirectory
+      # = "bios"` (a relative path PS1 would happily resolve under its own
+      # data root instead of `/data/bios`) or `SetupWizardIncomplete =
+      # "true"` both pass a presence-only check as cleanly as the absent key
+      # they replace, because the walk beneath this table only ever compares
+      # the module's own rendered JSON against disk - the module agreeing
+      # with itself, never against a value this test supplies independently.
+      # Every value below is now that independent literal, hand-typed
+      # against `modules/emulators` rather than read from it, so a wrong
+      # value fails here exactly the way a dropped key already did.
+      #
+      # One exception: RetroArch's `libretro_directory`. Its value is
+      # `coresDirectory`, a content-addressed Nix store path
+      # (`modules/emulators`'s own `retroarchWithCores` build) - there is no
+      # literal to hand-type for it that would not itself be a rebuild of
+      # that same derivation under a different name, which would just be
+      # the module agreeing with itself again, one layer further out. It
+      # stays a presence-only pin (`UNPINNED_VALUE` below), the one key in
+      # this table for which "guard presence, not value" is still the
+      # honest thing to assert, not an oversight.
+      #
       # DuckStation's `BIOS.SearchDirectory`, PCSX2's `Folders.Bios` and
       # both emulators' own `SetupWizardIncomplete` keys are pinned here
       # deliberately, not merely swept in by the walk below: an earlier
@@ -953,63 +1045,80 @@ assert lib.assertMsg (lib.length exemptFamilies == 6) ''
       # and this pin has to use the same spelling QSettings itself reads
       # and writes, or a key spelled the wrong way would look "present"
       # here while Azahar's own writer created a second, differently-named
-      # line the moment it next saved its own config.
+      # line the moment it next saved its own config. `check_for_update_on_start`
+      # is not pinned here at all any more: `modules/emulators` dropped it
+      # (its own comment on `azaharConfigFile` records why - the setting is
+      # compiled out of this flake's Azahar build, so there was nothing
+      # left to pin).
+      UNPINNED_VALUE = ...  # presence only - see `libretro_directory` above
+
       PINNED_OWNED_KEYS = {
           f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg": {
               None: {
-                  "video_fullscreen",
-                  "libretro_directory",
-                  "system_directory",
-                  "autosave_interval",
-                  "menu_driver",
-                  "menu_show_online_updater",
-                  "menu_show_core_updater",
-                  "input_menu_toggle",
-                  "input_save_state",
-                  "input_load_state",
-                  "input_toggle_fast_forward",
-                  "input_screenshot",
-                  "input_menu_toggle_gamepad_combo",
-                  "input_quit_gamepad_combo",
+                  "video_fullscreen": "true",
+                  "libretro_directory": UNPINNED_VALUE,
+                  "system_directory": "/data/bios",
+                  "autosave_interval": "30",
+                  "menu_driver": "ozone",
+                  "menu_show_online_updater": "false",
+                  "menu_show_core_updater": "false",
+                  "input_menu_toggle": "f1",
+                  "input_save_state": "f2",
+                  "input_load_state": "f4",
+                  "input_toggle_fast_forward": "space",
+                  "input_screenshot": "f8",
+                  "input_menu_toggle_gamepad_combo": "4",
+                  "input_quit_gamepad_combo": "4",
               },
           },
           f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
-              "Display": {"Fullscreen"},
-              "Core": {"CPUThread"},
+              "Display": {"Fullscreen": "True"},
+              "Core": {"CPUThread": "False"},
           },
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
-              "UI": {"StartFullscreen", "SetupWizardIncomplete"},
-              "Folders": {"Bios"},
-              "EmuCore/GS": {"upscale_multiplier"},
+              "UI": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
+              "Folders": {"Bios": "/data/bios"},
+              "EmuCore/GS": {"upscale_multiplier": "1"},
           },
           f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini": {
-              "Graphics": {"FullScreen"},
+              "Graphics": {"FullScreen": "True"},
           },
           f"{PLAYER_HOME}/.config/azahar-emu/qt-config.ini": {
-              "UI": {"fullscreen", "fullscreen\\default", "firstStart", "firstStart\\default"},
-              "Miscellaneous": {
-                  "check_for_update_on_start",
-                  "check_for_update_on_start\\default",
+              "UI": {
+                  "fullscreen": "true",
+                  "fullscreen\\default": "false",
+                  "firstStart": "false",
+                  "firstStart\\default": "false",
               },
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
-              "Main": {"StartFullscreen", "SetupWizardIncomplete"},
-              "GPU": {"PGXPEnable", "ResolutionScale"},
-              "BIOS": {"SearchDirectory"},
+              "Main": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
+              "GPU": {"PGXPEnable": "true", "ResolutionScale": "4"},
+              "BIOS": {"SearchDirectory": "/data/bios"},
           },
           f"{PLAYER_HOME}/.config/scummvm/scummvm.ini": {
-              "scummvm": {"fullscreen", "confirm_exit", "gui_return_to_launcher_at_exit"},
+              "scummvm": {
+                  "fullscreen": "true",
+                  "confirm_exit": "false",
+                  "gui_return_to_launcher_at_exit": "false",
+              },
           },
       }
 
       with subtest("Every owned emulator config key holds the flake's value"):
+          _MISSING = object()  # distinct from any real value, including None/False-ish strings
           for path, sections in PINNED_OWNED_KEYS.items():
               entry = owned["files"].get(path)
               assert entry is not None, f"{path}: pinned in this test but not in emubox.kiosk.ownedFiles at all"
-              for section, names in sections.items():
+              for section, keys in sections.items():
                   actual = entry["keys"] if section is None else entry["keys"].get(section, {})
-                  missing = names - actual.keys()
-                  assert not missing, f"{path} [{section}]: pinned keys dropped from the module: {missing}"
+                  for name, expected in keys.items():
+                      got = actual.get(name, _MISSING)
+                      if got is _MISSING:
+                          raise AssertionError(f"{path} [{section}]: pinned key dropped from the module: {name}")
+                      if expected is UNPINNED_VALUE:
+                          continue  # presence only, see UNPINNED_VALUE's own comment above
+                      assert got == expected, f"{path} [{section}]: {name}: {got!r} != {expected!r}"
 
           # The walk: every file the rendered JSON actually names (not just
           # the pinned subset above), so a key a concurrent change adds is
@@ -1641,7 +1750,7 @@ assert lib.assertMsg (lib.length exemptFamilies == 6) ''
       # this file because there is no compositor or session manager in this
       # path, only process startup) - not a measured figure, since no KVM
       # builder was available to time an actual run; if CI shows a genuine
-      # binary needing longer, raising this one number covers all five.
+      # binary needing longer, raising this one number covers all four.
       def standalone_smoke_launch(binary, settle=5):
           """Prove a standalone starts against its written configuration and
           stays up for `settle` seconds, then kill it.
@@ -1661,15 +1770,24 @@ assert lib.assertMsg (lib.length exemptFamilies == 6) ''
           call back in and how fast the binary happens to die.
 
           Not `--version`: this project has only source-verified that
-          contract for two of these six binaries (ScummVM below, and
-          separately for es-de/duckstation in the install test), and PCSX2's
-          own command-line parser (read directly, pcsx2-qt/QtHost.cpp) is
-          confirmed to exit 1 on `-version`/`-help` even though it printed
-          the right thing first - so leaning on six different codebases'
-          individual flag-handling would be asserting more than this project
-          actually knows. A background launch, alive-check and kill instead
-          proves exactly what the spec asks for ("the process starts"), the
-          same pgrep-based idiom this file already uses for es-de throughout.
+          contract for one of these six binaries, ScummVM (below). es-de
+          gets the same verification separately, in the install test - but
+          es-de is the frontend, not one of these six, and DuckStation is
+          not a second: an earlier version of this comment credited the
+          install test with covering DuckStation's `--version` too, which
+          was wrong twice over - the install test only ever asserts
+          `test -x` for it, never runs it, and CI has since shown the
+          binary does not survive construction far enough to look at argv
+          at all (see the DuckStation comment in the subtest below).
+          DuckStation is not passed to this function any more because of
+          that. PCSX2's own command-line parser (read directly,
+          pcsx2-qt/QtHost.cpp) is confirmed to exit 1 on `-version`/`-help`
+          even though it printed the right thing first - so leaning on each
+          remaining codebase's own flag-handling would be asserting more
+          than this project actually knows. A background launch,
+          alive-check and kill instead proves exactly what the spec asks
+          for ("the process starts"), the same pgrep-based idiom this file
+          already uses for es-de throughout.
 
           QT_QPA_PLATFORM=offscreen and SDL_VIDEODRIVER=dummy are set
           regardless of which toolkit a given binary actually uses - an
@@ -1678,7 +1796,7 @@ assert lib.assertMsg (lib.length exemptFamilies == 6) ''
           install test's own header: "the AppImage's Qt would fail without
           one"), so a second GUI app needs a display it can construct
           without a real compositor. This combination is not verified
-          against every one of these five specific derivations in an actual
+          against every one of these four specific derivations in an actual
           VM (no KVM builder was available while writing this test); if CI
           shows one of them still needing a display it cannot get, the fix
           is a per-binary invocation here, not a broader claim than this
@@ -1708,27 +1826,60 @@ assert lib.assertMsg (lib.length exemptFamilies == 6) ''
           machine.wait_until_fails(f"kill -0 {pid}", timeout=30)
 
       with subtest("Standalones smoke launch against their asserted configuration"):
-          for binary in ["duckstation", "dolphin-emu", "pcsx2-qt", "azahar", "ppsspp"]:
+          for binary in ["dolphin-emu", "pcsx2-qt", "azahar", "ppsspp"]:
               standalone_smoke_launch(binary)
 
-          # M8, honestly stated rather than fixed: this proves less than the
-          # five background launches above, and on purpose. `--version` is
-          # well-established as safe with no display at all (it is handled
-          # long before any toolkit init), which is why it is the install
-          # test's own floor for this same binary - but it never reads
-          # `scummvm.ini`, so unlike the other five this is not a launch
-          # "against the asserted configuration" (the vm-test spec's own
-          # phrase for this scenario) at all, only proof the binary itself
-          # runs on this box. Giving it the same background-launch treatment
-          # as the other five was not attempted here: no KVM builder was
-          # available while writing this test to check whether ScummVM's
-          # own GUI launcher screen actually comes up cleanly under
-          # `SDL_VIDEODRIVER=dummy` with no display, the same caveat the
-          # `standalone_smoke_launch` docstring above already states for the
-          # five it does cover - and unlike those five, this one has never
-          # been reproduced even outside a VM. Extending it here would be
-          # asserting more than this project actually knows; the honest
-          # floor is `--version` runs and prints "ScummVM", full stop.
+          # vm-test spec, "A standalone that cannot be launched headless":
+          # DuckStation joins ScummVM below rather than the four background
+          # launches above. CI run 33364207476 is what caught this - the
+          # settle-then-sample liveness check above (this subtest used to
+          # sample `alive` a few hundred milliseconds after fork, which
+          # would have passed this crash silently; see that function's own
+          # docstring) - with:
+          #
+          #   qt.qpa.plugin: Could not load the Qt platform plugin
+          #   "offscreen" in "" even though it was found.
+          #   ...
+          #   *************** Unhandled SIGABRT ...
+          #     main [../build/../src/duckstation-qt/qthost.cpp:3721]
+          #
+          # Read against the pinned v0.1-11752 source: `main`'s first
+          # statement after `VeryEarlyProcessStartup()` returns is
+          # `QApplication app(argc, argv);` (qthost.cpp:3714-3721) - argv is
+          # not consulted at all until
+          # `ParseCommandLineParametersAndInitializeConfig`, several lines
+          # later - so the abort happens constructing Qt's own application
+          # object, before any flag, `--version` included, could have
+          # steered around it. That is a different failure from ScummVM's
+          # below (a flag this project has simply never source-verified is
+          # safe here, not a flag proven unable to help), but it lands in
+          # the same place: nothing launched can prove more for this binary
+          # than the install test already does - that it is present and
+          # executable. Restated here, not just relied on there, so this
+          # scenario's own record of "which one proves less and why" is
+          # self-contained.
+          machine.succeed("test -x /run/current-system/sw/bin/duckstation")
+
+          # M8, honestly stated rather than fixed: this proves less than
+          # the four background launches above (DuckStation's check just
+          # above proves less again, for the unrelated reason its own
+          # comment gives). `--version` is well-established as safe for
+          # ScummVM specifically, with no display at all - it is handled
+          # long before any toolkit init - but it never reads
+          # `scummvm.ini`, so unlike the four background launches this is
+          # not a launch "against the asserted configuration" (the vm-test
+          # spec's own phrase for this scenario) at all, only proof the
+          # binary itself runs on this box. Giving it the same
+          # background-launch treatment as the four above was not attempted
+          # here: no KVM builder was available while writing this test to
+          # check whether ScummVM's own GUI launcher screen actually comes
+          # up cleanly under `SDL_VIDEODRIVER=dummy` with no display, the
+          # same caveat the `standalone_smoke_launch` docstring above
+          # already states for the four it does cover - and unlike those
+          # four, this one has never been reproduced even outside a VM.
+          # Extending it here would be asserting more than this project
+          # actually knows; the honest floor is `--version` runs and prints
+          # "ScummVM", full stop.
           out = machine.succeed("su player -s /bin/sh -c 'scummvm --version'")
           assert "ScummVM" in out, out
     '';

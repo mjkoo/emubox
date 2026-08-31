@@ -406,50 +406,146 @@ let
   '';
 
   # ---------------------------------------------------------------------
-  # BIOS inventory (design D6): path under /data/bios, sha256 and a human
-  # name, for every system the design's system table marks "yes" (firmware
-  # required to run anything at all).
+  # BIOS inventory (design D6): path under /data/bios, a digest with the
+  # algorithm that produced it, and a human name, for every system the
+  # design's system table marks "yes" (firmware required to run anything at
+  # all) where a citable checksum exists at all.
   #
-  # Checked directly against source on 2026-08-30, one system at a time, for
-  # every "yes" row except Arcade (its BIOS is a per-game board ROM set
-  # beside each game's own files, not a single fixed firmware image an
-  # inventory entry can name):
+  # D6's first draft fixed the digest field at sha256; corrected because
+  # nobody publishes a sha256 for any of these files, which would have kept
+  # this inventory permanently empty. `algorithm` is named per entry
+  # (`"md5"`, `"sha256"` or `"crc32"`) rather than inferred from digest
+  # length, since a 32-hex MD5 and a 32-hex digest from some other algorithm
+  # are indistinguishable by length alone - `emubox-check-bios` treats an
+  # entry naming any other algorithm as a hard, whole-inventory failure, not
+  # a silently skipped one.
   #
-  # - Atari Lynx (lynxboot.img), Famicom Disk System (disksys.rom), Sega CD
-  #   (bios_CD_U.bin), Saturn (mpr-17933.bin), PCE CD (syscard3.pce) and
-  #   Amiga (e.g. kick34005.A500): docs.libretro.com's own per-core BIOS
-  #   pages publish only MD5 for every one of these.
-  # - PS1: DuckStation's own source carries an exhaustive hash table
-  #   (`src/core/bios.cpp`, `s_image_info_by_hash[]`, built through
-  #   `MakeHashFromString` from `common/md5_digest.h`) - read directly for
-  #   this design, not taken from a secondary source - and every entry in it
-  #   is a 32 hex-character MD5, not a sha256.
-  # - Nintendo DS (bios7.bin, bios9.bin, firmware.bin): the closest thing to
-  #   an authoritative reference (abdess.github.io/retrobios) publishes only
-  #   CRC32 for the two BIOS files and no checksum at all for the firmware.
+  # Every digest below was read directly on 2026-08-30, either from
+  # docs.libretro.com's own per-core "BIOS" table (each core's page at
+  # https://docs.libretro.com/library/<core>/) or, for PS1, cross-checked
+  # against DuckStation's own source. All of them are MD5:
+  #
+  # - Atari Lynx: docs.libretro.com/library/handy/, `lynxboot.img`.
+  # - Famicom Disk System: docs.libretro.com/library/mesen/, `disksys.rom`.
+  # - Sega CD: docs.libretro.com/library/genesis_plus_gx/, the US variant
+  #   `bios_CD_U.bin` (EU and JP variants are documented there too, under
+  #   `bios_CD_E.bin`/`bios_CD_J.bin`, and are equally citable additions).
+  # - Saturn: docs.libretro.com/library/beetle_saturn/, the US/EU variant
+  #   `mpr-17933.bin` (a separate JP-region `sega_101.bin` is documented
+  #   there too).
+  # - PS1: the US variant `scph5501.bin`, doubly sourced - it is both
+  #   DuckStation's own `src/core/bios.cpp` (`s_image_info_by_hash[]`,
+  #   built through `MakeHashFromString` from `common/md5_digest.h`, read
+  #   directly rather than taken from a secondary source) and
+  #   docs.libretro.com/library/beetle_psx_hw/'s own BIOS table, and the two
+  #   agree exactly.
+  # - PC Engine CD: docs.libretro.com/library/beetle_pce_fast/,
+  #   `syscard3.pce` (Super CD-ROM2 System V3.xx, the common case; older
+  #   System Card versions are documented there without a checksum).
+  # - Nintendo DS: docs.libretro.com/library/melonds/ (the `melonds` core
+  #   this flake installs, not `melondsds`) publishes MD5 directly for the
+  #   ARM7 and ARM9 BIOS images, `bios7.bin` and `bios9.bin` - a better,
+  #   more directly comparable source than the CRC32-only third-party
+  #   reference an earlier pass of this research had settled for, since
+  #   every other entry here is already MD5 from the same site. The third
+  #   file NDS needs, `firmware.bin`, is intentionally left out: that page
+  #   publishes no checksum for it, and unlike the two BIOS images it is
+  #   not one fixed correct file to begin with - genuine DS/DS Lite
+  #   firmware is a per-console dump carrying that console's own Wi-Fi and
+  #   user-settings data, so there is no single "correct" digest for it to
+  #   declare.
+  # - Amiga: docs.libretro.com/library/puae/, the Kickstart v1.3 rev 34.005
+  #   A500 ROM `kick34005.A500` (the page documents many more Kickstart
+  #   revisions for other Amiga models, each equally citable).
+  # - Intellivision: docs.libretro.com/library/freeintv/, both required
+  #   files - the Executive ROM `exec.bin` and the Graphics ROM `grom.bin`.
+  #
+  # Left out, each for a reason that is a property of the system rather
+  # than a gap in this research:
+  #
+  # - Arcade: its BIOS is a per-game board ROM set beside each game's own
+  #   files, not a single fixed firmware image an inventory entry (one
+  #   path, one digest) can name.
   # - PS2: PCSX2's own `pcsx2/ps2/BiosTools.cpp` - read directly - validates
-  #   a candidate BIOS only by file size and an internal "ROMVER" string; it
-  #   carries no cryptographic hash of any kind to borrow.
-  # - Intellivision (exec.bin, grom.bin): docs.libretro.com publishes only
-  #   MD5.
+  #   a candidate BIOS only by file size and an internal "ROMVER" string;
+  #   it carries no hash of any kind, of any algorithm, to borrow.
   # - MSX and ColecoVision (blueMSX): there is no single hashable BIOS file
   #   at all - blueMSX needs whole `Databases`/`Machines` folders copied
-  #   from a full standalone blueMSX install, which is a directory tree, not
-  #   an entry this inventory's shape (one path, one checksum) can express.
+  #   from a full standalone blueMSX install, which is a directory tree,
+  #   not an entry this inventory's shape can express.
   #
-  # None of those is a sha256 this design can honestly assert, and
-  # converting a published MD5 or CRC32 into a sha256 is not possible
-  # without the file itself - doing so would mean typing the *wrong*
-  # algorithm's digest into a field named `sha256`, which is worse than
-  # leaving the entry out: every future run of `emubox-check-bios` would
-  # report a correct file as a mismatch, forever, because the reference
-  # value was never actually a sha256 of anything. Per design D6's own
-  # instruction, this inventory ships empty rather than fabricated; every
-  # system above is a candidate to add the day a trustworthy sha256
-  # reference turns up for it (a project maintaining its own, computed from
-  # a copy of the file whose provenance is independently verified, would be
-  # sufficient - a translated MD5 would not).
-  biosInventory = { };
+  # A digest with no provenance is worse than no entry - nobody could ever
+  # audit it - so every entry above is traceable to a specific published
+  # page or source file, and every system left out has a specific, honest
+  # reason rather than a guess standing in for one.
+  biosInventory = {
+    atari-lynx = {
+      path = "lynxboot.img";
+      algorithm = "md5";
+      digest = "fcd403db69f54290b51035d82f835e7b";
+      name = "Atari Lynx boot ROM";
+    };
+    fds = {
+      path = "disksys.rom";
+      algorithm = "md5";
+      digest = "ca30b50f880eb660a320674ed365ef7a";
+      name = "Famicom Disk System BIOS";
+    };
+    sega-cd = {
+      path = "bios_CD_U.bin";
+      algorithm = "md5";
+      digest = "854b9150240a198070150e4566ae1290";
+      name = "Sega CD BIOS (US)";
+    };
+    saturn = {
+      path = "mpr-17933.bin";
+      algorithm = "md5";
+      digest = "3240872c70984b6cbfda1586cab68dbe";
+      name = "Saturn BIOS (US/EU)";
+    };
+    psx = {
+      path = "scph5501.bin";
+      algorithm = "md5";
+      digest = "490f666e1afb15b7362b406ed1cea246";
+      name = "PS1 BIOS (SCPH-5501, NTSC-U)";
+    };
+    pcenginecd = {
+      path = "syscard3.pce";
+      algorithm = "md5";
+      digest = "38179df8f4ac870017db21ebcbf53114";
+      name = "PC Engine CD System Card (Super CD-ROM2 V3.xx)";
+    };
+    nds-bios7 = {
+      path = "bios7.bin";
+      algorithm = "md5";
+      digest = "df692a80a5b1bc90728bc3dfc76cd948";
+      name = "Nintendo DS ARM7 BIOS";
+    };
+    nds-bios9 = {
+      path = "bios9.bin";
+      algorithm = "md5";
+      digest = "a392174eb3e572fed6447e956bde4b25";
+      name = "Nintendo DS ARM9 BIOS";
+    };
+    amiga = {
+      path = "kick34005.A500";
+      algorithm = "md5";
+      digest = "82a21c1890cae844b3df741f2762d48d";
+      name = "Amiga Kickstart v1.3 rev 34.005 (A500)";
+    };
+    intellivision-exec = {
+      path = "exec.bin";
+      algorithm = "md5";
+      digest = "62e761035cb657903761800f4437b8af";
+      name = "Intellivision Executive ROM";
+    };
+    intellivision-grom = {
+      path = "grom.bin";
+      algorithm = "md5";
+      digest = "0cd5946c6473e42e8e4c2137785e427f";
+      name = "Intellivision Graphics ROM";
+    };
+  };
   biosInventoryFile = pkgs.writeText "emubox-bios-inventory.json" (builtins.toJSON biosInventory);
 
   # RetroAchievements' per-emulator tables (design D1-D4). One attrset per

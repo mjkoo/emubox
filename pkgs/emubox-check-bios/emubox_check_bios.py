@@ -14,21 +14,38 @@ scratch directory instead of the real `/data/bios`.
 
 The inventory JSON is an object mapping an arbitrary short id to an entry:
 
-    {"psx": {"path": "scph5501.bin", "sha256": "...", "name": "PS1 BIOS (SCPH-5501, NA)"}}
+    {"psx": {"path": "scph5501.bin", "algorithm": "md5",
+              "digest": "...", "name": "PS1 BIOS (SCPH-5501, NTSC-U)"}}
 
-`path` is relative to `<bios-directory>`; `sha256` is the checksum of a
-correct copy of that file; `name` is what the report prints. The id itself
-is never shown - it exists only so the module that renders the JSON can key
-the attrset by something readable in `modules/emulators` without repeating
-the path.
+`path` is relative to `<bios-directory>`; `algorithm` names which digest
+`digest` is, one of `md5`, `sha256` or `crc32`; `name` is what the report
+prints. The id itself is never shown - it exists only so the module that
+renders the JSON can key the attrset by something readable in
+`modules/emulators` without repeating the path.
+
+The algorithm is a field, not inferred from the digest's length: a 32-hex
+MD5 and a 32-hex hash from some other algorithm are indistinguishable by
+length alone, so guessing would silently misread one as the other. This is
+also why the field exists at all rather than the format being fixed at one
+algorithm - design D6's first draft fixed it at sha256 and had to be
+corrected, because nobody publishes a sha256 for these files: DuckStation's
+own table is MD5, libretro's documented requirements are MD5, and CRC32
+comes up too. `md5` and `sha256` both hash through `hashlib`; `crc32` does
+not (it is not a `hashlib` algorithm) and is formatted as the same lowercase
+zero-padded 8-hex-digit string every published CRC32 reference uses, since a
+plain `%x` would drop a leading zero and never match a citable reference
+value. An entry naming any other algorithm is a malformed inventory - a hard
+load-time error, not a per-entry "unknown" result that could be mistaken for
+a pass.
 
 Error policy: the opposite of `emubox-prepare`'s. Prepare recreates a file
 it cannot make sense of because failing would strand the family at the
 greeter with no game they can start; this tool exists only to tell an admin
 the truth about firmware nobody can ship, so it never writes, never
 recreates and never guesses - a file it cannot read is reported as missing,
-not silently skipped, and a malformed inventory is a hard error rather than
-an empty report that would look like a clean bill of health.
+not silently skipped, and a malformed inventory (unknown algorithm included)
+is a hard error rather than an empty report that would look like a clean
+bill of health.
 """
 
 from __future__ import annotations
@@ -36,13 +53,20 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import zlib
 from pathlib import Path
 from typing import TypedDict
+
+# The only algorithms `digest_of` knows how to compute. `md5` and `sha256`
+# are both real `hashlib` names, so `hashlib.new` handles them without a
+# second table to keep in sync; `crc32` gets its own branch in `digest_of`.
+_ALGORITHMS = frozenset({"md5", "sha256", "crc32"})
 
 
 class Entry(TypedDict):
     path: str
-    sha256: str
+    algorithm: str
+    digest: str
     name: str
 
 
@@ -50,15 +74,37 @@ def note(message: str) -> None:
     print(f"emubox-check-bios: {message}", file=sys.stderr)
 
 
-def sha256_of(path: Path) -> str | None:
-    """The file's sha256, or None if it cannot be read at all.
+def digest_of(path: Path, algorithm: str) -> str | None:
+    """The file's digest under `algorithm`, or None if it cannot be read.
 
     A directory, a dangling symlink, or a file the process lacks permission
     for are all read failures here, and every one of them is reported the
     same way a plain absence is - "missing" is the honest description of a
     declared file this tool cannot verify, whatever the underlying reason.
+    `algorithm` is assumed already validated against `_ALGORITHMS` by
+    `load_inventory` - this function trusts its caller rather than
+    re-checking, since a caller that skipped validation is a programming
+    error in this file, not a malformed inventory.
     """
-    digest = hashlib.sha256()
+    if algorithm == "crc32":
+        crc = 0
+        try:
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    crc = zlib.crc32(chunk, crc)
+        except OSError:
+            return None
+        # `08x`, not `x`: zlib.crc32 returns an unsigned 32-bit integer, and
+        # a value under 0x10000000 prints as fewer than 8 hex digits without
+        # the zero pad - silently failing to match a real reference whose
+        # digest happens to start with a zero, which is exactly the class of
+        # bug a fixed-width checksum format exists to avoid.
+        return f"{crc:08x}"
+
+    # usedforsecurity=False: these are checksums identifying a known-good
+    # firmware image, not a cryptographic use, and some platforms' hashlib
+    # builds refuse plain md5/sha1 in FIPS mode without this.
+    digest = hashlib.new(algorithm, usedforsecurity=False)
     try:
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -84,16 +130,30 @@ def load_inventory(path: str) -> dict[str, Entry] | None:
         if (
             not isinstance(entry, dict)
             or not isinstance(entry.get("path"), str)
-            or not isinstance(entry.get("sha256"), str)
+            or not isinstance(entry.get("algorithm"), str)
+            or not isinstance(entry.get("digest"), str)
             or not isinstance(entry.get("name"), str)
         ):
             note(
-                f"{path}: entry {entry_id!r} is not an object with path, sha256 and name"
+                f"{path}: entry {entry_id!r} is not an object with "
+                "path, algorithm, digest and name"
+            )
+            return None
+        if entry["algorithm"] not in _ALGORITHMS:
+            # A hard, loud failure and not a per-entry "unknown" report line:
+            # a checker that silently skipped an entry it cannot verify
+            # would look, from its exit status alone, exactly like a checker
+            # that verified everything and found no problems.
+            note(
+                f"{path}: entry {entry_id!r} names algorithm "
+                f"{entry['algorithm']!r}, which this tool does not "
+                f"implement (know: {sorted(_ALGORITHMS)})"
             )
             return None
         inventory[entry_id] = {
             "path": entry["path"],
-            "sha256": entry["sha256"],
+            "algorithm": entry["algorithm"],
+            "digest": entry["digest"],
             "name": entry["name"],
         }
     return inventory
@@ -116,14 +176,14 @@ def check(inventory: dict[str, Entry], bios_dir: Path) -> tuple[list[str], bool]
     for entry in sorted(inventory.values(), key=lambda e: e["path"]):
         declared_paths.add(entry["path"])
         target = bios_dir / entry["path"]
-        digest = sha256_of(target)
+        digest = digest_of(target, entry["algorithm"])
         if digest is None:
             lines.append(f"MISSING  {entry['name']} ({entry['path']})")
             ok = False
-        elif digest != entry["sha256"]:
+        elif digest != entry["digest"]:
             lines.append(
                 f"MISMATCH {entry['name']} ({entry['path']}): "
-                f"expected {entry['sha256']}, got {digest}"
+                f"expected {entry['algorithm']}:{entry['digest']}, got {digest}"
             )
             ok = False
         else:

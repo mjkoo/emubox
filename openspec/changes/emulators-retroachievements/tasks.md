@@ -1,7 +1,7 @@
 ## 1. Prepare: owned-values JSON namespace (design D1)
 
-- [ ] 1.1 Restructure the owned-values JSON to `{"files": ..., "retroachievements": ...}` in `emubox_prepare.py`, keeping every existing editor and error-policy behaviour, with tests updated to the new shape
-- [ ] 1.2 Update the kiosk module's owned-values rendering to emit the new shape with `retroachievements: null`, and confirm the kiosk VM test still passes unchanged
+- [x] 1.1 Restructure the owned-values JSON to `{"files": ..., "retroachievements": ...}` in `emubox_prepare.py`, keeping every existing editor and error-policy behaviour, with tests updated to the new shape
+- [x] 1.2 Update the kiosk module's owned-values rendering to emit the new shape with `retroachievements: null`, and confirm the kiosk VM test still passes unchanged
 
 ## 2. Prepare: RetroAchievements login and tokens (design D2, D3)
 

@@ -128,7 +128,7 @@ def _inherit_owner(path: Path) -> None:
         note(f"{path}: could not set the owner ({error})")
 
 
-def _write(path: Path, text: str) -> None:
+def _write(path: Path, text: str, *, mode: int | None = None) -> None:
     """Replace the file's contents in one step.
 
     Through a temporary file and `os.replace` so that a reader - the frontend,
@@ -150,6 +150,12 @@ def _write(path: Path, text: str) -> None:
     - The data is fsynced before the rename and the directory after it, since
       `os.replace` is atomic against other processes but not against the
       power cut this appliance gets every time it is switched off at the wall.
+
+    `mode` overrides both the carried-over and the default mode, and is
+    applied to the temporary file *before* the rename. That ordering is the
+    whole reason it exists: chmod-ing after the rename publishes a
+    credential at 0644 for the length of a syscall, and leaves it there for
+    good if the chmod is the call that fails.
     """
     _ensure_parent(path)
     try:
@@ -167,10 +173,10 @@ def _write(path: Path, text: str) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         if preserve is None:
-            temporary.chmod(0o644)
+            temporary.chmod(0o644 if mode is None else mode)
             _inherit_owner(temporary)
         else:
-            temporary.chmod(stat.S_IMODE(preserve.st_mode))
+            temporary.chmod(stat.S_IMODE(preserve.st_mode) if mode is None else mode)
             if os.getuid() == 0:
                 os.chown(temporary, preserve.st_uid, preserve.st_gid)
         os.replace(temporary, path)
@@ -502,6 +508,49 @@ _MAX_LOGIN_BODY = 65536
 _CACHE_MODE = 0o600
 
 
+def _write_credential(path: Path, content: str) -> bool:
+    """Write a bearer credential at mode 0600. Returns whether it wrote.
+
+    Read and compare first, like every editor in this file. Two reasons,
+    both about this appliance rather than tidiness: the file lives on
+    flash, and this program runs on the critical path before every single
+    launch of the frontend, so writing identical content again costs a
+    fresh inode plus two fsyncs per launch for nothing.
+
+    The mode is still corrected when the content matches, because a box
+    that is offline for months may never take the write branch again and
+    this is a bearer token, not a preference.
+
+    An `OSError` is noted and swallowed: a cache that cannot be refreshed
+    must not cost the caller the token it just obtained, and nothing under
+    this namespace may cost the session (design D2).
+    """
+    try:
+        if _read_quietly(path) == content:
+            if stat.S_IMODE(path.stat().st_mode) != _CACHE_MODE:
+                path.chmod(_CACHE_MODE)
+            return False
+        _write(path, content, mode=_CACHE_MODE)
+    except OSError as error:
+        note(f"{path} could not be written ({error}); continuing without it")
+        return False
+    return True
+
+
+def _remove_credential(path: Path) -> None:
+    """Delete a credential file if there is one, noting a refusal.
+
+    `unlink` on a directory, or in a directory that is not writable, is an
+    `OSError` - and on the rejected-login path that exception would
+    otherwise escape a step that must never cost more than the
+    achievements.
+    """
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        note(f"{path} could not be removed ({error}); continuing")
+
+
 def _resolve_path(root: Path, value: str) -> Path:
     """A path from the retroachievements namespace, resolved like `files`.
 
@@ -709,13 +758,12 @@ def resolve_retroachievements_token(
 
     if outcome == "success":
         assert token is not None  # "success" always carries one
-        _write(cache_file, token)
-        cache_file.chmod(_CACHE_MODE)
+        _write_credential(cache_file, token)
         return username, token
 
     if outcome == "rejected":
         note("the RetroAchievements API rejected the login; dropping any cached token")
-        cache_file.unlink(missing_ok=True)
+        _remove_credential(cache_file)
         return None
 
     # outcome == "unreachable": fall back to the cache if one is readable;
@@ -982,14 +1030,13 @@ def _apply_secret_file_token(
     """
     token_file = _resolve_path(root, str(target["token_file"]))
     if resolved is None:
-        token_file.unlink(missing_ok=True)
+        _remove_credential(token_file)
         return
     _, token = resolved
     # No trailing newline: PPSSPP's login path reads the file's raw bytes
     # as the token with no line-oriented parsing shown to tolerate one, so
     # the conservative choice, absent a way to confirm otherwise, is none.
-    _write(token_file, token)
-    token_file.chmod(_CACHE_MODE)
+    _write_credential(token_file, token)
 
 
 def apply_retroachievements(

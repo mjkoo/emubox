@@ -2225,3 +2225,144 @@ def test_main_still_refuses_a_malformed_retroachievements_document(
     assert ep.main([str(values), ""]) == 1
     assert "encoding" in capsys.readouterr().err
     assert not (appdata / "retroarch.cfg").exists()
+
+
+# --- Second review wave: writes that should not happen (I4, I5, M9) --------
+
+
+def test_write_applies_a_requested_mode_before_the_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M9: a chmod after os.replace publishes a credential at 0644 for the
+    # length of a syscall, and leaves it there for good if that chmod is
+    # the call that fails. The assertion is on the temporary file's mode as
+    # the rename sees it, not merely on the mode afterwards.
+    path = tmp_path / "ra-token"
+    seen: list[int] = []
+    real_replace = os.replace
+
+    def watched_replace(source: object, destination: object) -> None:
+        seen.append(os.stat(cast("str", source)).st_mode & 0o777)
+        real_replace(cast("str", source), cast("str", destination))
+
+    monkeypatch.setattr(ep.os, "replace", watched_replace)
+    ep._write(path, "tok", mode=0o600)
+
+    assert seen == [0o600]
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_resolve_token_does_not_rewrite_an_unchanged_cache(tmp_path: Path) -> None:
+    # I4: identical content wrote a fresh inode on every launch - two full
+    # write+fsync+rename+dir-fsync cycles per launch on a flash appliance,
+    # on the critical path before the frontend, for nothing.
+    with ra_server(_json_handler(200, {"Success": True, "Token": "same-tok"})) as url:
+        ra, cache_file = ra_namespace(tmp_path, url)
+
+        assert ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0) is not None
+        freeze(cache_file)
+
+        assert ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0) is not None
+
+    assert unwritten(cache_file)
+    assert cache_file.read_text() == "same-tok"
+
+
+def test_resolve_token_corrects_the_cache_mode_without_rewriting_it(
+    tmp_path: Path,
+) -> None:
+    # The other half: skipping the write must not skip the mode, or a box
+    # that is offline for months keeps a world-readable bearer token.
+    with ra_server(_json_handler(200, {"Success": True, "Token": "same-tok"})) as url:
+        ra, cache_file = ra_namespace(tmp_path, url, cache="same-tok")
+        cache_file.chmod(0o644)
+        freeze(cache_file)
+
+        assert ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0) is not None
+
+    assert unwritten(cache_file)
+    assert cache_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_apply_does_not_rewrite_an_unchanged_secret_file(tmp_path: Path) -> None:
+    # I4 again, for PPSSPP's whole-file token.
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+
+    def run_once() -> None:
+        with ra_server(_json_handler(200, {"Success": True, "Token": "tok-same"})) as u:
+            files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+            ra = retroachievements_namespace(
+                tmp_path, u, [secret_file_target(token_file)]
+            )
+            assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    run_once()
+    freeze(token_file)
+
+    run_once()
+
+    assert unwritten(token_file)
+    assert token_file.read_bytes() == b"tok-same"
+
+
+def test_apply_corrects_the_secret_files_mode_without_rewriting_it(
+    tmp_path: Path,
+) -> None:
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    token_file.write_text("tok-same")
+    token_file.chmod(0o644)
+    freeze(token_file)
+
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-same"})) as url:
+        files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+        ra = retroachievements_namespace(
+            tmp_path, url, [secret_file_target(token_file)]
+        )
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    assert unwritten(token_file)
+    assert token_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_apply_keeps_the_token_when_the_cache_cannot_be_written(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # C3's OSError family where it is most plausible: a cache path that
+    # cannot be written (here a directory; on the box, /data full or
+    # remounted read-only after a power cut). The login succeeded, so the
+    # session keeps its achievements - it only loses the offline fallback.
+    with ra_server(
+        _json_handler(200, {"Success": True, "Token": "tok-nocache"})
+    ) as url:
+        files: dict[str, object] = {
+            "retroarch.cfg": {"format": "retroarch", "keys": {}}
+        }
+        ra = retroachievements_namespace(
+            tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
+        )
+        cache_file = Path(cast("str", ra["cache_file"]))
+        cache_file.mkdir(parents=True)
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    keys = files["retroarch.cfg"]["keys"]
+    assert keys["cheevos_token"] == "tok-nocache"
+    assert "could not be written" in capsys.readouterr().err
+
+
+def test_apply_survives_a_secret_file_that_cannot_be_removed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The offline half of the same family: no token resolved, so PPSSPP's
+    # token file is deleted - and a directory there raised IsADirectoryError
+    # straight out of the step that runs before every launch.
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    token_file.mkdir()
+    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [secret_file_target(token_file)]
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+    assert "could not be removed" in capsys.readouterr().err

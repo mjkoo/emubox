@@ -3021,6 +3021,108 @@ def test_apply_disabled_removing_absent_credentials_is_a_silent_no_op(
     assert capsys.readouterr().err == ""
 
 
+def test_main_survives_a_credential_removal_it_cannot_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `apply_retroachievements` only *stages* the removals into `files`; the
+    # writes that take a credential off disk happen in the editor loop
+    # below it, outside that call's blanket guard. An OSError there - /data
+    # full, remounted read-only after a power cut, a directory that cannot
+    # be written - escaped as a traceback and ended the session at the
+    # greeter, which is exactly what design D2 forbids. Making the disabled
+    # path do removals is what made it reachable on a disabled box, the
+    # configuration nearly every real box is in.
+    #
+    # The read-only directory stands in for the read-only /data: nix runs
+    # this suite as an unprivileged user, so the mode is enforced.
+    appdata = tmp_path / "es-de"
+    appdata.mkdir()
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    locked = appdata / "pcsx2"
+    locked.mkdir()
+    secrets = locked / "secrets.ini"
+    secrets.write_text("[Achievements]\nUsername = alice\nToken = TOKENabc123\n")
+    retroarch = appdata / "retroarch.cfg"
+    retroarch.write_text('cheevos_username = "alice"\ncheevos_token = "TOKENabc123"\n')
+    locked.chmod(0o500)
+
+    ra = retroachievements_namespace(
+        tmp_path,
+        closed_port_url(),
+        [
+            ini_target("pcsx2", "pcsx2/secrets.ini", "Achievements"),
+            plain_target("retroarch", "retroarch.cfg"),
+        ],
+    )
+    ra["enabled"] = False
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "pcsx2/secrets.ini": {"format": "ini", "keys": {}},
+                    "retroarch.cfg": {"format": "retroarch", "keys": {}},
+                },
+                "retroachievements": ra,
+            }
+        )
+    )
+
+    try:
+        assert ep.main([str(values), ""]) == 0
+    finally:
+        locked.chmod(0o700)
+
+    err = capsys.readouterr().err
+    assert "pcsx2/secrets.ini could not be updated" in err
+    assert "Traceback" not in err
+    # The file that could be written still lost its credential: one
+    # unwritable file costs that file's keys, not the family's evening.
+    assert "TOKENabc123" not in retroarch.read_text()
+    assert "TOKENabc123" in secrets.read_text()
+
+
+def test_main_still_fails_the_session_on_a_malformed_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The distinction the editor guard above must not blur, and which has
+    # been broken once already: an unwritable file is a runtime condition
+    # the box continues through, while a malformed owned-values document is
+    # a broken call site the greeter is the correct answer to. Both
+    # conditions are present here at once and the greeter still wins.
+    appdata = tmp_path / "es-de"
+    appdata.mkdir()
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    locked = appdata / "pcsx2"
+    locked.mkdir()
+    (locked / "secrets.ini").write_text("[Achievements]\nToken = TOKENabc123\n")
+    locked.chmod(0o500)
+
+    ra = retroachievements_namespace(
+        tmp_path,
+        closed_port_url(),
+        [ini_target("pcsx2", "pcsx2/secrets.ini", "Achievements")],
+    )
+    ra["enabled"] = False
+    del ra["api_url"]
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {"pcsx2/secrets.ini": {"format": "ini", "keys": {}}},
+                "retroachievements": ra,
+            }
+        )
+    )
+
+    try:
+        assert ep.main([str(values), ""]) == 1
+    finally:
+        locked.chmod(0o700)
+
+    assert "api_url" in capsys.readouterr().err
+
+
 def test_main_disabled_recreates_a_torn_secrets_file_without_the_live_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

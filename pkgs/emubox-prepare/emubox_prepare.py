@@ -1630,7 +1630,27 @@ def main(argv: Sequence[str]) -> int:
 
     for relative, table in tables.items():
         editor = _EDITORS[table["format"]]
-        editor(root / relative, table["keys"])
+        try:
+            editor(root / relative, table["keys"])
+        except OSError as error:
+            # The recreate-not-fail policy this program applies everywhere
+            # else, applied to the write itself. `/data` full, remounted
+            # read-only after a power cut, or a directory that cannot be
+            # written are runtime conditions, not broken call sites: a file
+            # that cannot be written costs that file's keys, not the
+            # family's evening at the greeter (design D2).
+            #
+            # This loop is where the RetroAchievements credential removals
+            # actually reach the disk - `apply_retroachievements` only
+            # stages them into `tables`, so its own blanket guard above
+            # stops short of them - which is what made this hole reachable
+            # on a disabled box, the configuration nearly every real box is
+            # in. Deliberately narrower than that guard: `OSError` only,
+            # and only around one file, so the loop carries on to the rest.
+            # The `return 1` paths above stay where they are, because a
+            # malformed owned-values document is a broken call site the
+            # greeter is still the correct answer to.
+            note(f"{relative} could not be updated ({error}); continuing")
 
     install_custom_systems(root / "custom_systems" / "es_systems.xml", custom_systems)
     return 0

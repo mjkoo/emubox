@@ -846,13 +846,37 @@ in
     };
 
     apiUrl = lib.mkOption {
-      type = lib.types.str;
+      # Constrained to a URL with a scheme, not a bare `str`: prepare hands
+      # this value straight to `urllib.request.urlopen` (design D2), which
+      # raises `ValueError: unknown url type` on a schemeless host - a
+      # hard, unrecoverable prepare failure that strands the box at the
+      # greeter (design D1's "a bug in prepare... should stop at a greeter
+      # the admin can log into", not the fresh-box, working-network path
+      # the retroachievements spec promises to leave achievements-only
+      # broken) - and, unconstrained, would also accept `file://`, which
+      # `urlopen` follows just as readily as `http(s)://`.
+      #
+      # `http://` is still accepted, not narrowed to `https://` only,
+      # because design D7's VM test points prepare at a plain `python
+      # http.server` mock with no TLS - the one place this box is ever
+      # meant to run the login over an unencrypted connection, and the
+      # documented exception the finding that added this constraint asked
+      # for. An admin who points this at a real `http://` endpoint gets
+      # the account password crossing the network in clear text on every
+      # prepare run (design D2's `login2` POST carries it) - the
+      # description below says so, since the type alone cannot forbid a
+      # legitimately reachable but insecure host.
+      type = lib.types.strMatching "https?://.*";
       default = "https://retroachievements.org/dorequest.php";
       description = ''
         The RetroAchievements API endpoint `emubox-prepare` posts its
         `login2` request to. An option rather than a literal buried in
         this module, because design D2 has the VM test point prepare at a
-        mock server here instead of patching the module to do it.
+        mock server here instead of patching the module to do it. Must
+        start with `http://` or `https://`; an `http://` endpoint carries
+        the RetroAchievements account password across the network in
+        clear text on every prepare run, so only the VM test's local mock
+        server should ever use one.
       '';
     };
   };

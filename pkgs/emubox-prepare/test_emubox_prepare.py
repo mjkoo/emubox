@@ -669,7 +669,7 @@ def test_ini_keeps_a_value_containing_an_exotic_line_separator(
 def test_ini_an_empty_file_owning_only_a_removal_writes_and_notes_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # N5: the "is empty; recreating it" note used to fire here unconditionally,
+    # The "is empty; recreating it" note used to fire here unconditionally,
     # even though the very next line ("every owned key in this file is a
     # removal...") already meant no write would follow it. secrets.ini
     # before any token has ever resolved, or every target's login keys
@@ -689,7 +689,7 @@ def test_ini_an_empty_file_owning_only_a_removal_writes_and_notes_nothing(
 def test_ini_an_empty_file_owning_a_real_value_still_notes_the_recreation(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The other half of the N5 fix: deferring the note to `set_ini_settings`
+    # The other half of that fix: deferring the note to `set_ini_settings`
     # must not silence it when a write genuinely does follow.
     path = tmp_path / "settings.ini"
     path.write_text("")
@@ -902,7 +902,7 @@ def test_main_treats_an_absent_retroachievements_key_as_null(
 def test_main_accepts_a_valid_non_null_retroachievements_object(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Group 1's review flagged the missing positive case: a well-formed,
+    # The positive case, which is the easy one to leave out: a well-formed,
     # non-null retroachievements namespace is not itself an error, even
     # before this group taught main() to act on it.
     monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
@@ -1763,7 +1763,7 @@ def test_apply_writes_enabled_and_hardcore_even_without_a_resolved_token(
     keys = files["retroarch.cfg"]["keys"]
     assert keys["cheevos_enable"] == "true"
     assert keys["cheevos_hardcore_mode_enable"] == "true"
-    # Marked for removal rather than omitted (I8): omitting them left
+    # Marked for removal rather than omitted: omitting them left
     # whatever a previous, luckier run had written on disk.
     assert keys["cheevos_username"] is ep.REMOVE
     assert keys["cheevos_token"] is ep.REMOVE
@@ -2082,13 +2082,13 @@ def test_main_end_to_end_with_retroachievements_never_leaks_the_password(
     assert "hunter2" not in capsys.readouterr().err
 
 
-# --- Review fixes: C1, I1, I2, M1, M2, M4 -----------------------------------
+# --- RetroAchievements: degrading without ever writing more than it must ---
 
 
 def test_resolve_token_continues_when_a_credential_file_is_not_valid_utf8(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # C1: UnicodeDecodeError is a ValueError, not an OSError, so it needs its
+    # UnicodeDecodeError is a ValueError, not an OSError, so it needs its
     # own except clause - otherwise it propagates out of main() as an
     # uncaught traceback instead of the clean "no token" degradation the
     # whole design exists to provide, and a power cut can leave a
@@ -2118,7 +2118,7 @@ def test_resolve_token_continues_when_the_cache_is_not_valid_utf8(
 def test_apply_and_editors_leave_the_duckstation_file_untouched_when_the_token_is_unchanged(
     tmp_path: Path,
 ) -> None:
-    # I1: the requirement is the file's bytes, not merely that the returned
+    # The requirement is the file's bytes, not merely that the returned
     # mapping omits "login_timestamp" - this runs the full apply-then-write
     # pipeline twice with the same token and proves the second pass writes
     # nothing at all, mtime included.
@@ -2148,7 +2148,7 @@ def test_apply_and_editors_leave_the_duckstation_file_untouched_when_the_token_i
 def test_apply_folds_the_cached_token_into_the_owned_tables_when_offline(
     tmp_path: Path,
 ) -> None:
-    # I2: the resolve layer's cache fallback is covered on its own, but the
+    # The resolve layer's cache fallback is covered on its own, but the
     # "Offline with a cached token" spec scenario is about what actually
     # lands in the emulator configs.
     files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
@@ -2178,7 +2178,7 @@ def test_resolve_token_notes_falling_back_to_the_cache_when_unreachable(
 def test_resolve_token_notes_no_cache_to_fall_back_to_when_unreachable(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # M1: distinct from the message above - an admin reading the journal in
+    # Distinct from the message above - an admin reading the journal in
     # the no-network-no-cache scenario must not see wording implying a
     # fallback happened when none did.
     ra, _cache_file = ra_namespace(tmp_path, closed_port_url())
@@ -2194,7 +2194,7 @@ def test_resolve_token_notes_no_cache_to_fall_back_to_when_unreachable(
 def test_apply_rejects_a_non_boolean_hardcore(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # M2: every other malformed field in this namespace is a call-site
+    # Every other malformed field in this namespace is a call-site
     # failure; a JSON string like "false" being silently truthy under a
     # bare bool(...) would be the one exception.
     files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
@@ -2210,7 +2210,7 @@ def test_apply_rejects_a_non_boolean_hardcore(
 def test_apply_never_leaks_the_password_across_every_target_shape(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # M4: the earlier password tests each sweep one file; this one runs
+    # The earlier password tests each sweep one file; this one runs
     # every target shape together and sweeps every resulting file plus
     # stderr in one pass.
     machine_id_file = tmp_path / "machine-id"
@@ -2245,13 +2245,13 @@ def test_apply_never_leaks_the_password_across_every_target_shape(
     assert "hunter2" not in capsys.readouterr().err
 
 
-# --- Second review wave: the crash boundary (C1-C3) -------------------------
+# --- The crash boundary: what must never reach main as a traceback ---------
 
 
 def test_main_survives_a_settings_ini_that_is_not_valid_utf8(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # C1: DuckStation writes ROM paths and memory card names into
+    # DuckStation writes ROM paths and memory card names into
     # settings.ini verbatim, so one latin-1 byte off a FAT stick makes the
     # file undecodable. The read that change-gates LoginTimestamp happens
     # before any editor runs, so a UnicodeDecodeError escaping there ends
@@ -2290,7 +2290,7 @@ def test_main_survives_a_settings_ini_that_is_not_valid_utf8(
 
 
 def test_login2_bounds_a_dribbling_server_by_wall_clock() -> None:
-    # C2: urlopen's timeout is per socket operation, so a server sending a
+    # urlopen's timeout is per socket operation, so a server sending a
     # byte at a time resets it forever and the login never returns. The
     # assertion on elapsed time is the one that pins the bound: without a
     # wall-clock deadline this call runs for the whole dribble and beyond.
@@ -2396,7 +2396,7 @@ def test_login2_does_not_leave_its_abandoned_request_running(
 def test_login2_reports_unreachable_when_the_reply_is_not_http(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # C3: BadStatusLine is an http.client.HTTPException, not an OSError, so
+    # BadStatusLine is an http.client.HTTPException, not an OSError, so
     # it escaped to main as a traceback and the session ended at a greeter.
     with raw_reply_server(b"gibberish not a status line\r\n\r\n") as url:
         assert ep._login2_request(url, "alice", "hunter2", 5.0) == (
@@ -2469,7 +2469,7 @@ def test_login2_reads_a_bounded_body() -> None:
 def test_main_absorbs_an_unexpected_failure_in_the_retroachievements_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # C3: an exception from anywhere in the RA step costs the achievements
+    # An exception from anywhere in the RA step costs the achievements
     # and nothing else. Anything else ends the session at the greeter, and
     # nobody in the family can play until an admin logs in over SSH.
     appdata = tmp_path / "es-de"
@@ -2532,13 +2532,13 @@ def test_main_still_refuses_a_malformed_retroachievements_document(
     assert not (appdata / "retroarch.cfg").exists()
 
 
-# --- Second review wave: writes that should not happen (I4, I5, M9) --------
+# --- Writes that should not happen: mode ordering, unchanged content ------
 
 
 def test_write_applies_a_requested_mode_before_the_rename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # M9: a chmod after os.replace publishes a credential at 0644 for the
+    # A chmod after os.replace publishes a credential at 0644 for the
     # length of a syscall, and leaves it there for good if that chmod is
     # the call that fails. The assertion is on the temporary file's mode as
     # the rename sees it, not merely on the mode afterwards.
@@ -2558,7 +2558,7 @@ def test_write_applies_a_requested_mode_before_the_rename(
 
 
 def test_resolve_token_does_not_rewrite_an_unchanged_cache(tmp_path: Path) -> None:
-    # I4: identical content wrote a fresh inode on every launch - two full
+    # Identical content wrote a fresh inode on every launch - two full
     # write+fsync+rename+dir-fsync cycles per launch on a flash appliance,
     # on the critical path before the frontend, for nothing.
     with ra_server(_json_handler(200, {"Success": True, "Token": "same-tok"})) as url:
@@ -2590,7 +2590,7 @@ def test_resolve_token_corrects_the_cache_mode_without_rewriting_it(
 
 
 def test_apply_does_not_rewrite_an_unchanged_secret_file(tmp_path: Path) -> None:
-    # I4 again, for PPSSPP's whole-file token.
+    # The same unchanged-content rule, for PPSSPP's whole-file token.
     token_file = tmp_path / "ppsspp_retroachievements.dat"
 
     def run_once() -> None:
@@ -2633,10 +2633,11 @@ def test_apply_corrects_the_secret_files_mode_without_rewriting_it(
 def test_apply_keeps_the_token_when_the_cache_cannot_be_written(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # C3's OSError family where it is most plausible: a cache path that
-    # cannot be written (here a directory; on the box, /data full or
-    # remounted read-only after a power cut). The login succeeded, so the
-    # session keeps its achievements - it only loses the offline fallback.
+    # The crash boundary's OSError family, where it is most plausible: a
+    # cache path that cannot be written (here a directory; on the box,
+    # /data full or remounted read-only after a power cut). The login
+    # succeeded, so the session keeps its achievements - it only loses the
+    # offline fallback.
     with ra_server(
         _json_handler(200, {"Success": True, "Token": "tok-nocache"})
     ) as url:
@@ -2676,7 +2677,7 @@ def test_apply_survives_a_secret_file_that_cannot_be_removed(
 def test_ini_does_not_create_a_file_when_nothing_is_owned(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # I5: PCSX2's secrets.ini is declared with no keys of its own, so every
+    # PCSX2's secrets.ini is declared with no keys of its own, so every
     # launch that resolves no token used to write a lone newline, read it
     # back as empty and log "is empty; recreating it" - forever.
     path = tmp_path / "secrets.ini"
@@ -2744,7 +2745,7 @@ def test_main_leaves_a_keyless_secrets_file_alone_on_an_offline_box(
     assert "recreating" not in capsys.readouterr().err
 
 
-# --- Second review wave: the token is data from the network (I6) -----------
+# --- The token is data from the network, not a value the flake chose ------
 
 INJECTED_TOKENS = ["tok\nCheevos_evil = 1", "tok\nJUST-GARBAGE", "tok with space"]
 
@@ -2753,7 +2754,7 @@ INJECTED_TOKENS = ["tok\nCheevos_evil = 1", "tok\nJUST-GARBAGE", "tok with space
 def test_login2_refuses_a_token_that_is_not_one_safe_line(
     token: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # I6: the token was accepted as any non-empty str and written into
+    # The token was accepted as any non-empty str and written into
     # every config. A newline in it either grows the file by a line on
     # every launch or sends it through the recreate path, destroying every
     # unowned preference in it.
@@ -2813,7 +2814,7 @@ def test_a_config_neither_grows_nor_loses_keys_to_an_injected_token(
     assert "GARBAGE" not in first
 
 
-# --- Second review wave: validation that promised no tracebacks (I7) -------
+# --- Validation that promised a journal line rather than a traceback ------
 
 
 @pytest.mark.parametrize(
@@ -2822,7 +2823,7 @@ def test_a_config_neither_grows_nor_loses_keys_to_an_injected_token(
 def test_apply_rejects_a_namespace_missing_a_required_field(
     field: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # I7: each of these is subscripted bare, so a document missing one died
+    # Each of these is subscripted bare, so a document missing one died
     # with `KeyError 'password_file'` - a stack trace in the journal, which
     # is exactly what `_target_validation_error`'s docstring promises an
     # admin will never have to read.
@@ -2862,7 +2863,7 @@ def test_apply_rejects_a_key_entry_that_carries_no_key(
     assert "'key'" in capsys.readouterr().err
 
 
-# --- Second review wave: no stale token survives a run (I8) ----------------
+# --- No stale token survives a run ----------------------------------------
 
 
 def test_ini_removes_an_owned_key_and_keeps_everything_else(tmp_path: Path) -> None:
@@ -3086,7 +3087,7 @@ def test_retroarch_a_torn_file_owning_only_a_removal_is_recreated(
 
 
 def test_a_rejected_login_leaves_no_token_behind_in_retroarch(tmp_path: Path) -> None:
-    # I8, the reproduction: after a success then a rejection, retroarch.cfg
+    # The reproduction: after a success then a rejection, retroarch.cfg
     # still held the username, the token and cheevos_enable = "true". The
     # spec says a rejection starts the session with achievements absent.
     cfg = tmp_path / "retroarch.cfg"
@@ -3171,11 +3172,11 @@ def test_a_run_with_no_token_leaves_the_ppsspp_username_out_too(
     assert cast("dict[str, object]", achievements)["AchievementsUserName"] is ep.REMOVE
 
 
-# --- Second review wave: the minors (M13) ----------------------------------
+# --- A secret is read exactly as sops wrote it ----------------------------
 
 
 def test_read_secret_keeps_whitespace_inside_a_password(tmp_path: Path) -> None:
-    # M13: only the one newline sops appends is dropped. A password with a
+    # Only the one newline sops appends is dropped. A password with a
     # leading or trailing space could never authenticate, and the failure
     # looked exactly like a rejection.
     path = tmp_path / "password"
@@ -3210,11 +3211,11 @@ def test_the_login_posts_a_password_with_its_whitespace_intact(
     assert received["p"] == [" hunter2 "]
 
 
-# --- N2 fix: switching RetroAchievements off removes every credential ------
+# --- Switching RetroAchievements off removes every credential -------------
 #
 # `enable = false` used to leave a stale username and a live bearer token
 # sitting in every supporting emulator's config, PPSSPP's raw token file and
-# the login cache - the same class of finding I8 already fixed for the
+# the login cache - the same class of bug already fixed for the
 # no-token-resolved case, just never applied to the disabled case at all
 # (raDisabledFiles, modules/emulators, only ever forced `enabled`/`hardcore`
 # off). These tests exercise the namespace's own `enabled: false` field

@@ -3,19 +3,19 @@
 # every other key as the frontend last wrote it (design D3).
 #
 # Not a vendored package: this is a program of the project's own, built by
-# the flake like any other package it provides. One stdlib-only Python file
-# and its test, so `stdenvNoCC.mkDerivation` rather than
-# `buildPythonApplication`, which would want a pyproject.toml and a fifth
-# file for a program that is one script. If prepare outgrows one file it
-# becomes a uv project here and the derivation switches to nixpkgs' uv
-# support.
+# the flake like any other package it provides. A handful of Python files
+# and their tests, so `stdenvNoCC.mkDerivation` rather than
+# `buildPythonApplication`, which would want a pyproject.toml of its own. If
+# prepare outgrows this it becomes a uv project here and the derivation
+# switches to nixpkgs' uv support.
 #
 # The unit tests, lint and type check run in `checkPhase` rather than as
 # derivations of their own, so `checks.<system>.emubox-prepare` is a single
 # build on every system the flake is checked on, the admin's Mac included.
-# python3 is a `buildInputs` entry, not a native one: the script runs on the
-# host platform, and the default fixup's `patchShebangs --host` resolves its
-# `#!` against exactly that.
+# `python3.withPackages` is a `buildInputs` entry, not a native one: the
+# script runs on the host platform, and the default fixup's
+# `patchShebangs --host` resolves its `#!` against exactly that environment -
+# the one carrying `cryptography` for the DuckStation token transform.
 {
   lib,
   stdenvNoCC,
@@ -24,6 +24,12 @@
   ty,
 }:
 
+let
+  # One python closure for both the installed script's shebang and the
+  # check phase's pytest, so `import cryptography` works in both places
+  # rather than only at runtime or only under test.
+  python = python3.withPackages (ps: [ ps.cryptography ]);
+in
 stdenvNoCC.mkDerivation {
   pname = "emubox-prepare";
   version = "0.1.0";
@@ -39,12 +45,12 @@ stdenvNoCC.mkDerivation {
     ];
   };
 
-  buildInputs = [ python3 ];
+  buildInputs = [ python ];
 
   nativeCheckInputs = [
     ruff
     ty
-    python3.pkgs.pytest
+    python.pkgs.pytest
   ];
 
   doCheck = true;

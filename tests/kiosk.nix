@@ -1817,12 +1817,24 @@ assert lib.assertMsg
                   f"{binary} exited within {settle}s of launch, before this "
                   "smoke launch even got to prove it stays up"
               )
-          # 30 s: the same figure the crash-loop subtest above uses to wait out
-          # a SIGKILL on es-de, reused here rather than invented fresh - a
-          # multi-hundred-megabyte process unwinding SDL/Qt on a loaded CI
-          # runner is the same class of wait, not a smaller one, even though
-          # this kill is a plain SIGTERM rather than a SIGKILL.
-          machine.succeed(f"kill {pid}")
+          # SIGKILL, not SIGTERM, and this file already learned why one screen
+          # up: a GUI process that has installed a toolkit's SIGTERM handler
+          # but is not yet polling its event queue never sees the quit the
+          # handler posts, so the signal sits unread and the process outlives
+          # any wait put on it. The crash-loop subtest above records that
+          # lesson for es-de; CI run 33367950351 then reproduced it here with
+          # Azahar, which started correctly, held its settle window, and then
+          # ignored a SIGTERM until the 30 s wait expired and failed the whole
+          # subtest. Nothing about this teardown wants a graceful exit - the
+          # assertion has already been made by the time the kill runs, and the
+          # process only has to go away - so the signal it cannot ignore is
+          # the right one.
+          #
+          # 30 s: the same figure the crash-loop subtest uses to wait out a
+          # SIGKILL on es-de, reused rather than invented fresh, because a
+          # multi-hundred-megabyte process unwinding SDL or Qt on a loaded CI
+          # runner is the same class of wait.
+          machine.succeed(f"kill -KILL {pid}")
           machine.wait_until_fails(f"kill -0 {pid}", timeout=30)
 
       with subtest("Standalones smoke launch against their asserted configuration"):

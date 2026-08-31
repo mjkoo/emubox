@@ -907,6 +907,62 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
       # `emubox-prepare` re-run passes CUSTOM_SYSTEMS_PATH (the real,
       # non-empty document), not the empty string the "empty definition"
       # subtest used, and nothing here kills or restarts es-de itself.
+      #
+      # The mock server (emubox-mock-retroachievements.service) has not been
+      # started by anything above, so every prepare run since the first boot
+      # - many, across the relaunch, crash-loop and reboot subtests - has
+      # already been attempting a login against an endpoint with nothing
+      # listening on it. That is the retroachievements spec's "no route to
+      # the endpoint" scenario, exercised for free rather than built
+      # specially; the subtest below adds only the one thing that could not
+      # come from ambient state - a deterministic, journal-connected proof
+      # that the failure was actually logged.
+
+      with subtest("Offline boot: no cached token, no route, frontend still up"):
+          # `machine.succeed`/`.execute` only capture a command's stdout (the
+          # driver pipes `bash -c command` into `base64`; stderr is not part
+          # of that pipeline), so `emubox-prepare`'s own stderr notes are
+          # otherwise invisible to this test. A transient systemd unit is
+          # used instead of the `su player` idiom the rest of this file uses,
+          # specifically so its stderr reaches the journal the normal way (no
+          # `--pipe`, so systemd's own default output routing applies) and
+          # `journalctl` can prove the spec's "the journal records the failed
+          # login" - the one assertion that a residual, ambient log entry
+          # from three es-de relaunches ago could not honestly stand in for.
+          unit = "emubox-prepare-ra-offline-check"
+          machine.succeed(
+              f"systemd-run --unit={unit} --uid=player "
+              f"--setenv=ESDE_APPDATA_DIR={APPDATA} --wait "
+              f"-- emubox-prepare {OWNED_VALUES} {CUSTOM_SYSTEMS_PATH}"
+          )
+          exit_status = machine.succeed(
+              f"systemctl show -p ExecMainStatus --value {unit}.service"
+          ).strip()
+          assert exit_status == "0", exit_status
+          journal = machine.succeed(f"journalctl -u {unit}.service --no-pager -o cat")
+          assert "could not reach the RetroAchievements API and no cached token exists" in journal, journal
+
+          machine.succeed("pgrep -x es-de")
+
+          owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
+          ra = owned["retroachievements"]
+          for target in ra["targets"]:
+              booleans = target["booleans"]
+              # Written as declared even with no login: enabled follows the
+              # namespace being non-null, hardcore follows the (default off)
+              # switch - design D2's "the enabled and hardcore keys are
+              # still written as declared".
+              assert read_target_value(target, "enabled") == booleans["true"], target["name"]
+              assert read_target_value(target, "hardcore") == booleans["false"], target["name"]
+              # No account name or token anywhere - the exact absence, not
+              # merely "not the mock's value", since a stale value from an
+              # earlier run would also fail this the moment one existed.
+              assert read_target_value(target, "username") is None, target["name"]
+              assert read_target_value(target, "token") is None, target["name"]
+              if target.get("token_file"):
+                  machine.fail(f"test -e {resolve(APPDATA, target['token_file'])}")
+
+          sweep_for_password(owned)
 
       with subtest("Tokens asserted against the mock: hardcore off"):
           machine.succeed("systemctl start emubox-mock-retroachievements.service")
@@ -1015,5 +1071,64 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
                   f"{fixture['family']}: expected {fixture['core']!r} in the RetroArch log\n{out}"
               )
 
+      # --- standalones: smoke launch (design D7) ----------------------------
+
+      def standalone_smoke_launch(binary, settle=5):
+          """Prove a standalone starts against its written configuration and
+          stays up, then kill it.
+
+          Not `--version`: this project has only source-verified that
+          contract for two of these six binaries (ScummVM below, and
+          separately for es-de/duckstation in the install test), and PCSX2's
+          own command-line parser (read directly, pcsx2-qt/QtHost.cpp) is
+          confirmed to exit 1 on `-version`/`-help` even though it printed
+          the right thing first - so leaning on six different codebases'
+          individual flag-handling would be asserting more than this project
+          actually knows. A background launch, alive-check and kill instead
+          proves exactly what the spec asks for ("the process starts"), the
+          same pgrep-based idiom this file already uses for es-de throughout.
+
+          QT_QPA_PLATFORM=offscreen and SDL_VIDEODRIVER=dummy are set
+          regardless of which toolkit a given binary actually uses - an
+          unused environment variable is a no-op - because this VM's only
+          display is the virtio-gpu console cage already owns for es-de (the
+          install test's own header: "the AppImage's Qt would fail without
+          one"), so a second GUI app needs a display it can construct
+          without a real compositor. This combination is not verified
+          against every one of these five specific derivations in an actual
+          VM (no KVM builder was available while writing this test); if CI
+          shows one of them still needing a display it cannot get, the fix
+          is a per-binary invocation here, not a broader claim than this
+          smoke launch actually proves.
+          """
+          log = f"/tmp/emubox-smoke-{binary.replace('/', '_')}.log"
+          launch = (
+              f"env QT_QPA_PLATFORM=offscreen SDL_VIDEODRIVER=dummy "
+              f"{binary} > {log} 2>&1 & echo $!"
+          )
+          pid = machine.succeed(f"su player -s /bin/sh -c {shlex.quote(launch)}").strip()
+
+          def alive(_last):
+              rc, _ = machine.execute(f"kill -0 {pid}")
+              return rc == 0
+
+          try:
+              retry(alive, timeout_seconds=settle)
+          except Exception:
+              print(machine.execute(f"cat {log}")[1])
+              raise
+          machine.succeed(f"kill {pid}")
+          machine.wait_until_fails(f"kill -0 {pid}", timeout=30)
+
+      with subtest("Standalones smoke launch against their asserted configuration"):
+          for binary in ["duckstation", "dolphin-emu", "pcsx2-qt", "azahar", "ppsspp"]:
+              standalone_smoke_launch(binary)
+
+          # ScummVM's CLI is well-established as safe with no display at all
+          # (its `--version` is handled long before any toolkit init), so its
+          # floor is the install test's own "nothing beyond --version"
+          # pattern rather than the background-launch idiom above.
+          out = machine.succeed("su player -s /bin/sh -c 'scummvm --version'")
+          assert "ScummVM" in out, out
     '';
 }

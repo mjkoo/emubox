@@ -27,7 +27,7 @@
 
 - [x] 5.1 Add the mock RA endpoint and test credentials to the kiosk VM test and assert every supporting config carries the mock token (DuckStation's via independent decrypt), no config carries the password, and both hardcore positions
 - [x] 5.2 Pin one freely redistributable homebrew ROM per BIOS-free core family as fetched fixtures and assert headless RetroArch exit 0 plus a core log line per family
-- [ ] 5.3 Add the standalone smoke launches and the offline-no-cache boot assertion (frontend up, journal records the failed login)
+- [x] 5.3 Add the standalone smoke launches and the offline-no-cache boot assertion (frontend up, journal records the failed login)
 
 ## 6. Docs and runbook
 

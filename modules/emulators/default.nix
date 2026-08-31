@@ -1009,7 +1009,17 @@ in
       };
       # No performance keys of its own - see the comment on
       # `pcsx2SecretsFile` above; only the RA token, when enabled, ever
-      # lands here.
+      # lands here. Kept declared with an empty `keys` table rather than
+      # dropped from `ownedFiles` even though nothing here is ever static:
+      # prepare's `_target_validation_error` requires every retroachievements
+      # target key's `file` to already be a key of the rendered `files` map
+      # (emubox_prepare.py), and the pcsx2 target's `token` key names this
+      # file - removing the declaration would fail that check the moment RA
+      # is enabled, not just leave a spurious-write cost when it is off. The
+      # spurious recreate-on-every-launch this empty declaration causes when
+      # no token resolves is prepare's to fix (its own file-format editor
+      # deciding "no static keys and nothing merged in" means "no write"),
+      # not this module's.
       "${pcsx2SecretsFile}" = {
         format = "ini";
         keys = { };

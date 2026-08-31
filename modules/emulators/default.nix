@@ -1044,19 +1044,51 @@ in
         # `/default = false` alongside every key this module owns is what
         # keeps a value from silently reverting the first time Azahar
         # itself saves the file.
+        #
+        # The on-disk key is spelled with a BACKSLASH, `key\default`, not
+        # the forward slash `key/default` the C++ source uses to build the
+        # QSettings key path: Azahar is Qt/QSettings (`config.cpp`'s
+        # `qt_config` is a `QSettings`), and QSettings' own IniFormat writer
+        # escapes a literal `/` inside a key name to `\` when it flattens a
+        # key to an ini line, because `/` is QSettings' own group-nesting
+        # separator. Confirmed empirically: `QSettings(path,
+        # QSettings.IniFormat)` with `setValue("fullscreen/default", ...)`
+        # inside `beginGroup("UI")` writes the line `fullscreen\default=...`
+        # to the file, not `fullscreen/default=...`. Writing the forward-
+        # slash spelling here only worked by accident - QSettings' *reader*
+        # accepts either separator, and prepare appends new keys after a
+        # section's last assignment, so on a box where Azahar has never
+        # itself saved the file this module's `key/default` line came
+        # first and was the only one; the moment Azahar wrote its own
+        # `key\default` line, both existed and the later one (Azahar's,
+        # read last) governed by coincidence, and every further launch
+        # would see the mismatched `key/default` line as still unowned by
+        # this module's own idempotency check and never clean it up. The
+        # backslash spelling is what prepare must actually assert to be
+        # the same key QSettings itself reads and writes.
         keys = {
           UI = {
             fullscreen = "true";
-            "fullscreen/default" = "false";
+            "fullscreen\\default" = "false";
             # Suppresses the first-run welcome/setup flow.
             firstStart = "false";
-            "firstStart/default" = "false";
+            "firstStart\\default" = "false";
           };
           Miscellaneous = {
             # A kiosk box should not have an emulator quietly phoning home
-            # for its own updates at every launch.
+            # for its own updates at every launch. `check_for_update_on_start`
+            # is a real, live setting at the pinned nixpkgs revision
+            # (azahar-emu/azahar tag "2124", the exact source nixpkgs'
+            # `pkgs/by-name/az/azahar/package.nix` fetches at this flake's
+            # locked revision): declared in
+            # `src/citra_qt/uisettings.h:86` and read/written under
+            # `[Miscellaneous]` by `QtConfig::ReadMiscellaneousValues` /
+            # `SaveMiscellaneousValues` (`config.cpp:564-572,1134-1142`).
+            # Re-verify this against the currently locked nixpkgs revision
+            # (`pkgs.azahar.version`) before trusting it on a bump; a build
+            # newer than 2124 could rename or remove it.
             check_for_update_on_start = "false";
-            "check_for_update_on_start/default" = "false";
+            "check_for_update_on_start\\default" = "false";
           };
         };
       };

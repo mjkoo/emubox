@@ -942,7 +942,19 @@ def _login2(
             # caller to infer the failure from an empty list. The RA step
             # costs the achievements and nothing else (design D2), so it
             # gets a journal line and the catch-all outcome.
-            note(f"the RetroAchievements login failed unexpectedly ({error!r})")
+            #
+            # The type's name rather than `{error!r}`: this is the one
+            # thread in the program that has the plaintext password in
+            # scope, and several standard exceptions - UnicodeEncodeError
+            # above all - carry the string that offended them into their
+            # repr. Everything `_login2_request` can fail with in the
+            # ordinary way it already handles inside itself, so reaching
+            # here at all means a bug, and the name of the exception plus
+            # the fact that it was the login is what points at it.
+            note(
+                "the RetroAchievements login failed unexpectedly "
+                f"({type(error).__name__})"
+            )
             outcome.append(("unreachable", None))
 
     worker = threading.Thread(target=attempt, daemon=True, name="emubox-ra-login2")
@@ -972,14 +984,25 @@ def _login2_request(
       sense of must never be mistaken for a rejection, or a working
       account could have its cached token deleted by a service hiccup.
     """
-    body = urllib.parse.urlencode(
-        {"r": "login2", "u": username, "p": password}
-    ).encode()
     try:
-        # Inside the try, not above it: `Request` raises
-        # `ValueError("unknown url type")` for a URL whose scheme it does not
-        # recognise, and a malformed `api_url` has to cost the achievements
-        # like every other login failure rather than the whole session.
+        # Inside the try, not above it, and this matters twice over.
+        #
+        # `urlencode` is the only call in this program that holds the
+        # plaintext password, and a string it cannot encode raises
+        # `UnicodeEncodeError` - a `ValueError` - whose repr embeds the
+        # offending string. Outside the try that exception climbed to the
+        # worker thread's catch-all, which put the password into the
+        # journal. Not reachable from a sops secret today, because
+        # `_read_secret` decodes strict UTF-8, but the secret's one call
+        # site is the last place to rely on a guarantee made elsewhere.
+        #
+        # `Request` raises `ValueError("unknown url type")` for a URL whose
+        # scheme it does not recognise, and a malformed `api_url` has to
+        # cost the achievements like every other login failure rather than
+        # the whole session.
+        body = urllib.parse.urlencode(
+            {"r": "login2", "u": username, "p": password}
+        ).encode()
         request = urllib.request.Request(api_url, data=body, method="POST")
         # S310 flags urlopen for an unbounded scheme (file://, etc.), which
         # matters when the URL comes from somewhere untrusted. Here it comes

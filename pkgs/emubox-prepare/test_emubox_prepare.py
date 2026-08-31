@@ -2425,6 +2425,29 @@ def test_login2_reports_unreachable_on_a_url_with_no_usable_scheme() -> None:
     assert outcome == ("unreachable", None)
 
 
+def test_login2_never_puts_the_password_in_the_journal(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # `urlencode` is the only call in this program that holds the plaintext
+    # password, and it sat outside the try. A password it cannot encode
+    # raised through the worker thread to the catch-all there, which
+    # printed `{error!r}` - and a UnicodeEncodeError's repr carries the
+    # offending string, so the password would have gone into the journal
+    # `journalctl` keeps.
+    #
+    # A lone surrogate is not reachable from a sops secret today, since
+    # `_read_secret` decodes strict UTF-8; the point is that the call
+    # holding the secret must not be the one call left outside the guard
+    # that exists for exactly this - `Request()` one line below it was
+    # already moved inside for the same class of reason.
+    outcome = ep._login2("http://127.0.0.1:1/x", "alice", "hunter\ud8002", 5.0)
+
+    assert outcome == ("unreachable", None)
+    err = capsys.readouterr().err
+    assert "hunter" not in err
+    assert "\\ud800" not in err
+
+
 def test_login2_reports_unreachable_on_a_deeply_nested_json_body() -> None:
     # RecursionError, which is not a ValueError, so the json.loads guard
     # missed it entirely.

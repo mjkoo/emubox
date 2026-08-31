@@ -324,9 +324,18 @@ def _holds_something(path: Path) -> bool:
 
     A `stat` that fails is not evidence of absence either - a directory in
     the way, a parent that cannot be searched - so the fallback asks
-    `exists()`, which answers False only for the genuinely absent. Being
-    wrong in this direction costs one recreation of a file that turns out
-    to be empty; being wrong in the other costs the credential.
+    `exists()`. Being wrong towards True costs one recreation of a file
+    that turns out to be empty; being wrong towards False costs the
+    credential, so the generous answer is the right one to fall back to.
+
+    `exists()` is not the perfect answer to "is it genuinely absent",
+    though, and this comment carries a security argument so it must not
+    claim that it is: `Path.exists()` swallows its own `OSError` and so
+    says False for a file whose parent this process cannot search as well
+    as for one that is not there. That particular False costs nothing
+    extra - a parent that cannot be searched is a parent the recreation
+    could not have written into either - but it means "cannot tell", not
+    "not there".
     """
     try:
         return path.stat().st_size > 0
@@ -615,6 +624,19 @@ def _sweep_key(lines: list[str], key: str, section: str | None) -> bool:
     Indices are collected in one forward pass and deleted in reverse, so no
     deletion invalidates an index still to be used; callers must run this
     to completion before computing any section bounds of their own.
+
+    Known limit: a section is matched by the exact text between its
+    brackets, so an assignment under a hand-spelled `[ Achievements ]` or
+    `[achievements]` is not swept, and the fresh `[Achievements]` the
+    writing pass appends stands beside it. Recorded rather than fixed.
+    Every emulator this program edits writes canonical headers - Qt's
+    QSettings writers, and RetroArch's flat file has no sections at all -
+    so only a hand edit produces one. Loosening the match here alone would
+    put this pass out of step with `_ini_section_bounds` and the writing
+    pass, which would then not find the section this one had just cleared;
+    loosening all three changes which section every owned key in the
+    program belongs to, and that is a larger question than a stale value
+    in a file somebody has already edited by hand.
     """
     doomed: list[int] = []
     current: str | None = None  # the preamble, until the first header
@@ -802,7 +824,9 @@ def _write_credential(path: Path, content: str) -> bool:
     return True
 
 
-def _remove_credential(path: Path, *, prune_empty_parent: bool = False) -> None:
+def _remove_credential(
+    path: Path, *, prune_empty_parent_under: Path | None = None
+) -> None:
     """Delete a credential file if there is one, noting a refusal.
 
     `unlink` on a directory, or in a directory that is not writable, is an
@@ -810,27 +834,39 @@ def _remove_credential(path: Path, *, prune_empty_parent: bool = False) -> None:
     otherwise escape a step that must never cost more than the
     achievements.
 
-    `prune_empty_parent` is for the token cache, and only for it: the cache
-    has a directory of its own (`retroachievements/` under the appdata
-    root), so removing the file otherwise leaves an empty directory sitting
-    there on a box that has switched the feature off, which is meant to
-    look like a box that never had it on. `rmdir` removes an empty
+    `prune_empty_parent_under` is for the token cache, and only for it: the
+    cache has a directory of its own (`retroachievements/` under the
+    appdata root), so removing the file otherwise leaves an empty directory
+    sitting there on a box that has switched the feature off, which is
+    meant to look like a box that never had it on. `rmdir` removes an empty
     directory and nothing else, so it cannot take a neighbour with it, and
     it stays silent because a directory that is not empty - or not there -
     is the ordinary case rather than a refusal worth a journal line. Not
     passed for the emulators' own token files, which live in directories
     the emulator owns.
+
+    It takes the appdata root rather than a boolean because `cache_file` is
+    configuration, and only a directory strictly beneath that root can be
+    one the cache had to itself. A `cache_file` of `token-cache` - a bare
+    filename, which the field's type permits - would otherwise aim the
+    `rmdir` at the whole of `/data/es-de`, and an absolute `cache_file`
+    somewhere else entirely would aim it at a directory this program has no
+    business in. The root's own emptiness is the only thing standing
+    between that and a removal, which is not a guarantee worth resting on.
     """
     try:
         path.unlink(missing_ok=True)
     except OSError as error:
         note(f"{path} could not be removed ({error}); continuing")
         return
-    if prune_empty_parent:
-        try:
-            path.parent.rmdir()
-        except OSError:
-            pass
+    if prune_empty_parent_under is None:
+        return
+    if prune_empty_parent_under not in path.parent.parents:
+        return
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass
 
 
 def _resolve_path(root: Path, value: str) -> Path:
@@ -1091,7 +1127,7 @@ def resolve_retroachievements_token(
 
     if outcome == "rejected":
         note("the RetroAchievements API rejected the login; dropping any cached token")
-        _remove_credential(cache_file, prune_empty_parent=True)
+        _remove_credential(cache_file, prune_empty_parent_under=root)
         return None
 
     # outcome == "unreachable": fall back to the cache if one is readable;
@@ -1422,7 +1458,7 @@ def _apply_retroachievements_disabled_cleanup(
         token_file = target.get("token_file")
         if token_file:
             _remove_credential(_resolve_path(root, str(token_file)))
-    _remove_credential(cache_file, prune_empty_parent=True)
+    _remove_credential(cache_file, prune_empty_parent_under=root)
 
 
 def apply_retroachievements(

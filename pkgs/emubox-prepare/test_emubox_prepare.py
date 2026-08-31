@@ -3318,6 +3318,43 @@ def test_apply_disabled_prunes_the_directory_the_cache_lived_in(
     assert not cache_file.parent.exists()
 
 
+def test_remove_credential_never_prunes_the_appdata_root(tmp_path: Path) -> None:
+    # The pruning is for a directory the cache has to itself. `cache_file`
+    # is configuration, though, and its type permits a bare filename - which
+    # would put the cache directly in the appdata root and aim the `rmdir`
+    # at `/data/es-de` itself. The root being empty was the only thing
+    # standing in the way, and on a box with the feature switched off before
+    # anything else has been written there, it is empty.
+    root = tmp_path / "es-de"
+    root.mkdir()
+    cache_file = root / "token-cache"
+    cache_file.write_text("stale-cache-token")
+
+    ep._remove_credential(cache_file, prune_empty_parent_under=root)
+
+    assert not cache_file.exists()
+    assert root.is_dir()
+
+
+def test_remove_credential_never_prunes_outside_the_appdata_root(
+    tmp_path: Path,
+) -> None:
+    # The other half of the same rule: an absolute `cache_file` pointing
+    # somewhere else entirely gets its file removed, but no directory this
+    # program has no business in.
+    root = tmp_path / "es-de"
+    root.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    cache_file = elsewhere / "token-cache"
+    cache_file.write_text("stale-cache-token")
+
+    ep._remove_credential(cache_file, prune_empty_parent_under=root)
+
+    assert not cache_file.exists()
+    assert elsewhere.is_dir()
+
+
 def test_apply_disabled_keeps_a_cache_directory_that_holds_anything_else(
     tmp_path: Path,
 ) -> None:

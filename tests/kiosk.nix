@@ -30,6 +30,18 @@ let
   pkgs = self.nixosConfigurations.emubox.pkgs;
   inherit (pkgs) lib;
 
+  # The document `modules/emulators` actually ships (design D5), read from
+  # the real host config rather than this file's own node - whose
+  # `emubox.kiosk.customSystems` below is `mkForce`d to a 10-line test
+  # document so the kiosk subtests can prove the custom-systems mechanism
+  # against something they control (design D7). That `mkForce` is exactly
+  # why nothing else in this file, or anywhere else, ever parses the
+  # shipped ~400-line document - finding IMPORTANT-6's "the shipped
+  # custom-systems XML is never parsed by anything". `shippedCustomSystems`
+  # exists so the standalone check near the top of `testScript` below can
+  # do that, with no VM node needed.
+  shippedCustomSystems = self.nixosConfigurations.emubox.config.emubox.kiosk.customSystems;
+
   # The single source for every plaintext test value (tests/values.nix's own
   # header); `raUsername`/`raPassword` are the mock RetroAchievements
   # account's credentials.
@@ -170,16 +182,6 @@ let
       }/240pSuite.sfc";
     }
     {
-      family = "N64 (Mupen64Plus-Next)";
-      core = "mupen64plus_next_libretro.so";
-      rom = pkgs.fetchurl {
-        # Unlicense (public domain dedication); the repo's LICENSE file
-        # (PeterLemon/N64, a bare-metal demo collection).
-        url = "https://raw.githubusercontent.com/PeterLemon/N64/334d939e8c217df63cc99748b7346f3bcc5f9e14/CP1/Fractal/32BPP/320X240/Mandelbrot/Single/Mandelbrot32BPP320X240.N64";
-        hash = "sha256-8V/5PxRnq/iy3Ntprb3v8j7ljgZ930xqsLaw+NlyOds=";
-      };
-    }
-    {
       family = "GB/GBC (Gambatte)";
       core = "gambatte_libretro.so";
       rom = pkgs.fetchurl {
@@ -250,18 +252,6 @@ let
       };
     }
     {
-      family = "Dreamcast (Flycast)";
-      core = "flycast_libretro.so";
-      rom = "${
-        pkgs.fetchzip {
-          # GPL-2.0, same 240p Test Suite project/version family.
-          url = "https://downloads.sourceforge.net/project/testsuite240p/OldFiles/Dreamcast/240p-DC-PVR-1.25.zip";
-          stripRoot = false;
-          hash = "sha256-zAyHR5ivzjZxNAjYFt1jiFjyL0oU0jkoIc3vc+WRLnI=";
-        }
-      }/240pSuite.cdi";
-    }
-    {
       family = "PC Engine/TurboGrafx-16 (Beetle PCE Fast)";
       core = "mednafen_pce_fast_libretro.so";
       rom = pceHuCardTestSuite;
@@ -307,31 +297,103 @@ let
   ];
 
   # Named-exempt core families (vm-test spec: "the configuration SHALL name
-  # each exempt family"). After two independent searches, no homebrew ROM
-  # for either family carries an explicit licence or redistribution grant
-  # from its author, and these fixtures would be fetched by a public CI run
-  # and pushed through a public binary cache - so neither gets a headless
-  # launch here. Both move to the E12 hardware checklist instead (design D7:
-  # "an exempt family is a hardware checklist item, like the BIOS-dependent
+  # each exempt family"). `kind` distinguishes the two reasons the spec now
+  # allows for an exemption: `"licensing"` (no homebrew ROM for the family
+  # carries an explicit licence or redistribution grant, so fetching one
+  # through public CI onto the public binary cache is not this project's
+  # call to make) and `"mechanism"` (the core cannot run headless at all
+  # under this test's null-driver override, independent of any ROM). Every
+  # family here moves to the E12 hardware checklist instead (design D7: "an
+  # exempt family is a hardware checklist item, like the BIOS-dependent
   # cores").
   exemptFamilies = [
     {
       family = "Atari 7800 (ProSystem)";
+      core = "prosystem_libretro.so";
+      kind = "licensing";
       reason = "every compiled .a78 binary found sits in a repo with no LICENSE file and no redistribution statement; every repo with an explicit permissive licence ships source only, with no compiled ROM in the repo or in Releases";
     }
     {
       family = "Neo Geo Pocket / Color (Beetle NeoPop)";
+      core = "mednafen_ngp_libretro.so";
+      kind = "licensing";
       reason = "no NGP/NGPC homebrew was found that combines a real named title, an explicit author licence or redistribution statement, and a stable direct URL; 'PD' tags on individually found ROMs are third-party cataloguing, not author grants";
     }
+    {
+      # finding IMPORTANT-2. RetroArch 1.22.2's `video_driver_find_driver`
+      # (`gfx/video_driver.c`) begins with `if
+      # (video_driver_is_hw_context())` and then forces the HW-render-
+      # capable driver, overwriting `video_driver` and logging "[Video]
+      # Using HW render, ... driver forced." - discarding this test's
+      # `video_driver = "null"` override for any core that requests a HW
+      # render context. Confirmed on the x86_64-linux remote builder by
+      # actually running `retroarch -L mupen64plus_next_libretro.so
+      # <homebrew ROM> --appendconfig <the exact override set below>
+      # --max-frames 60 --verbose` outside a VM: the log carries "[Video]
+      # Using HW render, glcore driver forced." and the process then
+      # segfaults (exit 139) trying to bind a GL context with no display
+      # server, DRM device or `XDG_RUNTIME_DIR` present - the same headless
+      # conditions this VM node's launches run under. `drivers_init` runs
+      # after `CMD_EVENT_CORE_INIT`, so the positive marker this test's loop
+      # looks for ("[Core] Geometry:") is already logged by the time this
+      # happens; only the later video-driver failure is what would fail the
+      # run.
+      family = "N64 (Mupen64Plus-Next)";
+      core = "mupen64plus_next_libretro.so";
+      kind = "mechanism";
+      reason = "forced to the glcore HW-render driver regardless of the null video_driver override, and glcore then segfaults (exit 139) in a headless environment with no display server, DRM device or XDG_RUNTIME_DIR - confirmed by reproducing the exact launch on the x86_64-linux remote builder outside a VM";
+    }
+    {
+      # Same mechanism as N64 above, reproduced the same way: Flycast
+      # requests a Vulkan HW render context, RetroArch logs "[Video] Using
+      # HW render, vulkan driver forced." and then fails cleanly with
+      # "[ERROR] [Video] Cannot open video driver. Exiting..." (exit 1) for
+      # want of a display server, rather than crashing the way the N64 core
+      # does.
+      family = "Dreamcast (Flycast)";
+      core = "flycast_libretro.so";
+      kind = "mechanism";
+      reason = "forced to the vulkan HW-render driver regardless of the null video_driver override, and then exits with \"Cannot open video driver\" (exit 1) in a headless environment with no display server - confirmed by reproducing the exact launch on the x86_64-linux remote builder outside a VM";
+    }
+  ];
+
+  # Named BIOS-dependent core families (design's system table's "yes" BIOS
+  # rows whose assigned emulator is a RetroArch core, minus any core that
+  # also serves a BIOS-free system and so is already reachable through a
+  # `homebrewFixtures` entry above: Mesen covers both NES and FDS, Beetle
+  # PCE Fast covers both PC Engine and PCE CD, Genesis Plus GX covers both
+  # Genesis and Sega CD - one fixture per shared core, not two). Every core
+  # `modules/emulators` bundles lands in exactly one of `homebrewFixtures`,
+  # `exemptFamilies` or this list; the point of naming BIOS-dependent cores
+  # here rather than leaving them merely absent from the other two lists is
+  # that the "every installed core is accounted for" assertion below
+  # (finding IMPORTANT-3) can then fail loudly the moment a core is added to
+  # the bundle and left off all three, instead of the new family quietly
+  # going untested and unnoticed. Confirmed against the actual installed
+  # core filenames by building `retroarchWithCores` (below) on the
+  # x86_64-linux remote builder and listing its cores directory - not typed
+  # from the design table's emulator names, which name the emulator, not
+  # the core's `.so` file.
+  biosDependentCores = [
+    "handy_libretro.so" # Atari Lynx
+    "mednafen_saturn_libretro.so" # Saturn
+    "mednafen_psx_hw_libretro.so" # PS1 alternate (DuckStation is the default)
+    "fbneo_libretro.so" # Arcade
+    "melonds_libretro.so" # Nintendo DS
+    "puae_libretro.so" # Amiga
+    "bluemsx_libretro.so" # MSX, ColecoVision
+    "freeintv_libretro.so" # Intellivision
   ];
 in
-assert lib.assertMsg (lib.length homebrewFixtures == 16) ''
-  tests/kiosk.nix: expected 16 pinned homebrew fixtures (the vm-test spec's
-  core-family coverage), got ${toString (lib.length homebrewFixtures)}.
+assert lib.assertMsg (lib.length homebrewFixtures == 14) ''
+  tests/kiosk.nix: expected 14 pinned homebrew fixtures (the vm-test spec's
+  core-family coverage minus the two families now exempt for mechanism
+  reasons - N64 and Dreamcast, finding IMPORTANT-2), got
+  ${toString (lib.length homebrewFixtures)}.
 '';
-assert lib.assertMsg (lib.length exemptFamilies == 2) ''
-  tests/kiosk.nix: expected 2 named-exempt core families, got
-  ${toString (lib.length exemptFamilies)}.
+assert lib.assertMsg (lib.length exemptFamilies == 4) ''
+  tests/kiosk.nix: expected 4 named-exempt core families (2 licensing, 2
+  mechanism), got ${toString (lib.length exemptFamilies)}.
 '';
 {
   name = "emubox-kiosk";
@@ -535,6 +597,12 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
       RA_PASSWORD = ${py values.raPassword}
       MOCK_TOKEN = ${py mockToken}
 
+      # finding IMPORTANT-6: the document `modules/emulators` actually ships,
+      # distinct from this node's own `emubox.kiosk.customSystems` (below,
+      # `mkForce`d to a 10-line test document) - see `shippedCustomSystems`'s
+      # own comment at the top of this file for why the two have to differ.
+      SHIPPED_CUSTOM_SYSTEMS = ${py shippedCustomSystems}
+
       def esde_pids():
           rc, out = machine.execute("pgrep -x es-de")
           return [int(p) for p in out.split()] if rc == 0 else []
@@ -616,6 +684,22 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
           uses."""
           return value if value.startswith("/") else f"{root}/{value}"
 
+      def owned_file_value(fmt, text, section, key):
+          """The on-disk value for one owned key of an emulator config file
+          (finding IMPORTANT-5), in the same string form the rendered
+          owned-values JSON carries for it: `ini`'s writer never quotes
+          (`emubox_prepare.py`'s `_render_ini`, `f"{k} = {v}"`), so the
+          value read back needs no unwrapping there, but `retroarch`'s own
+          flat format always quotes (`_render_retroarch`, `f'{key} =
+          "{value}"'`), the same quoting `read_target_value` above already
+          strips for the retroachievements namespace's plain-encoded
+          targets.
+          """
+          value = ini_value(text, section, key)
+          if fmt == "retroarch":
+              return value if value is None else value.strip('"')
+          return value
+
       def read_target_value(target, key_name):
           """The on-disk value for one retroachievements target's key.
 
@@ -687,6 +771,34 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
               rc, out = machine.execute(f"cat {shlex.quote(path)}")
               if rc == 0:
                   assert RA_PASSWORD not in out, f"{path} contains the RA password"
+
+      # --- emulators: the shipped custom-systems document parses (design D5,
+      # finding IMPORTANT-6) -------------------------------------------------
+      #
+      # No node, no boot: this runs on the driver host, before
+      # `machine.wait_for_unit` below ever touches the VM, because the
+      # `mkForce` on this node's own `emubox.kiosk.customSystems` (further
+      # down this file) is deliberate for what the kiosk subtests prove, and
+      # that leaves the ~400-line document `modules/emulators` actually
+      # contributes to a real box unparsed by anything else in this
+      # repository. A malformed `<system>` block in it would otherwise
+      # surface only as a file ES-DE silently ignores on hardware.
+      with subtest("The shipped custom-systems document is well-formed and PS1 offers DuckStation first"):
+          root = ET.fromstring(SHIPPED_CUSTOM_SYSTEMS)
+          assert root.tag == "systemList", root.tag
+          # No hard-coded system count: a concurrent change to
+          # `modules/emulators` is adding `tg16`/`tg-cd` overrides, and a
+          # count pinned here would just be one more thing to update for an
+          # addition this test does not otherwise care about.
+          systems = {s.findtext("name"): s for s in root.findall("system")}
+          psx = systems.get("psx")
+          assert psx is not None, sorted(systems)
+          commands = psx.findall("command")
+          assert commands, "psx system has no <command> at all"
+          first_label = commands[0].get("label") or ""
+          assert "DuckStation" in first_label, first_label
+          labels = [c.get("label") or "" for c in commands]
+          assert any("Beetle PSX HW" in label for label in labels), labels
 
       machine.wait_for_unit("multi-user.target")
 
@@ -778,6 +890,111 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
           # rather than that ES-DE's own default happens to be in the file.
           assert got["UIMode_passkey"] == ("string", ${py passkey}), got["UIMode_passkey"]
           assert got["UIMode"] == ("string", "kiosk"), got["UIMode"]
+
+      # PINNED_OWNED_KEYS: finding IMPORTANT-5. The emulators spec's
+      # headline requirement - the owned values "SHALL pin at least" the
+      # core directory, `/data/bios`, the 30 s autosave interval,
+      # fullscreen, the two online/core-download menu entries disabled and
+      # the uniform hotkey set for RetroArch, and fullscreen plus each
+      # standalone's own performance choice for every standalone - was
+      # unasserted by anything before this: the ES-DE settings file above
+      # had its own pin-then-walk, but it was never extended to the ~150
+      # keys `modules/emulators` owns across RetroArch and five
+      # standalones. A literal, hand-typed subset here, not the loop's own
+      # source of truth: dropping one of these keys from the module is
+      # still a deliberate edit to this test (the same "the table could be
+      # right and unapplied, or applied and wrong" reasoning the ES-DE pin
+      # above already applies), but a key a *concurrent* change adds - the
+      # DuckStation/PCSX2 BIOS directory keys and the setup-wizard keys
+      # observed in this same JSON while writing this test - needs no
+      # matching edit here, because the walk below reads whatever the
+      # rendered JSON actually contains, not this literal set. `None` in
+      # place of a section name is RetroArch's own flat, sectionless
+      # format (`ini_value`'s own convention above).
+      #
+      # Azahar's `\default` keys are spelled with a literal backslash, not
+      # a forward slash: `modules/emulators`'s own comment on
+      # `azaharConfigFile` explains why (Qt's QSettings escapes `/` inside
+      # a key name to `\` when it flattens a group path to an ini line),
+      # and this pin has to use the same spelling QSettings itself reads
+      # and writes, or a key spelled the wrong way would look "present"
+      # here while Azahar's own writer created a second, differently-named
+      # line the moment it next saved its own config.
+      PINNED_OWNED_KEYS = {
+          f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg": {
+              None: {
+                  "video_fullscreen",
+                  "libretro_directory",
+                  "system_directory",
+                  "autosave_interval",
+                  "menu_driver",
+                  "menu_show_online_updater",
+                  "menu_show_core_updater",
+                  "input_menu_toggle",
+                  "input_save_state",
+                  "input_load_state",
+                  "input_toggle_fast_forward",
+                  "input_screenshot",
+                  "input_menu_toggle_gamepad_combo",
+                  "input_quit_gamepad_combo",
+              },
+          },
+          f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
+              "Display": {"Fullscreen"},
+              "Core": {"CPUThread"},
+          },
+          f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
+              "UI": {"StartFullscreen"},
+              "EmuCore/GS": {"upscale_multiplier"},
+          },
+          f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini": {
+              "Graphics": {"FullScreen"},
+          },
+          f"{PLAYER_HOME}/.config/azahar-emu/qt-config.ini": {
+              "UI": {"fullscreen", "fullscreen\\default", "firstStart", "firstStart\\default"},
+              "Miscellaneous": {
+                  "check_for_update_on_start",
+                  "check_for_update_on_start\\default",
+              },
+          },
+          f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
+              "Main": {"StartFullscreen"},
+              "GPU": {"PGXPEnable", "ResolutionScale"},
+          },
+          f"{PLAYER_HOME}/.config/scummvm/scummvm.ini": {
+              "scummvm": {"fullscreen", "confirm_exit", "gui_return_to_launcher_at_exit"},
+          },
+      }
+
+      with subtest("Every owned emulator config key holds the flake's value"):
+          for path, sections in PINNED_OWNED_KEYS.items():
+              entry = owned["files"].get(path)
+              assert entry is not None, f"{path}: pinned in this test but not in emubox.kiosk.ownedFiles at all"
+              for section, names in sections.items():
+                  actual = entry["keys"] if section is None else entry["keys"].get(section, {})
+                  missing = names - actual.keys()
+                  assert not missing, f"{path} [{section}]: pinned keys dropped from the module: {missing}"
+
+          # The walk: every file the rendered JSON actually names (not just
+          # the pinned subset above), so a key a concurrent change adds is
+          # checked against disk automatically rather than silently
+          # unverified until someone remembers to update this test.
+          for path, entry in owned["files"].items():
+              if path == "settings/es_settings.xml":
+                  continue  # its own pin-then-walk above already covers it
+              fmt = entry["format"]
+              text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
+              if fmt == "retroarch":
+                  for key, expected in entry["keys"].items():
+                      got = owned_file_value(fmt, text, None, key)
+                      assert got == expected, f"{path}: {key}: {got!r} != {expected!r}"
+              elif fmt == "ini":
+                  for section, keys in entry["keys"].items():
+                      for key, expected in keys.items():
+                          got = owned_file_value(fmt, text, section, key)
+                          assert got == expected, f"{path} [{section}]: {key}: {got!r} != {expected!r}"
+              else:
+                  raise AssertionError(f"{path}: unhandled owned-file format {fmt!r}")
 
       # --- kiosk: custom systems, both branches -----------------------------
 
@@ -1036,6 +1253,84 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
           # itself choose.
           rerun_prepare(OWNED_VALUES)
 
+      with subtest("A box that had a token then loses the endpoint carries no stale account name or token"):
+          # finding IMPORTANT-7. Placed here, after "Tokens asserted against
+          # the mock" and "Both hardcore positions" above, deliberately: this
+          # is the one point in the file where every target already carries
+          # a real username and token and a real cache file exists on disk -
+          # only a prior successful login (the earlier subtest) produces
+          # that. The "Offline boot" subtest at the top of this group
+          # asserts the same `username is None` / `token is None` shape, but
+          # there nothing had ever written a username at all, so it passed
+          # for a reason unrelated to the behaviour it was meant to prove.
+          # What this subtest actually proves is the retroachievements
+          # spec's "no stale account name or token": a box that HAD a token,
+          # then genuinely loses both the network route and its cache, must
+          # not go on serving emulator configs that still name an account -
+          # `emubox-prepare` has to actively remove those keys, not merely
+          # stop refreshing them (design D2's "on network failure without
+          # one [a cache], ... drop the account-name and token keys").
+          #
+          # Run before the emulator launches below so this subtest can
+          # restore the ordinary state - route reachable, token present -
+          # those neither need nor expect, the same reasoning the hardcore
+          # subtest above already gives for its own restore.
+          owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
+          ra = owned["retroachievements"]
+          cache_path = resolve(APPDATA, ra["cache_file"])
+          machine.succeed(f"test -e {cache_path}")  # the prior login wrote one
+
+          machine.succeed("systemctl stop emubox-mock-retroachievements.service")
+          machine.succeed(f"rm -f {cache_path}")
+
+          rerun_prepare(OWNED_VALUES)
+
+          for target in ra["targets"]:
+              booleans = target["booleans"]
+              # Still written as declared, exactly as the "Offline boot"
+              # subtest's own comment establishes: enabled follows the
+              # namespace being non-null, hardcore follows the switch,
+              # neither depends on the network.
+              assert read_target_value(target, "enabled") == booleans["true"], target["name"]
+              assert read_target_value(target, "hardcore") == booleans["false"], target["name"]
+              assert read_target_value(target, "username") is None, target["name"]
+              assert read_target_value(target, "token") is None, target["name"]
+              if target.get("token_file"):
+                  machine.fail(f"test -e {resolve(APPDATA, target['token_file'])}")
+
+          sweep_for_password(owned)
+
+          # Restore: the route back, then a fresh login so the cache and
+          # every target's token exist again before the launches below,
+          # which assert nothing about RetroAchievements but should not
+          # inherit a route this subtest itself took away.
+          machine.succeed("systemctl start emubox-mock-retroachievements.service")
+          machine.wait_until_succeeds(
+              "echo > /dev/tcp/127.0.0.1/${toString mockPort}", timeout=30
+          )
+          rerun_prepare(OWNED_VALUES)
+
+      with subtest("emubox-check-bios reports the declared BIOS files as missing from an empty /data/bios"):
+          # M4: the checker ships (design D6) but nothing ran it against the
+          # inventory it actually reads on a real box. This node's
+          # `/data/bios` is an empty tmpfs (no disko layout here, above), so
+          # every declared file is legitimately missing - proving the PATH
+          # claim (bare name, no store path needed) and the report's schema
+          # (every declared file named, not merely "something is missing")
+          # together. `rc != 0` is the exit-status half of the same
+          # contract the design and spec both state ("exits ... unsuccessfully
+          # otherwise").
+          rc, out = machine.execute("emubox-check-bios /etc/emubox/bios-inventory.json /data/bios")
+          assert rc != 0, out
+          inventory = json.loads(machine.succeed("cat /etc/emubox/bios-inventory.json"))
+          for entry in inventory.values():
+              assert entry["path"] in out, (entry["path"], out)
+          # No entry in the shipped inventory names an algorithm the tool
+          # does not implement - the one way this run could otherwise pass
+          # for the wrong reason (a malformed-inventory hard failure looks
+          # the same as "everything is MISSING" at the exit-code level).
+          assert "does not implement" not in out, out
+
       # --- emulators: BIOS-free core families launch headless (design D7) --
 
       with subtest("Every BIOS-free core family with a licensed ROM runs headless"):
@@ -1062,7 +1357,11 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
           # run loop regardless, confirmed by reproducing this exact
           # override set on the x86_64-linux builder outside the VM), so it
           # is left set to the semantically correct value rather than
-          # omitted.
+          # omitted. `video_driver = "null"` itself does not hold for every
+          # core, though: N64 and Dreamcast are exempt above (finding
+          # IMPORTANT-2, `exemptFamilies`' two `kind = "mechanism"`
+          # entries) because RetroArch forces a real HW-render driver for
+          # them regardless of this override, confirmed the same way.
           override = "/tmp/emubox-retroarch-headless-override.cfg"
           machine.succeed(
               "printf '%s\\n' "
@@ -1128,7 +1427,16 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
               # Vectrex's free-running animation) to a clean exit 0 - this
               # design's "assert liveness over frames" in practice, since
               # RetroArch itself decides to quit, not the content.
-              out = machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+              # timeout=60: generous headroom over the "couple of seconds"
+              # above for a slow CI runner and a cold dlopen of a core, while
+              # still failing this one family by name - the driver's
+              # `succeed` otherwise defaults to no timeout at all, so a core
+              # that hangs (rather than crashing or exiting) would surface as
+              # an unattributed global test timeout with no indication which
+              # of the sixteen families caused it.
+              out = machine.succeed(
+                  f"su player -s /bin/sh -c {shlex.quote(cmd)}", timeout=60
+              )
               assert "[Core] Geometry:" in out, (
                   f"{fixture['family']}: the core never reached a real "
                   f"retro_get_system_av_info() call - content did not load\n{out}"
@@ -1137,6 +1445,38 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
                   f"{fixture['family']}: RetroArch logged a content-load "
                   f"failure (dummy-core fallback territory)\n{out}"
               )
+
+      with subtest("Every installed RetroArch core is tested, exempt, or a named BIOS checklist item"):
+          # Finding IMPORTANT-3: the two length asserts above the node
+          # definition (`homebrewFixtures`, `exemptFamilies`) only catch an
+          # edit to those two lists themselves - nothing related them to the
+          # cores `modules/emulators` actually installs, so
+          # adding a core there left the counts unchanged and the new family
+          # untested, unnamed and unnoticed. This assertion is the relation:
+          # every `.so` this node's RetroArch build actually ships has to be
+          # accounted for by one of the three lists, or the test fails and
+          # names exactly which file is new.
+          installed = set(
+              machine.succeed(
+                  "ls /run/current-system/sw/lib/retroarch/cores"
+              ).split()
+          )
+          tested = ${py (map (f: f.core) homebrewFixtures)}
+          exempt = ${py (map (f: f.core) exemptFamilies)}
+          bios_only = ${py biosDependentCores}
+          accounted = set(tested) | set(exempt) | set(bios_only)
+          # Two assertions, not one `==`: an unaccounted core (the real
+          # regression this finding is about) and a stale entry naming a
+          # core no longer installed (a dead line in one of the three lists)
+          # are different mistakes and should read as different failures.
+          assert not (installed - accounted), (
+              f"cores installed but not tested, exempt, or BIOS-checklisted: "
+              f"{sorted(installed - accounted)}"
+          )
+          assert not (accounted - installed), (
+              f"cores named in a list here but not actually installed: "
+              f"{sorted(accounted - installed)}"
+          )
 
       # --- standalones: smoke launch (design D7) ----------------------------
 
@@ -1150,7 +1490,21 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
       # binary needing longer, raising this one number covers all five.
       def standalone_smoke_launch(binary, settle=5):
           """Prove a standalone starts against its written configuration and
-          stays up, then kill it.
+          stays up for `settle` seconds, then kill it.
+
+          Not `retry(alive, timeout_seconds=settle)`: the driver's `retry`
+          calls `fn(False)` once, immediately, before its first sleep, and
+          returns the moment that call is `True` - so against a predicate
+          that is already `True` a few hundred milliseconds after the fork
+          it never sleeps at all, and `settle` is never actually spent. That
+          would leave a standalone that execs, loads a few hundred MB of
+          Qt/SDL, fails to construct a platform plugin and exits noisily
+          1-5 s later completely unverified: `alive` would be sampled
+          immediately after the launch, long before that failure, and pass.
+          Sampling once after a plain `machine.sleep(settle)` instead is
+          also not scheduling-dependent the way the `retry` shape was, since
+          there is no longer a race between how fast the harness happens to
+          call back in and how fast the binary happens to die.
 
           Not `--version`: this project has only source-verified that
           contract for two of these six binaries (ScummVM below, and
@@ -1183,15 +1537,14 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
           )
           pid = machine.succeed(f"su player -s /bin/sh -c {shlex.quote(launch)}").strip()
 
-          def alive(_last):
-              rc, _ = machine.execute(f"kill -0 {pid}")
-              return rc == 0
-
-          try:
-              retry(alive, timeout_seconds=settle)
-          except Exception:
+          machine.sleep(settle)
+          rc, _ = machine.execute(f"kill -0 {pid}")
+          if rc != 0:
               print(machine.execute(f"cat {log}")[1])
-              raise
+              raise AssertionError(
+                  f"{binary} exited within {settle}s of launch, before this "
+                  "smoke launch even got to prove it stays up"
+              )
           # 30 s: the same figure the crash-loop subtest above uses to wait out
           # a SIGKILL on es-de, reused here rather than invented fresh - a
           # multi-hundred-megabyte process unwinding SDL/Qt on a loaded CI
@@ -1204,10 +1557,24 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
           for binary in ["duckstation", "dolphin-emu", "pcsx2-qt", "azahar", "ppsspp"]:
               standalone_smoke_launch(binary)
 
-          # ScummVM's CLI is well-established as safe with no display at all
-          # (its `--version` is handled long before any toolkit init), so its
-          # floor is the install test's own "nothing beyond --version"
-          # pattern rather than the background-launch idiom above.
+          # M8, honestly stated rather than fixed: this proves less than the
+          # five background launches above, and on purpose. `--version` is
+          # well-established as safe with no display at all (it is handled
+          # long before any toolkit init), which is why it is the install
+          # test's own floor for this same binary - but it never reads
+          # `scummvm.ini`, so unlike the other five this is not a launch
+          # "against the asserted configuration" (the vm-test spec's own
+          # phrase for this scenario) at all, only proof the binary itself
+          # runs on this box. Giving it the same background-launch treatment
+          # as the other five was not attempted here: no KVM builder was
+          # available while writing this test to check whether ScummVM's
+          # own GUI launcher screen actually comes up cleanly under
+          # `SDL_VIDEODRIVER=dummy` with no display, the same caveat the
+          # `standalone_smoke_launch` docstring above already states for the
+          # five it does cover - and unlike those five, this one has never
+          # been reproduced even outside a VM. Extending it here would be
+          # asserting more than this project actually knows; the honest
+          # floor is `--version` runs and prints "ScummVM", full stop.
           out = machine.succeed("su player -s /bin/sh -c 'scummvm --version'")
           assert "ScummVM" in out, out
     '';

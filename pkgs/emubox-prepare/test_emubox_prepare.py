@@ -1713,3 +1713,166 @@ def test_main_end_to_end_with_retroachievements_never_leaks_the_password(
     assert 'cheevos_token = "tok-e2e"' in text
     assert "hunter2" not in text
     assert "hunter2" not in capsys.readouterr().err
+
+
+# --- Review fixes: C1, I1, I2, M1, M2, M4 -----------------------------------
+
+
+def test_resolve_token_continues_when_a_credential_file_is_not_valid_utf8(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # C1: UnicodeDecodeError is a ValueError, not an OSError, so it needs its
+    # own except clause - otherwise it propagates out of main() as an
+    # uncaught traceback instead of the clean "no token" degradation the
+    # whole design exists to provide, and a power cut can leave a
+    # credential file exactly this broken.
+    ra, _cache_file = ra_namespace(tmp_path, closed_port_url())
+    (tmp_path / "username").write_bytes(b"\xff\xfe not valid utf-8")
+
+    result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result is None
+    assert capsys.readouterr().err.strip()
+
+
+def test_resolve_token_continues_when_the_cache_is_not_valid_utf8(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ra, cache_file = ra_namespace(tmp_path, closed_port_url())
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_bytes(b"\xff\xfe not valid utf-8")
+
+    result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result is None
+    assert capsys.readouterr().err.strip()
+
+
+def test_apply_and_editors_leave_the_duckstation_file_untouched_when_the_token_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    # I1: the requirement is the file's bytes, not merely that the returned
+    # mapping omits "login_timestamp" - this runs the full apply-then-write
+    # pipeline twice with the same token and proves the second pass writes
+    # nothing at all, mtime included.
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("abc123\n")
+    ini_path = tmp_path / "settings.ini"
+
+    def run_once() -> None:
+        files: dict[str, object] = {"settings.ini": {"format": "ini", "keys": {}}}
+        target = duckstation_target(machine_id_file, "settings.ini")
+        with ra_server(
+            _json_handler(200, {"Success": True, "Token": "tok-stable"})
+        ) as url:
+            ra = retroachievements_namespace(tmp_path, url, [target])
+            assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+        table = cast("dict[str, object]", files["settings.ini"])
+        ep.set_ini_settings(ini_path, cast("dict[str, dict[str, str]]", table["keys"]))
+
+    run_once()
+    freeze(ini_path)
+
+    run_once()
+
+    assert unwritten(ini_path)
+
+
+def test_apply_folds_the_cached_token_into_the_owned_tables_when_offline(
+    tmp_path: Path,
+) -> None:
+    # I2: the resolve layer's cache fallback is covered on its own, but the
+    # "Offline with a cached token" spec scenario is about what actually
+    # lands in the emulator configs.
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    target = plain_target("retroarch", "retroarch.cfg")
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [target], cache="cached-tok"
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    keys = files["retroarch.cfg"]["keys"]
+    assert keys["cheevos_username"] == "alice"
+    assert keys["cheevos_token"] == "cached-tok"
+
+
+def test_resolve_token_notes_falling_back_to_the_cache_when_unreachable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ra, _cache_file = ra_namespace(tmp_path, closed_port_url(), cache="cached-token")
+
+    result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result == ("alice", "cached-token")
+    assert "falling back to the cached token" in capsys.readouterr().err
+
+
+def test_resolve_token_notes_no_cache_to_fall_back_to_when_unreachable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # M1: distinct from the message above - an admin reading the journal in
+    # the no-network-no-cache scenario must not see wording implying a
+    # fallback happened when none did.
+    ra, _cache_file = ra_namespace(tmp_path, closed_port_url())
+
+    result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result is None
+    err = capsys.readouterr().err
+    assert "no cached token exists" in err
+    assert "falling back" not in err
+
+
+def test_apply_rejects_a_non_boolean_hardcore(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # M2: every other malformed field in this namespace is a call-site
+    # failure; a JSON string like "false" being silently truthy under a
+    # bare bool(...) would be the one exception.
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
+    )
+    ra["hardcore"] = "false"
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "hardcore" in capsys.readouterr().err
+
+
+def test_apply_never_leaks_the_password_across_every_target_shape(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # M4: the earlier password tests each sweep one file; this one runs
+    # every target shape together and sweeps every resulting file plus
+    # stderr in one pass.
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("abc123\n")
+    ppsspp_token_file = tmp_path / "ppsspp_retroachievements.dat"
+
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-sweep"})) as url:
+        files: dict[str, object] = {
+            "retroarch.cfg": {"format": "retroarch", "keys": {}},
+            "Dolphin.ini": {"format": "ini", "keys": {}},
+            "PCSX2.ini": {"format": "ini", "keys": {}},
+            "secrets.ini": {"format": "ini", "keys": {}},
+            "ppsspp.ini": {"format": "ini", "keys": {}},
+            "settings.ini": {"format": "ini", "keys": {}},
+        }
+        targets = [
+            plain_target("retroarch", "retroarch.cfg"),
+            ini_target("dolphin", "Dolphin.ini"),
+            pcsx2_target(),
+            secret_file_target(ppsspp_token_file),
+            duckstation_target(machine_id_file, "settings.ini"),
+        ]
+        ra = retroachievements_namespace(tmp_path, url, targets)
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    for relative, raw_table in files.items():
+        assert isinstance(raw_table, dict)
+        table = cast("dict[str, object]", raw_table)
+        assert "hunter2" not in json.dumps(table["keys"]), relative
+    assert b"hunter2" not in ppsspp_token_file.read_bytes()
+    assert "hunter2" not in capsys.readouterr().err

@@ -484,14 +484,19 @@ def _resolve_path(root: Path, value: str) -> Path:
 def _read_secret(path: Path) -> str | None:
     """A credential file's content, trailing whitespace stripped.
 
-    None on any read failure - missing, a directory, permission denied.
-    Every case is a configuration problem rather than a broken call site
-    (behaviour step 1), so it is noted and the login for this run is simply
-    skipped; the program does not fail and does not exit non-zero.
+    None on any read failure - missing, a directory, permission denied, or
+    bytes that are not valid UTF-8. `UnicodeDecodeError` is a `ValueError`
+    subclass, not an `OSError` one, so it needs its own except clause -
+    `_read_text` a screen away already gets this right, and a credential
+    file or cache is exactly the kind of thing a power cut at the wall (the
+    module docstring's routine failure mode on this appliance) can leave
+    mid-write. Every case is a configuration problem rather than a broken
+    call site (behaviour step 1), so it is noted and the login for this run
+    is simply skipped; the program does not fail and does not exit non-zero.
     """
     try:
         return path.read_text().strip()
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
         note(f"{path} could not be read ({error})")
         return None
 
@@ -501,17 +506,20 @@ def _read_cached_token(path: Path) -> str | None:
 
     A missing file is the ordinary state before any login has ever
     succeeded - silent, not noted. Anything else (permission denied, a
-    directory where the cache should be) is noted, because that is a cache
-    that should have been usable and was not.
+    directory where the cache should be, or bytes that are not valid UTF-8
+    - a `UnicodeDecodeError`, a `ValueError` subclass rather than an
+    `OSError` one, and just as plausible for a cache as for a credential
+    file after a power cut) is noted, because that is a cache that should
+    have been usable and was not.
     """
     try:
-        text = path.read_text().strip()
+        cached_text = path.read_text().strip()
     except FileNotFoundError:
         return None
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
         note(f"{path} could not be read ({error})")
         return None
-    return text or None
+    return cached_text or None
 
 
 def _login2(
@@ -538,6 +546,12 @@ def _login2(
     ).encode()
     request = urllib.request.Request(api_url, data=body, method="POST")
     try:
+        # S310 flags urlopen for an unbounded scheme (file://, etc.), which
+        # matters when the URL comes from somewhere untrusted. Here it comes
+        # from the retroachievements namespace's `api_url`, which - like
+        # every other path in the owned-values document - is a store path
+        # the module rendered, not anything a user or the network supplies;
+        # the same trust boundary the rest of this program already assumes.
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
             raw = response.read()
     except urllib.error.HTTPError as error:
@@ -606,11 +620,17 @@ def resolve_retroachievements_token(
         return None
 
     # outcome == "unreachable": fall back to the cache if one is readable;
-    # otherwise this run continues with no token (behaviour steps 2-3).
-    note("could not reach the RetroAchievements API; falling back to any cached token")
+    # otherwise this run continues with no token (behaviour steps 2-3). Two
+    # distinct messages, not one worded as if a fallback always happens: the
+    # exact no-network-no-cache case the spec calls out must not read in the
+    # journal as though a cached token were used when there was none.
     cached = _read_cached_token(cache_file)
     if cached is not None:
+        note(
+            "could not reach the RetroAchievements API; falling back to the cached token"
+        )
         return username, cached
+    note("could not reach the RetroAchievements API and no cached token exists")
     return None
 
 
@@ -887,6 +907,17 @@ def apply_retroachievements(
     always, username and token only when a login actually resolved one -
     never a non-zero return (design D2's whole point).
     """
+    # A JSON string like "false" is truthy under plain `bool(...)`, so this
+    # field gets the same call-site policy as everything else in the
+    # namespace instead of silently doing the wrong thing.
+    hardcore_value = retroachievements.get("hardcore", False)
+    if not isinstance(hardcore_value, bool):
+        note(
+            "retroachievements: expected 'hardcore' to be a boolean, got "
+            f"{type(hardcore_value).__name__}"
+        )
+        return 1
+
     targets = retroachievements.get("targets", [])
     if not isinstance(targets, list):
         note("retroachievements: expected 'targets' to be an array")
@@ -907,7 +938,7 @@ def apply_retroachievements(
     # The login happens once per run, ahead of every target, rather than
     # once per target: one account serves every supporting emulator.
     resolved = resolve_retroachievements_token(retroachievements, root)
-    hardcore = bool(retroachievements.get("hardcore", False))
+    hardcore = hardcore_value
 
     for target in validated:
         booleans = cast("Mapping[str, object]", target["booleans"])

@@ -403,9 +403,19 @@ def _parse_ini(path: Path) -> list[str] | None:
     if text is None:
         return None
     if not text.strip():
-        # Recorded, like the ES-DE case: an empty file yields no lines and
-        # would otherwise look like a healthy document missing every key.
-        note(f"{path} is empty; recreating it")
+        # Not noted here, unlike the ES-DE case this comment used to draw
+        # the same parallel to: an empty file yields no lines and would
+        # otherwise look like a healthy document missing every key, but
+        # whether that actually means a recreation follows depends on
+        # whether anything is left to write once REMOVE-valued keys drop
+        # out - which only `set_ini_settings` knows, since a file whose
+        # only owned key is a pending removal (secrets.ini before any
+        # token has ever resolved, or every target's login keys once
+        # RetroAchievements is switched off) writes nothing even after
+        # this "recreate" branch is taken. Noting it here unconditionally
+        # used to fire on every single launch for exactly that file, every
+        # time, for a recreation that never happened; `set_ini_settings`
+        # carries the note now, only once it has confirmed one does.
         return None
     lines = _lines(text.rstrip("\n"))
     for line in lines:
@@ -460,6 +470,16 @@ def set_ini_settings(
             # readable file to remove them from: creating one to hold
             # nothing would only be recreated on the next launch.
             return False
+        # The empty-file note, deferred from `_parse_ini` (see its own
+        # comment): only worth telling the journal once a write is
+        # actually about to happen, which the branch above has just
+        # confirmed. `_read_quietly`, not `_parse_ini` again, so this
+        # probe stays silent about anything other than emptiness - an
+        # unreadable or malformed file already noted its own reason inside
+        # `_parse_ini`/`_read_text`.
+        probe = _read_quietly(path)
+        if probe is not None and not probe.strip():
+            note(f"{path} is empty; recreating it")
         _write(path, _render_ini(fresh))
         return True
 
@@ -749,13 +769,12 @@ def _read_cached_token(path: Path) -> str | None:
     have been usable and was not.
     """
     try:
-        cached_text = path.read_text().strip()
+        cached = path.read_text().strip()
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError) as error:
         note(f"{path} could not be read ({error})")
         return None
-    cached = cached_text.strip()
     if not cached:
         return None
     if not _is_usable_token(cached):

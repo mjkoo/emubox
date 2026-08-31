@@ -666,6 +666,45 @@ def test_ini_keeps_a_value_containing_an_exotic_line_separator(
     assert "KeepMe = a b" in path.read_text()
 
 
+def test_ini_an_empty_file_owning_only_a_removal_writes_and_notes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # N5: the "is empty; recreating it" note used to fire here unconditionally,
+    # even though the very next line ("every owned key in this file is a
+    # removal...") already meant no write would follow it. secrets.ini
+    # before any token has ever resolved, or every target's login keys
+    # once RetroAchievements is switched off, are real, reachable shapes
+    # for this, not a hypothetical - and both would have logged a lie on
+    # every single launch, forever.
+    path = tmp_path / "secrets.ini"
+    path.write_text("")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+
+    assert unwritten(path)
+    assert capsys.readouterr().err == ""
+
+
+def test_ini_an_empty_file_owning_a_real_value_still_notes_the_recreation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other half of the N5 fix: deferring the note to `set_ini_settings`
+    # must not silence it when a write genuinely does follow.
+    path = tmp_path / "settings.ini"
+    path.write_text("")
+
+    assert (
+        ep.set_ini_settings(
+            path, {"Achievements": {"Enabled": "true", "Token": ep.REMOVE}}
+        )
+        is True
+    )
+
+    assert "Enabled = true" in path.read_text()
+    assert "is empty; recreating it" in capsys.readouterr().err
+
+
 # --- Robustness of the custom systems step --------------------------------
 
 

@@ -1,32 +1,46 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Implementation of a change follows the `spec-implementation` skill;
+  its subagent dispatches (reviews, implementers) are authorized by this
+  line.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  The test gate is `just check-all` (fmt-check, flake check, eval, workflow
+  lint); a task group is not done until it passes. The toolchain comes from
+  the flake: run commands through `direnv` / `nix develop`, install nothing
+  globally. Default subagent dispatches to a mid tier unless the skill says
+  otherwise.
 
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+  `just check-all` builds nothing, so anything whose checks run at build
+  time passes it and still fails CI - a `writeShellApplication` is
+  shellchecked when built, not when evaluated. `just session-check` builds
+  the kiosk session script alone on the x86_64-linux builder and is the
+  quick way to catch that class.
+
+  Building the host and the VM tests need a remote builder: `just build`
+  and `just closure-check` need x86_64-linux, and `just vm-test` /
+  `just kiosk-test` need one exposing KVM. The OrbStack builder has no
+  /dev/kvm, so the VM tests are CI-only. The Bash sandbox blocks the route
+  to the builder; disable it for builder-bound nix commands.
+
+  This appliance is declarative. A feature that cannot be configured
+  without a manual setup step gets dropped, not documented as a manual
+  step.
+
+rules:
+  proposal:
+    - State what breaks if this is not done.
+  specs:
+    - Requirements state observable behavior only. A module option name,
+      derivation attribute or control-flow description belongs in design.md.
+    - Every requirement carries an acceptance criterion expressible as a
+      test or an evaluated flake output.
+  design:
+    - Record the alternatives rejected and why.
+    - Any state or outcome vocabulary shared by several capabilities is
+      defined once here, in one table; requirements reference those
+      states and never enumerate them differently.
+  tasks:
+    - Each task names the test or check that proves it done.
+    - No task is phrased as a process confirmation ("run X and confirm");
+      completion must leave an artifact a later audit can find.

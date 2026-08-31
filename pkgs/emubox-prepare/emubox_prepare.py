@@ -31,12 +31,38 @@ in it, exactly as the bare map once did on its own. A relative path resolves
 under the appdata root; an absolute one is used as written, which is how
 later epics reach files outside it. The `keys` shape is the editor's:
 `{name: {"type": ..., "value": ...}}` for `esde-xml`, `{section: {key:
-value}}` for `ini`, `{key: value}` for `retroarch`. `retroachievements`,
-when not null, carries the tables a later epic uses to drive the
-RetroAchievements integration; a null value means the feature is disabled,
-and there is no separate enabled flag inside the namespace. This program
-does not yet read `retroachievements` beyond checking its shape. Later
-epics extend the tables, not the editors.
+value}}` for `ini`, `{key: value}` for `retroarch`.
+
+`retroachievements` drives the shared RetroAchievements account (design
+D2). Null - or absent - means the feature is disabled, and there is no
+separate enabled flag inside it. Non-null, it carries `username_file`,
+`password_file` and `cache_file` (paths, never contents: this JSON is a
+world-readable store path), the `api_url`, the `hardcore` boolean, and a
+`targets` array with one entry per supporting emulator. A target names its
+`encoding` - `plain`, `duckstation` (the encrypted at-rest form of design
+D3, which also needs a `machine_id_file`) or `secret-file` (PPSSPP, whose
+token is a whole file named by `token_file` rather than a key) - the
+`booleans` spelling that emulator uses for true and false, and a `keys`
+table mapping this program's own vocabulary (`enabled`, `hardcore`,
+`username`, `token`, and `login_timestamp` for DuckStation) to a file in
+`files` and the key inside it.
+
+What this program does with that: it logs in to the API once per run under
+a wall-clock timeout, caches the token at mode 0600, falls back to that
+cache only when the API cannot be reached, and drops it when the API
+rejects the credentials. The resulting values are folded into `files`
+before any editor runs, so the editors never learn that a key came from
+here rather than from the module that declared the file. When no token
+resolves at all, the login keys are removed from every target rather than
+left holding a stale account.
+
+That whole step is bounded: any runtime failure in it - no network, no
+credentials, a full disk, an unforeseen exception - costs the achievements
+and nothing else, because this program runs before every launch and the
+alternative is a family staring at a greeter. A malformed
+`retroachievements` document is the one exception, and it is not a runtime
+failure: like an unreadable owned-values file it is a broken call site,
+and it still ends the run non-zero.
 
 Error policy: recreate, not fail. A file that is missing, unreadable or
 malformed is replaced by a fresh one carrying the owned keys, and the
@@ -671,7 +697,13 @@ def _resolve_path(root: Path, value: str) -> Path:
 
 
 def _read_secret(path: Path) -> str | None:
-    """A credential file's content, trailing whitespace stripped.
+    """A credential file's content, less the single trailing newline sops adds.
+
+    Exactly that one newline, never `.strip()`: a RetroAchievements password
+    may begin or end with a space, and stripping it made such an account
+    impossible to log in with while the failure looked like an ordinary
+    rejection - the box would drop its cache and start every session with
+    achievements absent, with nothing in the journal pointing at the cause.
 
     None on any read failure - missing, a directory, permission denied, or
     bytes that are not valid UTF-8. `UnicodeDecodeError` is a `ValueError`
@@ -684,10 +716,11 @@ def _read_secret(path: Path) -> str | None:
     is simply skipped; the program does not fail and does not exit non-zero.
     """
     try:
-        return path.read_text().strip()
+        text = path.read_text()
     except (OSError, UnicodeDecodeError) as error:
         note(f"{path} could not be read ({error})")
         return None
+    return text[:-1] if text.endswith("\n") else text
 
 
 def _read_cached_token(path: Path) -> str | None:
@@ -1389,10 +1422,10 @@ def main(argv: Sequence[str]) -> int:
             f"got {type(tables).__name__}"
         )
         return 1
-    # `retroachievements` is not read yet - this group only owns the shape - but
-    # a document a later epic will produce must already be rejected here if it
-    # is malformed, rather than passing this program only to fail the one that
-    # reads it (design D1: missing is equivalent to null).
+    # Shape only, here: the namespace's own fields and every target are
+    # validated by `apply_retroachievements` below, which owns them. A
+    # missing key is equivalent to null (design D1) and disables the
+    # feature.
     retroachievements = document.get("retroachievements")
     if retroachievements is not None and not isinstance(retroachievements, dict):
         note(

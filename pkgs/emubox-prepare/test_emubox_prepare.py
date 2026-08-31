@@ -2699,3 +2699,42 @@ def test_a_run_with_no_token_leaves_the_ppsspp_username_out_too(
     keys = cast("dict[str, object]", files["ppsspp.ini"])["keys"]
     achievements = cast("dict[str, object]", keys)["Achievements"]
     assert cast("dict[str, object]", achievements)["AchievementsUserName"] is ep.REMOVE
+
+
+# --- Second review wave: the minors (M13) ----------------------------------
+
+
+def test_read_secret_keeps_whitespace_inside_a_password(tmp_path: Path) -> None:
+    # M13: only the one newline sops appends is dropped. A password with a
+    # leading or trailing space could never authenticate, and the failure
+    # looked exactly like a rejection.
+    path = tmp_path / "password"
+    path.write_text("  hunter2  \n")
+
+    assert ep._read_secret(path) == "  hunter2  "
+
+
+def test_the_login_posts_a_password_with_its_whitespace_intact(
+    tmp_path: Path,
+) -> None:
+    received: dict[str, list[str]] = {}
+
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            received.update(
+                urllib.parse.parse_qs(body.decode(), keep_blank_values=True)
+            )
+            payload = json.dumps({"Success": True, "Token": "tok"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    with ra_server(Handler) as url:
+        ra, _cache_file = ra_namespace(tmp_path, url)
+        (tmp_path / "password").write_text(" hunter2 \n")
+
+        assert ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0) is not None
+
+    assert received["p"] == [" hunter2 "]

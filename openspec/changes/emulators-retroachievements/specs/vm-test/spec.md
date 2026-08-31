@@ -59,6 +59,14 @@ checklist items, not VM assertions.
 - **THEN** the process starts successfully, and any standalone's
   failure fails the test
 
+#### Scenario: A standalone that cannot be launched headless
+- **WHEN** a standalone emulator cannot be started far enough under the
+  VM's headless drivers to read its configuration
+- **THEN** the test proves what it can - that the binary runs - and the
+  configuration records that this one proves less than the others, and
+  why, so the weaker check is a stated exception rather than an
+  assertion that quietly means less than its neighbours
+
 #### Scenario: Offline boot without a cache
 - **WHEN** the VM test boots with RetroAchievements enabled, no cached
   token and no route to the mocked endpoint

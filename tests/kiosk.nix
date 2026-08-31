@@ -1067,7 +1067,15 @@ assert lib.assertMsg
                   "input_load_state": "f4",
                   "input_toggle_fast_forward": "space",
                   "input_screenshot": "f8",
-                  "input_menu_toggle_gamepad_combo": "4",
+                  # Two DIFFERENT enum values on purpose. RetroArch
+                  # evaluates the menu and quit combos independently
+                  # against the same frame and handles quit first, so the
+                  # same value in both makes the menu combo dead code -
+                  # `modules/emulators` carries the source citation. Pinned
+                  # as distinct literals here so a future edit that
+                  # collapses them back to one value fails this test rather
+                  # than shipping a knob that does nothing.
+                  "input_menu_toggle_gamepad_combo": "2",
                   "input_quit_gamepad_combo": "4",
               },
           },

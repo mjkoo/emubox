@@ -966,17 +966,42 @@ in
           input_toggle_fast_forward = "space";
           input_screenshot = "f8";
           # The gamepad-combo counterparts, device-independent (no `_btn`
-          # binding needed): RetroArch's `enum input_combo_type`
-          # (input_defines.h) numbers `INPUT_COMBO_START_SELECT` as 4 -
-          # `NONE`=0, `DOWN_Y_L_R`=1, `L3_R3`=2,
-          # `L1_R1_START_SELECT`=3, `START_SELECT`=4, and on; both keys
-          # are plain `SETTING_UINT`s against this same enum
-          # (configuration.c). The desktop build's own default for both is
-          # `INPUT_COMBO_NONE` (config.def.h:939,942) - with nothing
-          # pinned here a player who entered a core would have no
-          # controller-only way back to the frontend, which is exactly
-          # the gap a quit combo exists to close.
-          input_menu_toggle_gamepad_combo = "4";
+          # binding needed). Both keys are plain `SETTING_UINT`s against
+          # RetroArch's `enum input_combo_type` (configuration.c:2558,2560),
+          # whose full membership, read at the pinned v1.22.2 source
+          # (`input/input_defines.h:211-225`), is: `NONE`=0,
+          # `DOWN_Y_L_R`=1, `L3_R3`=2, `L1_R1_START_SELECT`=3,
+          # `START_SELECT`=4, `L3_R`=5, `L_R`=6, `HOLD_START`=7,
+          # `HOLD_SELECT`=8, `DOWN_SELECT`=9, `L2_R2`=10, `LAST`=11.
+          # The desktop build's own default for both is `INPUT_COMBO_NONE`
+          # (config.def.h:939,942) - with nothing pinned here a player who
+          # entered a core would have no controller-only way back to the
+          # frontend, which is exactly the gap a quit combo exists to close.
+          #
+          # The two values must differ, and not merely for tidiness.
+          # `runloop.c` evaluates them independently against the same frame's
+          # button bits: the menu combo sets `RARCH_MENU_TOGGLE`
+          # (runloop.c:5648-5653) and the quit combo sets `trig_quit_key`
+          # (runloop.c:5889-5895) with no exclusion between them, and the
+          # quit block runs first (line 5880 vs. the menu-toggle hotkey's
+          # own check at line 6003). Giving both keys `4` therefore made
+          # Start+Select quit and left the menu combo dead - one knob doing
+          # nothing while looking configured.
+          #
+          # Menu toggle is `L3_R3` = 2: the two stick clicks share no button
+          # with Start+Select, so no single press can satisfy both bindings
+          # and the collision cannot come back. That rules out the three
+          # values that do share one (`L1_R1_START_SELECT`=3 is a superset
+          # of the quit combo, `HOLD_START`=7 and `HOLD_SELECT`=8 each hold
+          # one of its two buttons), and among the remaining disjoint ones
+          # `L_R`=6 and `L2_R2`=10 are shoulder pairs games press constantly
+          # and `DOWN_Y_L_R`=1 needs four buttons at once; L3+R3 is both the
+          # least likely to fire mid-game and RetroArch's own default menu
+          # combo on the console platforms that have two sticks
+          # (config.def.h:930-931). It does need a pad with clickable
+          # sticks; a pad without them still reaches the frontend through
+          # the quit combo, which is the route the design actually requires.
+          input_menu_toggle_gamepad_combo = "2";
           input_quit_gamepad_combo = "4";
         };
       };

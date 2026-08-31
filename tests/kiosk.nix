@@ -971,6 +971,11 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
           # betting on a package happening to be pulled in as someone else's
           # dependency. Bash's own `/dev/tcp` pseudo-device needs no extra
           # binary and every guest command already runs through bash.
+          # 30 s, not a measured budget: the unit is a bare Python interpreter
+          # starting a stdlib HTTP server with no dependencies of its own to
+          # wait on, so the real wait is however long a loaded CI runner
+          # takes to schedule one more systemd job - generous headroom for
+          # that, not a number this test has ever seen come close to.
           machine.wait_until_succeeds(
               "echo > /dev/tcp/127.0.0.1/${toString mockPort}", timeout=30
           )
@@ -1034,17 +1039,74 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
       # --- emulators: BIOS-free core families launch headless (design D7) --
 
       with subtest("Every BIOS-free core family with a licensed ROM runs headless"):
-          # video_driver overridden per run (design D7), not baked into the
-          # frontend's own owned copy of retroarch.cfg, which stays
-          # fullscreen for the box; only this ad hoc run needs a driver that
-          # produces no GPU output at all. audio_driver is overridden the
-          # same way - this VM has no real audio device, and RetroArch's
-          # default driver would otherwise just log an ALSA failure and
-          # continue, noise this test has no reason to invite.
+          # Every driver RetroArch would otherwise try to open a real device
+          # for is overridden to "null" (design D7's "video_driver
+          # overridden for the run", extended here to every driver the pinned
+          # 1.22.2 source shows has one): this VM has no GPU, no input
+          # devices, no audio device and no ALSA sequencer, and RetroArch's
+          # own drivers/*.c confirm each has a driver literally named
+          # "null" for exactly this. video_driver alone was not enough - CI
+          # proved it: `video_driver_init_internal()` also initialises the
+          # input driver (input/input_driver.c's `input_driver_init`, called
+          # from inside video init), so a null video driver with a real
+          # input driver still fails with "Cannot initialize input driver."
+          # input_joypad_driver is separate from input_driver (the pad
+          # backend a real input driver would otherwise hand off to,
+          # input/input_driver.c:4698) and midi_driver is separate again
+          # (retroarch.c's `midi_drv`) - without it RetroArch tries the ALSA
+          # sequencer directly (`snd_seq_open`) and this VM has no
+          # /dev/snd/seq. menu_driver is included too though the pinned
+          # source shows its own "null" driver failing to fully initialise
+          # even so (menu/menu_driver.c's `rarch_menu_init` chain) - that
+          # failure is logged and non-fatal (RetroArch continues into the
+          # run loop regardless, confirmed by reproducing this exact
+          # override set on the x86_64-linux builder outside the VM), so it
+          # is left set to the semantically correct value rather than
+          # omitted.
           override = "/tmp/emubox-retroarch-headless-override.cfg"
           machine.succeed(
-              f"printf '%s\\n' 'video_driver = \"null\"' 'audio_driver = \"null\"' > {override}"
+              "printf '%s\\n' "
+              "'video_driver = \"null\"' "
+              "'audio_driver = \"null\"' "
+              "'input_driver = \"null\"' "
+              "'input_joypad_driver = \"null\"' "
+              "'menu_driver = \"null\"' "
+              "'midi_driver = \"null\"' "
+              f"> {override}"
           )
+
+          # Two markers, not the bare exit-0-and-a-log-line the pinned
+          # source shows is vacuous: runloop.c:3712-3713 logs
+          # "Loading dynamic libretro core from" by echoing straight back
+          # the `-L` argument this test already passed in, before any dlopen
+          # is even attempted, so its presence proves nothing about whether
+          # the ROM matched the core - and tasks/task_content.c:2224-2229's
+          # own comment records that `content_load()` can fail and still
+          # return true, silently swapping in the dummy core, in which case
+          # `--max-frames` still exits 0.
+          #
+          # The positive marker: runloop.c's `runloop_event_load_core`
+          # logs "[Core] Geometry: ..." (from a real `retro_get_system_av_info()`
+          # call into the dlopen'd core) only after
+          # `event_init_content()` - which is what calls the core's real
+          # `retro_load_game()` - has already returned true (runloop.c
+          # ~4808-4817: `runloop_event_init_core` returns early, before ever
+          # reaching `runloop_event_load_core`, the moment content
+          # loading fails). So this line cannot appear for a truncated
+          # fixture, a wrong core/ROM pairing, or any core that dlopens fine
+          # but rejects the specific content handed to it - confirmed
+          # empirically too: reproducing a real run on the x86_64-linux
+          # builder (outside the VM, no KVM needed) shows this exact line.
+          #
+          # The negative marker: tasks/task_content.c's `content_init` logs
+          # `RARCH_ERR("[Content] %s\n", ...)` with
+          # `msg_hash_to_str(MSG_FAILED_TO_LOAD_CONTENT)` - "Failed to load
+          # content." (intl/msg_hash_us.h) - exactly when `content_file_init`
+          # fails, i.e. exactly the case the dummy-core-fallback comment
+          # above describes. Asserting its absence is what closes that hole:
+          # even if a future RetroArch version's fallback path let
+          # `--max-frames` exit 0 with the dummy core silently substituted,
+          # this line would still have been logged on the way there.
           for fixture in ${
             py (
               map (f: {
@@ -1067,12 +1129,25 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
               # design's "assert liveness over frames" in practice, since
               # RetroArch itself decides to quit, not the content.
               out = machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
-              assert fixture["core"] in out, (
-                  f"{fixture['family']}: expected {fixture['core']!r} in the RetroArch log\n{out}"
+              assert "[Core] Geometry:" in out, (
+                  f"{fixture['family']}: the core never reached a real "
+                  f"retro_get_system_av_info() call - content did not load\n{out}"
+              )
+              assert "[Content] Failed to load content." not in out, (
+                  f"{fixture['family']}: RetroArch logged a content-load "
+                  f"failure (dummy-core fallback territory)\n{out}"
               )
 
       # --- standalones: smoke launch (design D7) ----------------------------
 
+      # settle=5: long enough that a slow CI runner forking and execve-ing
+      # a multi-hundred-megabyte Qt/SDL binary has time to get past its own
+      # library loading and toolkit construction before the alive-check
+      # samples it (short compared to the reboot/relaunch waits elsewhere in
+      # this file because there is no compositor or session manager in this
+      # path, only process startup) - not a measured figure, since no KVM
+      # builder was available to time an actual run; if CI shows a genuine
+      # binary needing longer, raising this one number covers all five.
       def standalone_smoke_launch(binary, settle=5):
           """Prove a standalone starts against its written configuration and
           stays up, then kill it.
@@ -1117,6 +1192,11 @@ assert lib.assertMsg (lib.length exemptFamilies == 2) ''
           except Exception:
               print(machine.execute(f"cat {log}")[1])
               raise
+          # 30 s: the same figure the crash-loop subtest above uses to wait out
+          # a SIGKILL on es-de, reused here rather than invented fresh - a
+          # multi-hundred-megabyte process unwinding SDL/Qt on a loaded CI
+          # runner is the same class of wait, not a smaller one, even though
+          # this kill is a plain SIGTERM rather than a SIGKILL.
           machine.succeed(f"kill {pid}")
           machine.wait_until_fails(f"kill -0 {pid}", timeout=30)
 

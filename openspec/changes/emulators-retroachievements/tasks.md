@@ -31,5 +31,5 @@
 
 ## 6. Docs and runbook
 
-- [ ] 6.1 Add the token-scheme re-verification step to the DuckStation bump runbook comment in `pkgs/duckstation`
-- [ ] 6.2 Document `/data/bios` layout, `emubox-check-bios` usage and the RA secrets in the README's admin sections
+- [x] 6.1 Add the token-scheme re-verification step to the DuckStation bump runbook comment in `pkgs/duckstation`
+- [x] 6.2 Document `/data/bios` layout, `emubox-check-bios` usage and the RA secrets in the README's admin sections

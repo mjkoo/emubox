@@ -454,6 +454,25 @@ def test_main_rejects_malformed_json(tmp_path: Path) -> None:
     assert ecb.main([str(values), str(tmp_path)]) == 1
 
 
+def test_main_rejects_a_deeply_nested_inventory_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `json.loads` raises RecursionError rather than a ValueError on a
+    # deeply nested document, and RecursionError is not a ValueError, so a
+    # guard naming only OSError and ValueError misses it and the tool dies
+    # with a stack trace instead of the one journal line it promises. The
+    # same store-path read in emubox-prepare already names it; these two
+    # sites are the same read and answer the same way.
+    values = tmp_path / "inventory.json"
+    values.write_text("[" * 100000)
+
+    assert ecb.main([str(values), str(tmp_path)]) == 1
+
+    err = capsys.readouterr().err
+    assert "inventory JSON" in err
+    assert "Traceback" not in err
+
+
 def test_main_rejects_an_unknown_algorithm_loudly(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

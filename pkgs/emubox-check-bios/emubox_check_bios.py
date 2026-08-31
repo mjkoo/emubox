@@ -117,7 +117,12 @@ def digest_of(path: Path, algorithm: str) -> str | None:
 def load_inventory(path: str) -> dict[str, Entry] | None:
     try:
         document = json.loads(Path(path).read_text())
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
+        # RecursionError joins the two obvious ones because `json.loads`
+        # raises it rather than a ValueError on a deeply nested document,
+        # and this branch's whole promise is a journal line instead of a
+        # traceback. The same read in emubox-prepare answers the same way;
+        # the two sites are the same store path read and must not drift.
         note(f"{path} is not readable inventory JSON ({error})")
         return None
     if not isinstance(document, dict):

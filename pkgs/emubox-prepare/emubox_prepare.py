@@ -283,6 +283,15 @@ class Removal:
     cannot silently delete a key; this sentinel has no JSON spelling at
     all, and the only thing that produces it is the retroachievements
     merge in this same file.
+
+    "At all" is meant literally, and both flat-file editors implement it
+    that way through `_sweep_key`: every assignment of the key, in every
+    instance of its section, plus the file's headerless preamble - not the
+    first match in the first matching section. The claim used to be looser
+    than the code, which was tolerable while a removal only meant "do not
+    leave a stale preference"; it is not now that a removal is also how a
+    live bearer token comes off the box, and a duplicated `[Achievements]`
+    header is exactly the shape a torn or hand-edited file can take.
     """
 
     __slots__ = ()
@@ -475,7 +484,10 @@ def set_ini_settings(
 
     A key whose value is `REMOVE` is deleted from the file instead, with the
     same properties: everything around it survives, and removing a key that
-    is not there is a no-op that reports no write.
+    is not there is a no-op that reports no write. Every occurrence of it
+    goes - in every instance of its section, and in the headerless preamble
+    - because that is what `Removal` promises; a same-named key under some
+    other section is left alone.
 
     A file in which nothing at all is owned is left alone entirely - not
     parsed, not recreated, not mentioned. PCSX2 declares `secrets.ini` with
@@ -522,24 +534,30 @@ def set_ini_settings(
         return True
 
     changed = False
+
+    # Removals sweep the whole file first, in a pass of their own. First
+    # because a removal is not confined to one section's bounds (see
+    # `_sweep_key`) and deleting a line shifts every index after it, so
+    # doing this alongside the writes below would invalidate the bounds
+    # they are holding; a pass that finishes before the next one starts
+    # cannot.
     for section, keys in sections.items():
+        for key, value in keys.items():
+            if isinstance(value, Removal) and _sweep_key(lines, key, section):
+                changed = True
+
+    for section, keys in sections.items():
+        writes = _without_removals(keys)
+        if not writes:
+            continue  # every owned key here was a removal, already swept
         bounds = _ini_section_bounds(lines, section)
         if bounds is None:
-            fresh_keys = _without_removals(keys)
-            if not fresh_keys:
-                continue  # nothing to add, and no section to remove from
-            lines.extend(_render_ini({section: fresh_keys}).splitlines())
+            lines.extend(_render_ini({section: writes}).splitlines())
             changed = True
             continue
         start, end = bounds
-        for key, value in keys.items():
+        for key, value in writes.items():
             index = _ini_key_index(lines, start, end, key)
-            if isinstance(value, Removal):
-                if index is not None:
-                    del lines[index]
-                    end -= 1
-                    changed = True
-                continue
             if index is None:
                 # After the section's last setting, so a following comment
                 # block stays attached to whatever it was written under.
@@ -577,6 +595,43 @@ def _ini_section_bounds(lines: Sequence[str], section: str) -> tuple[int, int] |
         if match.group("name") == section:
             start = index + 1
     return None if start is None else (start, len(lines))
+
+
+def _sweep_key(lines: list[str], key: str, section: str | None) -> bool:
+    """Delete every assignment of `key` this file's owner could mean. In place.
+
+    What `REMOVE` promises (see `Removal`), rather than what a single
+    index lookup can deliver. For an INI file `section` names the one the
+    key belongs to and the sweep covers every instance of it - two
+    `[Achievements]` headers in one file is a shape a torn or hand-edited
+    file can take - plus the headerless preamble above the first header,
+    since an assignment there belongs to no section and so no other
+    section's owner can claim it. Assignments under a *different* section
+    are left alone: those genuinely belong to somebody else.
+
+    `section=None` is RetroArch's flat file, which has no sections at all,
+    so every line is a candidate.
+
+    Indices are collected in one forward pass and deleted in reverse, so no
+    deletion invalidates an index still to be used; callers must run this
+    to completion before computing any section bounds of their own.
+    """
+    doomed: list[int] = []
+    current: str | None = None  # the preamble, until the first header
+    for index, line in enumerate(lines):
+        if section is not None:
+            match = _INI_SECTION_RE.match(line)
+            if match is not None:
+                current = match.group("name")
+                continue
+            if current is not None and current != section:
+                continue
+        assignment = _split_ini_assignment(line)
+        if assignment is not None and assignment[1] == key:
+            doomed.append(index)
+    for index in reversed(doomed):
+        del lines[index]
+    return bool(doomed)
 
 
 def _ini_key_index(lines: Sequence[str], start: int, end: int, key: str) -> int | None:
@@ -620,9 +675,9 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
     """Assert owned keys in RetroArch's flat config. Returns whether it wrote.
 
     Same properties as the INI editor: comments, order and unowned keys are
-    preserved, a missing key is appended, a key valued `REMOVE` is deleted,
-    an unreadable file is recreated carrying the owned keys, and a file with
-    no owned keys is left alone.
+    preserved, a missing key is appended, every assignment of a key valued
+    `REMOVE` is deleted, an unreadable file is recreated carrying the owned
+    keys, and a file with no owned keys is left alone.
     """
     if not keys:
         return False
@@ -642,13 +697,15 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
         return True
 
     changed = False
+    # Removals first and file-wide, the INI editor's rule for the same
+    # reasons: `REMOVE` promises absence, and a deletion moves every index
+    # after it.
     for key, value in keys.items():
+        if isinstance(value, Removal) and _sweep_key(lines, key, None):
+            changed = True
+
+    for key, value in _without_removals(keys).items():
         index = _ini_key_index(lines, 0, len(lines), key)
-        if isinstance(value, Removal):
-            if index is not None:
-                del lines[index]
-                changed = True
-            continue
         quoted = f'"{value}"'
         if index is None:
             lines.append(f"{key} = {quoted}")

@@ -2722,6 +2722,87 @@ def test_retroarch_removing_a_key_that_is_not_there_reports_no_write(
     assert unwritten(path)
 
 
+# --- Final wave: a removal means the key is not in the file at all --------
+#
+# `Removal`'s docstring says the key "must not be in this file at all", and
+# the editors used to remove at most one occurrence, in at most the first
+# instance of the named section, and never one sitting above every header.
+# That was tolerable while REMOVE only meant "do not leave a stale
+# preference"; it now also means "this bearer token is off the box", so the
+# code was made to match the claim rather than the other way round.
+
+
+def test_ini_removal_sweeps_a_duplicated_section(tmp_path: Path) -> None:
+    path = tmp_path / "secrets.ini"
+    path.write_text(
+        "[Achievements]\nToken = TOKENfirst\nKeepMe = yes\n"
+        "[Other]\nToken = not-ours\n"
+        "[Achievements]\nToken = TOKENsecond\n"
+    )
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    text = path.read_text()
+    assert "TOKENfirst" not in text
+    assert "TOKENsecond" not in text
+    # Someone else's key of the same name, under their own section, is not
+    # this program's to delete.
+    assert "Token = not-ours" in text
+    assert "KeepMe = yes" in text
+
+
+def test_ini_removal_sweeps_a_key_repeated_within_one_section(tmp_path: Path) -> None:
+    path = tmp_path / "secrets.ini"
+    path.write_text("[Achievements]\nToken = TOKENone\nToken = TOKENtwo\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    assert "TOKEN" not in path.read_text()
+
+
+def test_ini_removal_sweeps_a_key_written_above_every_section_header(
+    tmp_path: Path,
+) -> None:
+    # An assignment before any header belongs to no section, so no other
+    # section's owner can claim it - and leaving a line spelled
+    # `Token = <live token>` in a file this program removes `Token` from
+    # would defeat the promise for the sake of a shape no emulator writes.
+    path = tmp_path / "secrets.ini"
+    path.write_text("Token = TOKENstray\n[Achievements]\nUsername = alice\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    text = path.read_text()
+    assert "TOKENstray" not in text
+    assert "Username = alice" in text
+
+
+def test_ini_removal_still_reports_no_write_when_only_other_sections_match(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "secrets.ini"
+    path.write_text("[Other]\nToken = not-ours\n[Achievements]\nUsername = alice\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+
+    assert unwritten(path)
+
+
+def test_retroarch_removal_sweeps_every_occurrence(tmp_path: Path) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(
+        'cheevos_token = "TOKENone"\nvideo_fullscreen = "true"\n'
+        'cheevos_token = "TOKENtwo"\n'
+    )
+
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+
+    text = path.read_text()
+    assert "TOKEN" not in text
+    assert 'video_fullscreen = "true"' in text
+
+
 # --- Final wave: an unparseable file is not an absent one -----------------
 #
 # The all-removals branch of both flat-file editors used to read "the parser

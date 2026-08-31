@@ -24,7 +24,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -2123,37 +2123,59 @@ def test_resolve_token_falls_back_to_the_cache_when_the_server_dribbles(
     assert elapsed < dribble
 
 
-def _login_threads() -> set[threading.Thread]:
-    return {t for t in threading.enumerate() if t.name == "emubox-ra-login2"}
-
-
-def _wait_for_login_threads(timeout: float) -> bool:
-    """Whether every abandoned login thread has finished within `timeout`."""
-    deadline = time.monotonic() + timeout
-    while _login_threads() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    return not _login_threads()
-
-
-def test_login2_does_not_leave_its_abandoned_request_running() -> None:
+def test_login2_does_not_leave_its_abandoned_request_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # The wall-clock deadline abandons the request rather than cancelling
     # it, which leaves the per-socket timeout a job of its own: without it
     # the abandoned thread sits in recv for as long as the server holds the
     # connection - ten seconds here, indefinitely on a half-up network.
     #
-    # An earlier test may still have an abandoned request finishing, so the
-    # field is cleared first; after that any surviving login thread is this
-    # test's own. The thread is deliberately not held onto - it may well be
-    # gone before the call even returns, which is the passing case.
-    assert _wait_for_login_threads(5.0), "an earlier login was still running"
+    # Proved by capturing the actual `threading.Thread` objects `_login2`
+    # (and, on the server side, `ThreadingHTTPServer`) create while the call
+    # is in flight - patching `threading.Thread` for the call's duration -
+    # rather than sampling `threading.enumerate()` by name at some later,
+    # arbitrary moment. A sampled snapshot only shows whether a same-named
+    # thread had not finished the instant it happened to be checked, which
+    # stayed timing-sensitive under a busy sandboxed build even filtered by
+    # name and polled with a deadline. The name still has to pick the one
+    # worker out of what this test captures, but only among threads its own
+    # `with` block created - no earlier or later test's thread can ever
+    # reach this list. `Thread.join` then blocks until that exact thread
+    # object reports completion, so the result is precise no matter how
+    # little CPU time a loaded build hands it.
+    created: list[threading.Thread] = []
+    real_thread = threading.Thread
+
+    def capturing_thread(*args: Any, **kwargs: Any) -> threading.Thread:
+        thread = real_thread(*args, **kwargs)
+        created.append(thread)
+        return thread
 
     with ra_server(_sleepy_handler(10.0), threaded=True) as url:
+        # Patched around this call only. `created` still ends up holding
+        # more than just `_login2`'s own worker - `ThreadingHTTPServer`
+        # spawns its own per-connection thread on the server side while
+        # this call is in flight - so the worker is picked out by the one
+        # name `_login2` gives it, not by position, leaving the filter as
+        # the only thing (beyond the name itself) this test still trusts.
+        monkeypatch.setattr(threading, "Thread", capturing_thread)
         assert ep._login2(url, "alice", "hunter2", timeout=0.2) == (
             "unreachable",
             None,
         )
+        monkeypatch.undo()
 
-        assert _wait_for_login_threads(5.0)
+    workers = [t for t in created if t.name == "emubox-ra-login2"]
+    assert len(workers) == 1, created
+    worker = workers[0]
+    # 30 s is generous headroom over the 0.2 s per-socket timeout passed to
+    # `_login2` above - the worker's own recv() gives up on that schedule,
+    # so this bound exists only to cap a genuine leak, not to describe how
+    # long a passing run takes: `join` returns the moment the thread
+    # actually finishes, so a fast pass costs nothing extra here.
+    worker.join(timeout=30.0)
+    assert not worker.is_alive(), "abandoned login2 worker thread is still running"
 
 
 # The four exception families below are asserted against `_login2_request`,

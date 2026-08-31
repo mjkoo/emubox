@@ -898,6 +898,26 @@ in
         format = "ini";
         keys = {
           UI.StartFullscreen = "true";
+          # UI.SetupWizardIncomplete: PCSX2/pcsx2 pcsx2-qt/QtHost.cpp
+          # (v2.6.3) sets this true whenever the base settings layer is
+          # (re)created from nothing, and OR's it into `s_run_setup_wizard`
+          # on every startup (`s_run_setup_wizard = s_run_setup_wizard ||
+          # GetBoolValue("UI", "SetupWizardIncomplete", false)`) - a check
+          # that runs whether or not `-batch` was passed, so the batch flag
+          # does not save a fresh box from the wizard's first page (BIOS
+          # configuration) blocking every launch until an admin clicks
+          # through it. Forcing it false here is the same fix Azahar's
+          # `firstStart = false` already applies for the same reason.
+          UI.SetupWizardIncomplete = "false";
+          # Folders.Bios: PCSX2/pcsx2 pcsx2/Pcsx2Config.cpp (v2.6.3),
+          # `EmuFolders::LoadPathFromSettings(si, DataRoot, "Bios", "bios")`
+          # reads `[Folders] Bios` and uses it as-is when it is already
+          # absolute (`Path::IsAbsolute`), so this literal path needs no
+          # relative resolution against PCSX2's own data root. Without this
+          # key PCSX2 falls back to its own `bios` folder under its data
+          # root, never `/data/bios`, so `emubox-check-bios` reporting OK
+          # would not mean PS2 can actually boot a game.
+          Folders.Bios = "/data/bios";
           # Native internal resolution. PCSX2 serializes this float with
           # plain `ostringstream` formatting - the shortest decimal, `1`,
           # never `1.000000` - so this exact literal is what has to be
@@ -954,6 +974,20 @@ in
         format = "ini";
         keys = {
           Main.StartFullscreen = "true";
+          # Main.SetupWizardIncomplete: stenzek/duckstation
+          # src/duckstation-qt/qthost.cpp (v0.1-11752),
+          # `s_state.run_setup_wizard = s_state.run_setup_wizard ||
+          # Core::GetBaseBoolSettingValue("Main", "SetupWizardIncomplete",
+          # false)` runs on every startup regardless of `-batch` - that flag
+          # only sets `s_state.batch_mode`, a separate variable `-setupwizard`
+          # is the only command-line switch that touches
+          # `run_setup_wizard`. On a config prepare has never seeded before,
+          # `InitializeBaseSettingsLayer`'s "neither key present" branch
+          # forces this true, so the very first launch would land on the
+          # wizard's BIOS page rather than the game the player chose.
+          # Forcing it false here is the same fix Azahar's
+          # `firstStart = false` already applies for the same reason.
+          Main.SetupWizardIncomplete = "false";
           GPU = {
             # "PGXP geometry correction": `PGXPEnable` is the one setting
             # that key names in the design - `PGXPCulling` etc. are
@@ -966,6 +1000,17 @@ in
             # revisit at the E12 hardware checklist if it disappoints.
             ResolutionScale = "4";
           };
+          # BIOS.SearchDirectory: stenzek/duckstation src/core/settings.cpp
+          # (v0.1-11752), `Bios = LoadPathFromSettings(si, DataRoot, "BIOS",
+          # "SearchDirectory", "bios")`, and `LoadPathFromSettings` uses the
+          # value as-is once `Path::IsAbsolute` is true, so this literal
+          # path needs no resolution against DuckStation's own data root.
+          # Without this key DuckStation falls back to its hardcoded
+          # `$HOME/.local/share/duckstation/bios` (settings.cpp:172's
+          # section default plus the `"bios"` fallback), never
+          # `/data/bios`, so `emubox-check-bios` reporting OK would not mean
+          # PS1 can actually boot a game.
+          BIOS.SearchDirectory = "/data/bios";
         };
       };
 

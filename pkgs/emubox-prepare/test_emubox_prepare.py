@@ -9,11 +9,18 @@ calling and assert it is still 0 afterwards, so a rewrite that happens to
 produce identical bytes is still a failure.
 """
 
+import contextlib
+import http.server
 import json
 import os
+import socket
 import subprocess
 import sys
+import threading
+import time
+import urllib.parse
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -773,3 +780,313 @@ def test_main_treats_an_absent_retroachievements_key_as_null(
     values.write_text(json.dumps({"files": {}}))
 
     assert ep.main([str(values), ""]) == 0
+
+
+def test_main_accepts_a_valid_non_null_retroachievements_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Group 1's review flagged the missing positive case: a well-formed,
+    # non-null retroachievements namespace is not itself an error, even
+    # before this group taught main() to act on it.
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    username_file = tmp_path / "username"
+    password_file = tmp_path / "password"
+    username_file.write_text("alice\n")
+    password_file.write_text("hunter2\n")
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {},
+                "retroachievements": {
+                    "api_url": "http://127.0.0.1:1/dorequest.php",
+                    "username_file": str(username_file),
+                    "password_file": str(password_file),
+                    "cache_file": str(tmp_path / "cache" / "ra-token"),
+                    "hardcore": False,
+                    "targets": [],
+                },
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 0
+
+
+# --- RetroAchievements: login2 and the token cache (design D2) ------------
+#
+# A real http.server.HTTPServer on 127.0.0.1:0 in a thread, never a
+# monkeypatched urllib, so the timeout, the POST body and the status
+# handling in _login2 are all genuinely exercised.
+
+
+class _QuietHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: object) -> None:
+        pass  # A passing test should print nothing; failures show the assert.
+
+
+def _json_handler(
+    status: int, payload: object
+) -> type[http.server.BaseHTTPRequestHandler]:
+    body = json.dumps(payload).encode()
+
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    return Handler
+
+
+def _status_handler(status: int) -> type[http.server.BaseHTTPRequestHandler]:
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(status)
+            self.end_headers()
+
+    return Handler
+
+
+def _body_handler(status: int, body: bytes) -> type[http.server.BaseHTTPRequestHandler]:
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    return Handler
+
+
+def _sleepy_handler(delay: float) -> type[http.server.BaseHTTPRequestHandler]:
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            time.sleep(delay)
+            self.send_response(200)
+            self.end_headers()
+
+    return Handler
+
+
+@contextlib.contextmanager
+def ra_server(handler_class: type[http.server.BaseHTTPRequestHandler]) -> Iterator[str]:
+    """A throwaway HTTP server, yielding the login2 URL to point prepare at."""
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/dorequest.php"
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def closed_port_url() -> str:
+    """A URL nothing listens on, for the connection-refused branch.
+
+    Bind then immediately close: for the short life of one test the OS will
+    not hand this port back out to another process, so a connection to it
+    is reliably refused rather than merely usually refused.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return f"http://127.0.0.1:{port}/dorequest.php"
+
+
+def test_login2_reports_success_with_the_token() -> None:
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-123"})) as url:
+        outcome = ep._login2(url, "alice", "hunter2", timeout=5.0)
+
+    assert outcome == ("success", "tok-123")
+
+
+def test_login2_reports_rejected_on_explicit_failure() -> None:
+    with ra_server(_json_handler(200, {"Success": False, "Error": "bad creds"})) as url:
+        outcome = ep._login2(url, "alice", "wrong", timeout=5.0)
+
+    assert outcome == ("rejected", None)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_login2_reports_rejected_on_401_and_403(status: int) -> None:
+    with ra_server(_status_handler(status)) as url:
+        outcome = ep._login2(url, "alice", "wrong", timeout=5.0)
+
+    assert outcome == ("rejected", None)
+
+
+def test_login2_reports_unreachable_on_a_server_error() -> None:
+    with ra_server(_status_handler(500)) as url:
+        outcome = ep._login2(url, "alice", "hunter2", timeout=5.0)
+
+    assert outcome == ("unreachable", None)
+
+
+def test_login2_reports_unreachable_on_a_body_that_is_not_json() -> None:
+    with ra_server(_body_handler(200, b"not json at all")) as url:
+        outcome = ep._login2(url, "alice", "hunter2", timeout=5.0)
+
+    assert outcome == ("unreachable", None)
+
+
+def test_login2_reports_unreachable_on_connection_refused() -> None:
+    outcome = ep._login2(closed_port_url(), "alice", "hunter2", timeout=5.0)
+
+    assert outcome == ("unreachable", None)
+
+
+def test_login2_reports_unreachable_on_a_timeout() -> None:
+    # A short configured timeout against a handler that sleeps past it, so
+    # the real timeout path is exercised without the suite paying 5 seconds.
+    with ra_server(_sleepy_handler(0.5)) as url:
+        outcome = ep._login2(url, "alice", "hunter2", timeout=0.05)
+
+    assert outcome == ("unreachable", None)
+
+
+def test_login2_posts_the_documented_form_fields() -> None:
+    received: dict[str, list[str]] = {}
+
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            received.update(urllib.parse.parse_qs(body.decode()))
+            payload = json.dumps({"Success": True, "Token": "tok"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    with ra_server(Handler) as url:
+        ep._login2(url, "alice", "hunter2", timeout=5.0)
+
+    assert received == {"r": ["login2"], "u": ["alice"], "p": ["hunter2"]}
+
+
+def ra_namespace(
+    tmp_path: Path, api_url: str, *, cache: str | None = None
+) -> tuple[dict[str, object], Path]:
+    username_file = tmp_path / "username"
+    password_file = tmp_path / "password"
+    username_file.write_text("alice\n")
+    password_file.write_text("hunter2\n")
+    cache_file = tmp_path / "cache" / "ra-token"
+    if cache is not None:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(cache)
+    ra: dict[str, object] = {
+        "api_url": api_url,
+        "username_file": str(username_file),
+        "password_file": str(password_file),
+        "cache_file": str(cache_file),
+        "hardcore": False,
+        "targets": [],
+    }
+    return ra, cache_file
+
+
+def test_resolve_token_writes_the_cache_mode_0600_on_success(tmp_path: Path) -> None:
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-123"})) as url:
+        ra, cache_file = ra_namespace(tmp_path, url)
+        result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result == ("alice", "tok-123")
+    assert cache_file.read_text() == "tok-123"
+    assert cache_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_resolve_token_forces_cache_mode_even_if_it_pre_existed(tmp_path: Path) -> None:
+    # _write carries a pre-existing file's mode across so an admin's edits
+    # survive, but the cache is a credential: its mode is always forced.
+    with ra_server(_json_handler(200, {"Success": True, "Token": "new-token"})) as url:
+        ra, cache_file = ra_namespace(tmp_path, url, cache="old-token")
+        cache_file.chmod(0o644)
+
+        result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result == ("alice", "new-token")
+    assert cache_file.read_text() == "new-token"
+    assert cache_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_resolve_token_drops_the_cache_when_credentials_are_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with ra_server(_json_handler(200, {"Success": False})) as url:
+        ra, cache_file = ra_namespace(tmp_path, url, cache="stale-token")
+
+        result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result is None
+    assert not cache_file.exists()
+    assert "rejected" in capsys.readouterr().err
+
+
+def test_resolve_token_falls_back_to_the_cache_when_unreachable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ra, cache_file = ra_namespace(tmp_path, closed_port_url(), cache="cached-token")
+
+    result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result == ("alice", "cached-token")
+    assert capsys.readouterr().err.strip()
+
+
+def test_resolve_token_continues_with_no_token_when_unreachable_and_no_cache(
+    tmp_path: Path,
+) -> None:
+    ra, cache_file = ra_namespace(tmp_path, closed_port_url())
+
+    result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result is None
+    assert not cache_file.exists()
+
+
+def test_resolve_token_falls_back_to_the_cache_on_a_timeout(tmp_path: Path) -> None:
+    with ra_server(_sleepy_handler(0.5)) as url:
+        ra, cache_file = ra_namespace(tmp_path, url, cache="cached-token")
+
+        result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=0.05)
+
+    assert result == ("alice", "cached-token")
+
+
+def test_resolve_token_skips_login_when_a_credential_file_is_unreadable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The server would answer Success if it were ever contacted, so a None
+    # result here proves the missing password file short-circuited the
+    # login rather than merely that the network happened to fail.
+    with ra_server(
+        _json_handler(200, {"Success": True, "Token": "should-not-be-used"})
+    ) as url:
+        ra, cache_file = ra_namespace(tmp_path, url)
+        (tmp_path / "password").unlink()
+
+        result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result is None
+    assert "password" in capsys.readouterr().err
+
+
+def test_resolve_token_never_leaks_the_password(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-123"})) as url:
+        ra, cache_file = ra_namespace(tmp_path, url)
+        result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=5.0)
+
+    assert result is not None
+    assert "hunter2" not in cache_file.read_text()
+    assert "hunter2" not in capsys.readouterr().err

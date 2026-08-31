@@ -55,6 +55,9 @@ import re
 import stat
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -439,6 +442,168 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str]) -> bool:
     if changed:
         _write(path, "\n".join(lines) + "\n")
     return changed
+
+
+# --- RetroAchievements: login and the token cache (design D2) ------------
+
+# Bound on the in-path login2 call. A module-level constant rather than a
+# JSON field: the JSON already carries the API URL, and a slow-or-flaky
+# network is exactly what this timeout exists to cap, not something a host
+# should be tuning per box. Kept overridable per call so tests can exercise
+# the timeout path itself without the suite paying 5 seconds for it.
+LOGIN_TIMEOUT = 5.0
+
+# The cache is a bearer credential like the secrets it is derived from, so
+# it gets their mode regardless of what a previous run - or an admin's `chmod`
+# - left it at. `_write` preserves an existing file's mode for ordinary
+# owned config, which is the wrong policy here on purpose.
+_CACHE_MODE = 0o600
+
+
+def _resolve_path(root: Path, value: str) -> Path:
+    """A path from the retroachievements namespace, resolved like `files`.
+
+    Same convention as the file map's paths (module docstring): relative
+    resolves under the appdata root, absolute is used as written. The
+    secrets store paths are always absolute in practice, but one rule for
+    every path in the namespace costs nothing and is one less thing to get
+    wrong at a call site.
+    """
+    path = Path(value)
+    return path if path.is_absolute() else root / value
+
+
+def _read_secret(path: Path) -> str | None:
+    """A credential file's content, trailing whitespace stripped.
+
+    None on any read failure - missing, a directory, permission denied.
+    Every case is a configuration problem rather than a broken call site
+    (behaviour step 1), so it is noted and the login for this run is simply
+    skipped; the program does not fail and does not exit non-zero.
+    """
+    try:
+        return path.read_text().strip()
+    except OSError as error:
+        note(f"{path} could not be read ({error})")
+        return None
+
+
+def _read_cached_token(path: Path) -> str | None:
+    """The cached token, or None if there is no usable one.
+
+    A missing file is the ordinary state before any login has ever
+    succeeded - silent, not noted. Anything else (permission denied, a
+    directory where the cache should be) is noted, because that is a cache
+    that should have been usable and was not.
+    """
+    try:
+        text = path.read_text().strip()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        note(f"{path} could not be read ({error})")
+        return None
+    return text or None
+
+
+def _login2(
+    api_url: str, username: str, password: str, timeout: float
+) -> tuple[str, str | None]:
+    """POST RetroAchievements' login2 API, form-encoded per the RA docs.
+
+    Returns exactly one of three outcomes, matching design D2's
+    three-way classification:
+
+    - ("success", token): the service answered with valid JSON,
+      `Success: true` and a token.
+    - ("rejected", None): the service answered and said no - explicit
+      `Success: false`, or HTTP 401/403 without even inspecting a body,
+      since those codes are RA's documented way of saying the same thing.
+    - ("unreachable", None): anything else - a transport error, a timeout,
+      a 5xx, or a 200 whose body does not parse as the expected JSON. This
+      is deliberately the catch-all: a response this program cannot make
+      sense of must never be mistaken for a rejection, or a working
+      account could have its cached token deleted by a service hiccup.
+    """
+    body = urllib.parse.urlencode(
+        {"r": "login2", "u": username, "p": password}
+    ).encode()
+    request = urllib.request.Request(api_url, data=body, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        # HTTPError is also an OSError (it subclasses URLError), so it must
+        # be caught ahead of the broad except below to read its status code.
+        if error.code in (401, 403):
+            return "rejected", None
+        return "unreachable", None
+    except OSError:
+        # Everything else urlopen can raise for a POST that never got a
+        # clean response: connection refused, DNS failure, and a timeout,
+        # which surfaces as TimeoutError - itself an OSError, not wrapped in
+        # HTTPError since no response was ever received to have a status.
+        return "unreachable", None
+
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return "unreachable", None
+    if isinstance(payload, dict) and payload.get("Success") is True:
+        token = payload.get("Token")
+        if isinstance(token, str) and token:
+            return "success", token
+    if isinstance(payload, dict) and payload.get("Success") is False:
+        return "rejected", None
+    return "unreachable", None
+
+
+def resolve_retroachievements_token(
+    ra: Mapping[str, object], root: Path, *, timeout: float = LOGIN_TIMEOUT
+) -> tuple[str, str] | None:
+    """The (username, token) pair to fold into the owned tables, or None.
+
+    None is step 4's no-token outcome: the caller still writes `enabled` and
+    `hardcore`, but leaves `username` and `token` out of every table rather
+    than write an absent or stale account.
+
+    A reachable API is always consulted first - the cache is an
+    offline-only fallback, never a shortcut that pre-empts a working
+    network - which is what lets a token revoked by a password change heal
+    on the next boot with no manual step (design D2).
+    """
+    username_file = _resolve_path(root, str(ra["username_file"]))
+    password_file = _resolve_path(root, str(ra["password_file"]))
+    cache_file = _resolve_path(root, str(ra["cache_file"]))
+
+    username = _read_secret(username_file)
+    password = _read_secret(password_file)
+    if username is None or password is None:
+        # Already noted by _read_secret above. No login is attempted at
+        # all: the cache stands in only for a reachable-but-failing
+        # network, never for credentials this program could not even read.
+        return None
+
+    outcome, token = _login2(str(ra["api_url"]), username, password, timeout)
+
+    if outcome == "success":
+        assert token is not None  # "success" always carries one
+        _write(cache_file, token)
+        cache_file.chmod(_CACHE_MODE)
+        return username, token
+
+    if outcome == "rejected":
+        note("the RetroAchievements API rejected the login; dropping any cached token")
+        cache_file.unlink(missing_ok=True)
+        return None
+
+    # outcome == "unreachable": fall back to the cache if one is readable;
+    # otherwise this run continues with no token (behaviour steps 2-3).
+    note("could not reach the RetroAchievements API; falling back to any cached token")
+    cached = _read_cached_token(cache_file)
+    if cached is not None:
+        return username, cached
+    return None
 
 
 # --- The custom systems step ----------------------------------------------

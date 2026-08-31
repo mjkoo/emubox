@@ -252,10 +252,9 @@ let
       family = "DOS (DOSBox Pure)";
       core = "dosbox_pure_libretro.so";
       # A looping demoscene intro with music that never exits on its own;
-      # `--max-frames` (the test script, below) is what forces every
-      # fixture - including this one and Vectrex's - to a clean exit, which
-      # is this design's practical form of "assert liveness over frames
-      # rather than expecting a still image".
+      # `--max-frames` (the test script, below) is what forces this fixture
+      # to a clean exit, which is this design's practical form of "assert
+      # liveness over frames rather than expecting a still image".
       rom = dosboxPureFixture;
     }
     {
@@ -265,20 +264,6 @@ let
         # MIT; the repo's LICENSE file (celso/c64, "C64 Christmas Demo").
         url = "https://raw.githubusercontent.com/celso/c64/e16dcccf6e14d4fb8d0270600a19b4a17d8e587e/card.prg";
         hash = "sha256-j8G4Ud1YgWYM/Lr9aAlwFOFYblql4MWfP9rioyIJUwA=";
-      };
-    }
-    {
-      family = "Vectrex (vecx)";
-      core = "vecx_libretro.so";
-      # A continuously-animating bouncing-box demo, not a static screen
-      # (verified from the fetched bytes' own cartridge header and the
-      # tutorial series' description) - same "assert liveness over frames"
-      # treatment as DOSBox Pure above.
-      rom = pkgs.fetchurl {
-        # GPL-3.0; both the repo's LICENSE file and the source file's own
-        # header comment agree (JoakimLarsson/VectrexTutorial, "bouncer6").
-        url = "https://raw.githubusercontent.com/JoakimLarsson/VectrexTutorial/82170ef24864f30957eb55af919fda8dcc51fd98/bin/bouncer6.bin";
-        hash = "sha256-MOMfxdG40RCouhj1XzKNVaZnErXymlFBVgh8V3ymreQ=";
       };
     }
   ];
@@ -357,6 +342,23 @@ let
       kind = "mechanism";
       reason = "the 240pSuite.sfc launch hangs rather than exiting and was killed at the launch subtest's 60 s per-launch cap with exit 124 in CI run 33359693788; in an earlier run, before that per-launch timeout existed, the same hang consumed the driver's entire one-hour global timeout; Mesen's fixture is also a 240p Test Suite port and passes, so this is specific to this core or this port rather than the suite";
     }
+    {
+      # A builder sweep (x86_64-linux remote builder, not CI) found vecx
+      # segfaults with "[Video] Using HW render, OpenGL driver forced." in
+      # its log - the identical signature already confirmed in CI for N64
+      # and Dreamcast above, where `video_driver_find_driver` forces a real
+      # GL driver whenever a core sets a hardware render context, discarding
+      # this test's null-driver override. That sweep is otherwise unusable
+      # (it ran past the audio-init stage that later invalidates its
+      # results), but this failure fires before that stage, and the
+      # mechanism itself is already CI-confirmed for two other cores - which
+      # is what makes it credible despite the sweep's other results not
+      # being.
+      family = "Vectrex (vecx)";
+      core = "vecx_libretro.so";
+      kind = "mechanism";
+      reason = "observed on the x86_64-linux remote builder, not in CI, during a sweep that is otherwise unusable - but the failure fires before the audio-init stage that invalidates the rest of that sweep, and it carries the same forced-HW-render signature (\"[Video] Using HW render, OpenGL driver forced.\") already CI-confirmed for N64 and Dreamcast above";
+    }
   ];
 
   # Named BIOS-dependent core families (design's system table's "yes" BIOS
@@ -387,15 +389,15 @@ let
     "freeintv_libretro.so" # Intellivision
   ];
 in
-assert lib.assertMsg (lib.length homebrewFixtures == 13) ''
-  tests/kiosk.nix: expected 13 pinned homebrew fixtures (the vm-test spec's
-  core-family coverage minus the three families now exempt for mechanism
-  reasons - N64 and Dreamcast (finding IMPORTANT-2), and SNES (CI-observed
-  hang)), got
+assert lib.assertMsg (lib.length homebrewFixtures == 12) ''
+  tests/kiosk.nix: expected 12 pinned homebrew fixtures (the vm-test spec's
+  core-family coverage minus the four families now exempt for mechanism
+  reasons - N64 and Dreamcast (finding IMPORTANT-2), and SNES and Vectrex
+  (CI-observed hang and the same forced-HW-render signature)), got
   ${toString (lib.length homebrewFixtures)}.
 '';
-assert lib.assertMsg (lib.length exemptFamilies == 5) ''
-  tests/kiosk.nix: expected 5 named-exempt core families (2 licensing, 3
+assert lib.assertMsg (lib.length exemptFamilies == 6) ''
+  tests/kiosk.nix: expected 6 named-exempt core families (2 licensing, 4
   mechanism), got ${toString (lib.length exemptFamilies)}.
 '';
 {
@@ -1507,13 +1509,13 @@ assert lib.assertMsg (lib.length exemptFamilies == 5) ''
           # override set on the x86_64-linux builder outside the VM), so it
           # is left set to the semantically correct value rather than
           # omitted. `video_driver = "null"` itself does not hold for every
-          # core, though: N64 and Dreamcast are exempt above (finding
-          # IMPORTANT-2, two of `exemptFamilies`' `kind = "mechanism"`
-          # entries) because RetroArch forces a real HW-render driver for
-          # them regardless of this override, confirmed the same way. SNES
-          # is exempt above too, but for an unrelated reason - the fixture
-          # launch hangs rather than exiting, confirmed in CI rather than by
-          # this mechanism.
+          # core, though: N64, Dreamcast and Vectrex are exempt above
+          # (finding IMPORTANT-2, three of `exemptFamilies`' `kind =
+          # "mechanism"` entries) because RetroArch forces a real HW-render
+          # driver for them regardless of this override, confirmed the same
+          # way. SNES is exempt above too, but for an unrelated reason - the
+          # fixture launch hangs rather than exiting, confirmed in CI rather
+          # than by this mechanism.
           override = "/tmp/emubox-retroarch-headless-override.cfg"
           machine.succeed(
               "printf '%s\\n' "
@@ -1574,18 +1576,18 @@ assert lib.assertMsg (lib.length exemptFamilies == 5) ''
               )
               # 60 frames is enough to prove the core loaded and ran without
               # paying more than a couple of seconds of CI time per family;
-              # `--max-frames` is also what forces even the two fixtures that
-              # never exit on their own (DOSBox Pure's looping demo,
-              # Vectrex's free-running animation) to a clean exit 0 - this
-              # design's "assert liveness over frames" in practice, since
-              # RetroArch itself decides to quit, not the content.
+              # `--max-frames` is also what forces even the one fixture that
+              # never exits on its own (DOSBox Pure's looping demo) to a
+              # clean exit 0 - this design's "assert liveness over frames" in
+              # practice, since RetroArch itself decides to quit, not the
+              # content.
               # timeout=60: generous headroom over the "couple of seconds"
               # above for a slow CI runner and a cold dlopen of a core, while
               # still failing this one family by name - the driver's
               # `succeed` otherwise defaults to no timeout at all, so a core
               # that hangs (rather than crashing or exiting) would surface as
               # an unattributed global test timeout with no indication which
-              # of the sixteen families caused it.
+              # of the twelve families caused it.
               out = machine.succeed(
                   f"su player -s /bin/sh -c {shlex.quote(cmd)}", timeout=60
               )

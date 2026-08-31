@@ -927,6 +927,31 @@ def _body_handler(status: int, body: bytes) -> type[http.server.BaseHTTPRequestH
     return Handler
 
 
+def _counting_handler(
+    requests: list[str],
+) -> type[http.server.BaseHTTPRequestHandler]:
+    """A successful login that records every request it is handed.
+
+    For the requirements that are negative - "no login SHALL be attempted"
+    when the feature is off - which a closed port cannot prove: a login
+    that fails against a closed port leaves the same visible state behind
+    as a login that never happened. Only a listener that answers, and says
+    afterwards whether it was ever asked, can tell those two apart.
+    """
+    body = json.dumps({"Success": True, "Token": "tok-live"}).encode()
+
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            requests.append(self.path)
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    return Handler
+
+
 def _sleepy_handler(delay: float) -> type[http.server.BaseHTTPRequestHandler]:
     """A successful login that arrives late.
 
@@ -3121,6 +3146,55 @@ def test_main_still_fails_the_session_on_a_malformed_document(
         locked.chmod(0o700)
 
     assert "api_url" in capsys.readouterr().err
+
+
+def test_main_disabled_attempts_no_login_at_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The spec's requirement for the disabled case is a negative one - no
+    # login SHALL be attempted - and nothing asserted it. The end-to-end
+    # test above points `main` at a live server, so a stray login would
+    # succeed, write the cache, and have the cleanup delete it again,
+    # leaving every visible assertion green; a reviewer's mutation that ran
+    # the login before the cleanup and threw the result away was caught by
+    # exactly one test, and only incidentally, because a closed port
+    # printed a note. A quiet login attempt went undetected - while
+    # spending the 5 s login budget on every launch of a box with the
+    # feature off.
+    #
+    # So the server counts what it is asked, and the enabled run goes first
+    # to prove the counter is not vacuous: a handler nothing ever reaches
+    # would satisfy the disabled assertion for the wrong reason.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    def write_document(*, enabled: bool, api_url: str) -> None:
+        ra = retroachievements_namespace(
+            tmp_path, api_url, [plain_target("retroarch", "retroarch.cfg")]
+        )
+        ra["enabled"] = enabled
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {"retroarch.cfg": {"format": "retroarch", "keys": {}}},
+                    "retroachievements": ra,
+                }
+            )
+        )
+
+    with ra_server(_counting_handler(requests)) as url:
+        write_document(enabled=True, api_url=url)
+        assert ep.main([str(values), ""]) == 0
+        assert len(requests) == 1, requests
+        assert 'cheevos_token = "tok-live"' in (appdata / "retroarch.cfg").read_text()
+
+        write_document(enabled=False, api_url=url)
+        assert ep.main([str(values), ""]) == 0
+
+    assert requests == ["/dorequest.php"], requests
+    assert "cheevos_token" not in (appdata / "retroarch.cfg").read_text()
 
 
 def test_main_disabled_recreates_a_torn_secrets_file_without_the_live_token(

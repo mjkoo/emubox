@@ -294,16 +294,29 @@ E12 line.
 
 - Which homebrew title serves each BIOS-free core family, and the
   final override list D5's diff produces - both enumerable at apply
-  time without changing the approach. Enumerated: 14 of the 18 BIOS-free
-  families launch headless, seven of their fixtures from the 240p Test
-  Suite and its ports. Four are exempt, for two different reasons, and
-  the configuration records which reason applies to each. Atari 7800 and
-  Neo Geo Pocket for licensing, after two independent searches: binaries
-  exist, but none is paired with a written grant, and the fixtures are
-  fetched by public CI and pushed through a public binary cache. N64 and
-  Dreamcast for mechanism: their cores demand a hardware render context,
-  which no VM can offer. All four move to the hardware checklist, which
-  is what the vm-test requirement now says.
+  time without changing the approach. Enumerated: 12 of the 18 BIOS-free
+  families launch headless. Six are exempt, for two different reasons,
+  and the configuration records which reason applies to each. Atari 7800
+  and Neo Geo Pocket for licensing, after two independent searches:
+  binaries exist, but none is paired with a written grant, and the
+  fixtures are fetched by public CI and pushed through a public binary
+  cache. N64, Dreamcast, Vectrex and SNES for mechanism: the first three
+  force a real GL driver the moment their core asks for a hardware
+  render context, discarding the null-driver override, and Snes9x hangs
+  rather than exiting and had to be killed at the launch cap. All six
+  move to the hardware checklist, which is what the vm-test requirement
+  now says.
+
+  The shape of that list is the honest finding here, and worth stating
+  plainly rather than leaving implicit in a count. A third of the
+  BIOS-free families cannot be launched headless in a VM at all, and
+  which third could not be predicted from anything in the design - it
+  took a CI run per core to learn. What the VM proves well is the
+  configuration the flake writes, which is fully within this project's
+  control and is asserted key by key. What it proves poorly is emulator
+  runtime behaviour, which the design already routed to the E12 hardware
+  checklist for the BIOS-dependent systems; these six join them for a
+  different reason but the same practical effect.
 - The exact uniform hotkey combo set (menu, save, load, fast-forward,
   screenshot) - config data settled during apply with the controller
   layout in mind, before E6 maps it per pad. Settled: RetroArch's

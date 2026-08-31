@@ -2506,3 +2506,52 @@ def test_a_config_neither_grows_nor_loses_keys_to_an_injected_token(
     assert 'video_fullscreen = "true"' in first
     assert "evil" not in first
     assert "GARBAGE" not in first
+
+
+# --- Second review wave: validation that promised no tracebacks (I7) -------
+
+
+@pytest.mark.parametrize(
+    "field", ["username_file", "password_file", "cache_file", "api_url"]
+)
+def test_apply_rejects_a_namespace_missing_a_required_field(
+    field: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # I7: each of these is subscripted bare, so a document missing one died
+    # with `KeyError 'password_file'` - a stack trace in the journal, which
+    # is exactly what `_target_validation_error`'s docstring promises an
+    # admin will never have to read.
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
+    )
+    del ra[field]
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert field in capsys.readouterr().err
+
+
+def test_apply_rejects_a_duckstation_target_without_a_machine_id_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"settings.ini": {"format": "ini", "keys": {}}}
+    target = duckstation_target(tmp_path / "machine-id", "settings.ini")
+    del target["machine_id_file"]
+    ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "machine_id_file" in capsys.readouterr().err
+
+
+def test_apply_rejects_a_key_entry_that_carries_no_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Passed validation and then died with `KeyError 'key'` in the merge.
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    target = plain_target("retroarch", "retroarch.cfg")
+    keys = cast("dict[str, object]", target["keys"])
+    keys["token"] = {"file": "retroarch.cfg"}
+    ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "'key'" in capsys.readouterr().err

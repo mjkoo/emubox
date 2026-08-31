@@ -996,6 +996,15 @@ def _target_validation_error(
         if not isinstance(raw_entry, dict):
             return f"retroachievements target {name!r}.{key_name}: expected an object"
         entry = cast("Mapping[str, object]", raw_entry)
+        key_spelling = entry.get("key")
+        if not isinstance(key_spelling, str) or not key_spelling:
+            # Subscripted bare by `_merge_target_key`, so an entry that
+            # carries a `file` but no `key` used to pass validation and then
+            # die with `KeyError 'key'` several screens later.
+            return (
+                f"retroachievements target {name!r}.{key_name}: "
+                "expected a non-empty 'key'"
+            )
         file_name = entry.get("file")
         raw_file_table = files.get(file_name) if isinstance(file_name, str) else None
         if not isinstance(raw_file_table, dict):
@@ -1050,6 +1059,11 @@ def _target_validation_error(
     elif encoding in ("plain", "duckstation"):
         if target.get("token_file"):
             return f"retroachievements target {name!r}: {encoding} must not carry 'token_file'"
+        if encoding == "duckstation" and not target.get("machine_id_file"):
+            # `duckstation_login_values` subscripts it bare, and the whole
+            # scheme is derived from that file (design D3), so a target
+            # declaring the encoding without it is a broken call site.
+            return f"retroachievements target {name!r}: duckstation needs 'machine_id_file'"
     else:
         return f"retroachievements target {name!r}: unknown encoding {encoding!r}"
 
@@ -1114,6 +1128,17 @@ def apply_retroachievements(
     always, username and token only when a login actually resolved one -
     never a non-zero return (design D2's whole point).
     """
+    # The namespace's own fields, checked before anything reads them. Each
+    # is subscripted bare further down - `ra["username_file"]` and the rest
+    # in the login - so a document missing one produced a `KeyError`
+    # traceback rather than the journal line an admin reading `journalctl`
+    # needs, which is the very thing this validation exists to give them.
+    for field in ("username_file", "password_file", "cache_file", "api_url"):
+        field_value = retroachievements.get(field)
+        if not isinstance(field_value, str) or not field_value:
+            note(f"retroachievements: expected {field!r} to be a non-empty string")
+            return 1
+
     # A JSON string like "false" is truthy under plain `bool(...)`, so this
     # field gets the same call-site policy as everything else in the
     # namespace instead of silently doing the wrong thing.

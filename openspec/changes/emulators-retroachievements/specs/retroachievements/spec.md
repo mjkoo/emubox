@@ -65,7 +65,10 @@ cannot be reached. When the API rejects the credentials, the cached
 token SHALL be dropped so a later run with working credentials logs in
 fresh, and the rejection SHALL be recorded in the journal. When
 RetroAchievements is disabled, no login SHALL be attempted and every supporting emulator's
-achievements feature SHALL be off.
+achievements feature SHALL be off; the account name and session token
+SHALL additionally be removed from every configuration and cache that
+holds them, so switching the feature off leaves no credential of the
+account's on the box.
 
 #### Scenario: Offline with a cached token
 - **WHEN** the box boots with no route to the RetroAchievements API and
@@ -90,3 +93,11 @@ achievements feature SHALL be off.
 - **WHEN** RetroAchievements is disabled in the configuration
 - **THEN** no request is made to the RetroAchievements API and each
   supporting emulator's configuration has achievements disabled
+
+#### Scenario: Disabled after having been enabled
+- **WHEN** RetroAchievements is disabled on a box that previously
+  logged in
+- **THEN** the account name and the session token are gone from every
+  supporting emulator's configuration and from every file the system
+  cached them in, so a box with the feature off is not holding the
+  account's credentials

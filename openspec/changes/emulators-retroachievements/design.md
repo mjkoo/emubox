@@ -203,11 +203,26 @@ capability's mechanism and its empty-definition semantics are untouched.
 
 ### D6. BIOS list is data, the checker is a tiny tool
 
-The BIOS inventory is a nix attrset (path under `/data/bios`, sha256,
-human name) rendered to JSON in the store; `emubox-check-bios` is a
+The BIOS inventory is a nix attrset (path under `/data/bios`, a digest
+with the algorithm that produced it, human name) rendered to JSON in the
+store; `emubox-check-bios` is a
 small self-contained Python script packaged beside prepare that reads
 the JSON, hashes files, prints one line per entry and exits non-zero on
-any miss - no options, no writes. Files under `/data/bios` the
+any miss - no options, no writes.
+
+The algorithm is named per entry rather than fixed at sha256, which this
+decision first assumed. Read at apply time: nobody publishes sha256 for
+these files. DuckStation's own table is MD5, libretro's documented
+requirements are MD5, the usable DS reference is CRC32, and PCSX2 does
+not hash at all - it validates by file size and ROMVER string. Since a
+digest cannot be converted between algorithms without the file, and
+nobody involved may lawfully hold the files to compute one, fixing the
+field at sha256 would mean an inventory that can never be populated from
+a citable source, and a checker whose "everything declared matches"
+scenario passes because nothing is declared. Naming the algorithm keeps
+every published reference usable and lets a sha256 entry join later
+without a second format. The requirement is untouched: it asks for a
+name and checksum list, never for a particular algorithm. Files under `/data/bios` the
 inventory does not declare are listed as informational extras and do
 not affect the exit status. It ships in `environment.systemPackages`
 for the admin over SSH; `emubox-status` (E5+) will consume the same

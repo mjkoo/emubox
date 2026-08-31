@@ -12,10 +12,10 @@
 
 ## 3. Emulator owned tables and options (design D4)
 
-- [ ] 3.1 Verify at source and record the config file path and key spellings for RetroArch and each standalone (Dolphin, PCSX2 + `secrets.ini`, PPSSPP, Azahar, DuckStation, ScummVM), including that the DuckStation wrapper is not portable-mode
-- [ ] 3.2 Add the RetroArch owned table to `modules/emulators`: core directory, `system_directory=/data/bios`, `autosave_interval=30`, fullscreen, menu driver, online-updater entries off, and the uniform hotkey set settled per the design's open question
-- [ ] 3.3 Add the six standalone owned tables with the settled performance values (Dolphin Wii dual core off, PCSX2 native res, DuckStation PGXP + upscale, fullscreen everywhere)
-- [ ] 3.4 Add `emubox.retroachievements.enable` and `.hardcore` options, declare the RA username and password secrets, and wire the `retroachievements` JSON namespace from them
+- [x] 3.1 Verify at source and record the config file path and key spellings for RetroArch and each standalone (Dolphin, PCSX2 + `secrets.ini`, PPSSPP, Azahar, DuckStation, ScummVM), including that the DuckStation wrapper is not portable-mode
+- [x] 3.2 Add the RetroArch owned table to `modules/emulators`: core directory, `system_directory=/data/bios`, `autosave_interval=30`, fullscreen, menu driver, online-updater entries off, and the uniform hotkey set settled per the design's open question
+- [x] 3.3 Add the six standalone owned tables with the settled performance values (Dolphin Wii dual core off, PCSX2 native res, DuckStation PGXP + upscale, fullscreen everywhere)
+- [x] 3.4 Add `emubox.retroachievements.enable` and `.hardcore` options, declare the RA username and password secrets, and wire the `retroachievements` JSON namespace from them
 
 ## 4. Frontend overrides and BIOS (design D5, D6)
 

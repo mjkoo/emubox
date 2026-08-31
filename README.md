@@ -137,6 +137,82 @@ patch that shows it and, in kiosk mode, offers only those two entries:
 quitting the frontend would just be relaunched by the loop, and the box
 refuses to suspend.
 
+## BIOS files
+
+Emulators read firmware and BIOS images from `/data/bios`, a directory
+`modules/library` lays down as `2775 player player`: group `player` with the
+setgid bit set, the same layout `/data/roms` uses and for the same reason -
+whatever the admin copies in over SSH lands group-owned `player` with no
+separate `chown` needed to make it readable by the session that runs as
+`player`. The flake declares which files belong there as a nix attrset (a
+short id, a path under `/data/bios`, a human name and a checksum with the
+algorithm that produced it - sha256, md5 or crc32, matching whichever
+algorithm the real published reference for that file actually uses),
+rendered to `/etc/emubox/bios-inventory.json` on the running system. Getting
+the actual files onto the box is still the admin's job - copyrighted BIOS
+and firmware images are exactly what nothing in this repository or its
+public cache may redistribute - the inventory only lets the box tell the
+admin whether what they put there is the file it expects. A file under
+`/data/bios` the inventory does not name is harmless: it is neither
+validated nor required, only reported as an informational extra.
+
+The inventory does not (yet) cover every BIOS-needing system, and that gap
+is deliberate rather than an oversight: PCSX2 validates a BIOS only by file
+size and an internal `ROMVER` string, never a hash, so there is nothing to
+check against; blueMSX needs whole `Databases`/`Machines` directory trees
+copied from a full install rather than one file with one checksum; Arcade's
+BIOS is a per-game board ROM set that lives beside each game's own files,
+not a single fixed image an inventory entry can name. For systems that
+could in principle be checked, an entry is only added once a source this
+project can stand behind publishes a checksum for it - see
+`modules/emulators/default.nix` for the current inventory and which systems
+are still waiting on one.
+
+### Checking what's there
+
+`emubox-check-bios` reads the inventory and reports on `/data/bios` without
+changing anything:
+
+```
+emubox-check-bios /etc/emubox/bios-inventory.json /data/bios
+```
+
+- `OK` - the file is present and its checksum matches.
+- `MISMATCH` - the file is present but its checksum does not match; both the
+  expected and the actual value are printed.
+- `MISSING` - the file is absent, or present but unreadable.
+- `EXTRA` - the file is present under `/data/bios` but not declared in the
+  inventory; purely informational.
+
+`EXTRA` lines never affect the exit status. The command exits successfully
+only when every declared file is `OK`, and non-zero if anything declared is
+`MISSING` or a `MISMATCH`, so a script can gate on it. It never writes to
+`/data/bios` or anywhere else.
+
+## RetroAchievements
+
+One RetroAchievements account is shared by the whole box; there is no
+per-player login. The credentials live in `secrets/secrets.yaml` as
+`retroachievements_username` and `retroachievements_password`,
+`REPLACE-BEFORE-INSTALL` placeholders in the committed file until an admin
+fills them in with `just secrets-edit`; `just install` refuses to run while
+either still holds a placeholder, the same guard that protects the WiFi and
+admin-password secrets (see Install, below).
+
+`emubox.retroachievements.enable` defaults to true and `.hardcore` defaults
+to false: a freshly installed box with real credentials and a working
+network unlocks achievements everywhere with nobody touching an emulator
+menu, and hardcore's stricter rules (no save states, no rewind, no cheats)
+are opt-in rather than the default. The account password itself never
+reaches any emulator's configuration file - only the session token the
+login exchanges it for does, and DuckStation gets that token in the
+encrypted form it expects to find on disk rather than in plain text (see
+the bump runbook in `pkgs/duckstation/package.nix` for the scheme).
+RetroAchievements being unreachable, offline, rejected, or simply disabled
+all cost only the achievements: the frontend still starts on its normal
+schedule, and a failed or skipped login is recorded in the journal rather
+than shown to whoever is holding the controller.
+
 ## Install
 
 One command over Ethernet installs or reinstalls the box from the flake,

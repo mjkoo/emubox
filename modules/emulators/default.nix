@@ -172,9 +172,20 @@ let
 
   # This flake's RetroArch build (see `retroarchWithCores` above) installs
   # `beetle-pce-fast` (`mednafen_pce_fast_libretro.so`), not the SD
-  # `beetle-pce` ES-DE defaults to. Same override, same reason, for both the
-  # cartridge and CD systems - they are separate ES-DE systems sharing the
-  # same command list.
+  # `beetle-pce` ES-DE defaults to. Same override, same reason, across all
+  # FOUR ES-DE systems this affects: ES-DE 3.4.1 ships the PC Engine and PC
+  # Engine CD families as two independently-named pairs sharing one command
+  # list each - `pcengine`/`pcenginecd` (the design table's own names for
+  # this row) and, separately, `tg16`/`tg-cd` (the TurboGrafx-branded North
+  # American release of the exact same hardware, a distinct `<path>` and so
+  # a distinct ROM folder in ES-DE's own model, not an alias of the other
+  # pair). Missing either half of a pair leaves that folder's games pointed
+  # at a core this flake never installs ("emulator not found"); this
+  # comment used to claim covering `pcengine`/`pcenginecd` was "both the
+  # cartridge and CD systems", which was true of those two names but wrong
+  # about there being only two - verified by diffing every bundled system's
+  # first command against this flake's installed core set, which is what
+  # turned up the missing `tg16`/`tg-cd` pair in the first place.
   pcengineOverride = ''
     <system>
       <name>pcengine</name>
@@ -209,6 +220,50 @@ let
       <command label="ares (Standalone)">%EMULATOR_ARES% --fullscreen --system "PC Engine CD" %ROM%</command>
       <platform>pcenginecd</platform>
       <theme>pcenginecd</theme>
+    </system>'';
+
+  # The TurboGrafx-branded North American release of the same hardware as
+  # `pcengineOverride` above - ES-DE 3.4.1 ships it as a genuinely separate
+  # system (its own `<path>`, so its own ROM folder) with an identical
+  # command list, not an alias of `pcengine`. Same core substitution, same
+  # reason: this flake installs `beetle-pce-fast`, not the SD `beetle-pce`
+  # ES-DE defaults to.
+  tg16Override = ''
+    <system>
+      <name>tg16</name>
+      <fullname>NEC TurboGrafx-16</fullname>
+      <path>%ROMPATH%/tg16</path>
+      <extension>.ccd .CCD .chd .CHD .cue .CUE .img .IMG .iso .ISO .m3u .M3U .pce .PCE .rom .ROM .sgx .SGX .toc .TOC .7z .7Z .zip .ZIP</extension>
+      <command label="Beetle PCE FAST">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_pce_fast_libretro.so %ROM%</command>
+      <command label="Beetle PCE">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_pce_libretro.so %ROM%</command>
+      <command label="Beetle SuperGrafx">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_supergrafx_libretro.so %ROM%</command>
+      <command label="Geargrafx">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/geargrafx_libretro.so %ROM%</command>
+      <command label="Geargrafx (Standalone)">%EMULATOR_GEARGRAFX% %ROM%</command>
+      <command label="Mednafen (Standalone)">%EMULATOR_MEDNAFEN% -force_module pce %ROM%</command>
+      <command label="Mesen (Standalone)">%EMULATOR_MESEN% --fullscreen %ROM%</command>
+      <command label="ares (Standalone)">%EMULATOR_ARES% --fullscreen --system "PC Engine" %ROM%</command>
+      <platform>pcengine</platform>
+      <theme>tg16</theme>
+    </system>'';
+
+  # The TurboGrafx-branded release of `pcenginecdOverride`'s system, same
+  # relationship as `tg16Override` to `pcengineOverride` above.
+  tgCdOverride = ''
+    <system>
+      <name>tg-cd</name>
+      <fullname>NEC TurboGrafx-CD</fullname>
+      <path>%ROMPATH%/tg-cd</path>
+      <extension>.ccd .CCD .chd .CHD .cue .CUE .img .IMG .iso .ISO .m3u .M3U .pce .PCE .sgx .SGX .toc .TOC .7z .7Z .zip .ZIP</extension>
+      <command label="Beetle PCE FAST">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_pce_fast_libretro.so %ROM%</command>
+      <command label="Beetle PCE">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_pce_libretro.so %ROM%</command>
+      <command label="Beetle SuperGrafx">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_supergrafx_libretro.so %ROM%</command>
+      <command label="Geargrafx">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/geargrafx_libretro.so %ROM%</command>
+      <command label="Geargrafx (Standalone)">%EMULATOR_GEARGRAFX% %ROM%</command>
+      <command label="Mednafen (Standalone)">%EMULATOR_MEDNAFEN% -force_module pce %ROM%</command>
+      <command label="Mesen (Standalone)">%EMULATOR_MESEN% --fullscreen %ROM%</command>
+      <command label="ares (Standalone)">%EMULATOR_ARES% --fullscreen --system "PC Engine CD" %ROM%</command>
+      <platform>pcenginecd</platform>
+      <theme>tg-cd</theme>
     </system>'';
 
   # No MAME core is installed at all; FinalBurn Neo is the design's pick and
@@ -392,6 +447,8 @@ let
       psxOverride
       pcengineOverride
       pcenginecdOverride
+      tg16Override
+      tgCdOverride
       arcadeOverride
       ndsOverride
       pspOverride

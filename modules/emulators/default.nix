@@ -854,7 +854,9 @@ let
   # story: a stale `username`/`token` was left exactly where a prior login
   # wrote it, on the theory that this matched "prepare's own behaviour when
   # a login simply does not resolve one" - which stopped being true once
-  # prepare started actively removing those keys on that path (finding I8).
+  # prepare started actively removing those keys on that path (see
+  # `emubox_prepare.py`'s own module docstring, "When no token resolves
+  # at all, the login keys are removed from every target").
   # `enable = false` left a live bearer token sitting in every supporting
   # emulator's config, PPSSPP's raw token file and the login cache, with no
   # way for this static table to reach the latter two at all (they are not
@@ -923,8 +925,8 @@ in
       # because design D7's VM test points prepare at a plain `python
       # http.server` mock with no TLS - the one place this box is ever
       # meant to run the login over an unencrypted connection, and the
-      # documented exception the finding that added this constraint asked
-      # for. An admin who points this at a real `http://` endpoint gets
+      # documented exception the URL-scheme constraint below was written
+      # to allow. An admin who points this at a real `http://` endpoint gets
       # the account password crossing the network in clear text on every
       # prepare run (design D2's `login2` POST carries it) - the
       # description below says so, since the type alone cannot forbid a
@@ -1346,8 +1348,9 @@ in
     # it to a non-empty value on the shipped box.
     emubox.kiosk.customSystems = customSystems;
 
-    # Always a non-null namespace, `enabled` following `cfg.enable` (N2
-    # fix): `username_file`/`password_file`/`api_url` come from options and
+    # Always a non-null namespace, with `enabled` following `cfg.enable`
+    # rather than the namespace itself going null when the feature is off:
+    # `username_file`/`password_file`/`api_url` come from options and
     # secrets that exist regardless of whether the feature is on, so there
     # is nothing this object needs that only an enabled box could supply.
     # Rendering `null` when disabled - the shape this used to have - made

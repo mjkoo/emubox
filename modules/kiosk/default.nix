@@ -25,9 +25,15 @@ let
     inherit value;
   };
 
-  # The empty string, not a store path to an empty file: the empty value is
-  # what selects prepare's removal branch, so a path here would leave that
-  # branch unreachable on the box as shipped (design D6).
+  # The empty string, not a store path to an empty file: the empty value
+  # itself is what selects prepare's removal branch, so writing an empty
+  # document to the store and passing its path would leave that branch
+  # unreachable for every configuration, whatever `customSystems` held
+  # (design D6). Not "unreachable on the box as shipped" - the shipped box
+  # takes the other branch, since `modules/emulators` sets `customSystems`
+  # to a real document. The removal branch is what a box whose
+  # configuration drops back to the empty default relies on, and it is the
+  # kiosk spec's own "Definition empty" scenario.
   customSystemsPath =
     if cfg.customSystems == "" then "" else pkgs.writeText "emubox-es_systems.xml" cfg.customSystems;
 
@@ -103,10 +109,22 @@ let
           exec startplasma-wayland
         fi
 
-        # Not guarded: prepare's recreate policy already absorbs every
-        # failure the box can produce, so a non-zero exit here is a bug in
-        # prepare or an unwritable /data, and both should stop at a greeter
-        # the admin can log into rather than loop invisibly (design D1).
+        # Not guarded, and what that does and does not cover is worth
+        # stating exactly. prepare's recreate policy absorbs the runtime
+        # failures a box actually produces - a missing, unreadable or
+        # malformed settings file is replaced, and a file that cannot be
+        # written costs that file's keys and nothing more, noted on stderr
+        # while the run carries on (`emubox_prepare.py`'s error policy, and
+        # the `OSError` guards around its editor loop and the custom-systems
+        # install). An unwritable /data therefore does NOT end up here; it
+        # ends up in the journal with the frontend still launching, which is
+        # deliberate (design D2: the alternative is a family staring at a
+        # greeter). What is left to reach this line is the broken-call-site
+        # class prepare refuses to paper over - an owned-values document
+        # that is unreadable or the wrong shape, an unset ESDE_APPDATA_DIR,
+        # an unreadable custom-systems store path - and for those the
+        # greeter an admin can log into is the right destination (design
+        # D1), because no relaunch of the same call would do any better.
         emubox-prepare ${cfg.ownedValuesFile} "${customSystemsPath}"
 
         # The loop needs the run's length, not its status, but the status is
@@ -281,15 +299,15 @@ in
             enabled = lib.mkOption {
               type = lib.types.bool;
               description = ''
-                Whether prepare attempts a login and writes its result, as
-                opposed to removing every credential it may have written
-                (emulators-retroachievements N2 fix). `modules/emulators`
-                sets this to `emubox.retroachievements.enable` and renders
-                this namespace either way, rather than falling back to
-                `null` when the feature is off: `null` skips this whole
-                namespace, credential removal included, which is not what
-                switching the box's feature off is supposed to do to an
-                account's token already on disk.
+                Whether prepare attempts a login and writes its result,
+                as opposed to removing every credential it may previously
+                have written. `modules/emulators` sets this to
+                `emubox.retroachievements.enable` and renders this
+                namespace either way, rather than falling back to `null`
+                when the feature is off: `null` skips this whole namespace,
+                credential removal included, which is not what switching
+                the box's feature off is supposed to do to an account's
+                token already on disk.
               '';
             };
             hardcore = lib.mkOption {
@@ -356,8 +374,8 @@ in
         The owned-values document's `retroachievements` namespace (design
         D1, emulators-retroachievements). This module never sets it;
         `modules/emulators` does, always to a non-null value with its own
-        `enabled` field following `emubox.retroachievements.enable` (N2
-        fix) - `null` here would make `emubox-prepare` skip the whole
+        `enabled` field following `emubox.retroachievements.enable` -
+        `null` here would make `emubox-prepare` skip the whole
         namespace, credential removal included, which is not what
         switching the feature off is supposed to do to a token already on
         disk. `null` stays this option's own default and a legal value of

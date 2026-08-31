@@ -35,11 +35,11 @@ let
   # `emubox.kiosk.customSystems` below is `mkForce`d to a 10-line test
   # document so the kiosk subtests can prove the custom-systems mechanism
   # against something they control (design D7). That `mkForce` is exactly
-  # why nothing else in this file, or anywhere else, ever parses the
-  # shipped 218-line document - finding IMPORTANT-6's "the shipped
-  # custom-systems XML is never parsed by anything". `shippedCustomSystems`
-  # exists so the standalone check near the top of `testScript` below can
-  # do that, with no VM node needed.
+  # why nothing else in this file, or anywhere else, ever parsed the
+  # shipped 218-line document - the one `modules/emulators` actually
+  # contributes to a real box went unparsed by any check in this
+  # repository. `shippedCustomSystems` exists so the standalone check near
+  # the top of `testScript` below can do that, with no VM node needed.
   shippedCustomSystems = self.nixosConfigurations.emubox.config.emubox.kiosk.customSystems;
 
   # The single source for every plaintext test value (tests/values.nix's own
@@ -307,7 +307,8 @@ let
       recheck = "an NGP/NGPC ROM appearing with an explicit author licence or redistribution grant attached, the same bar the reason above already applies";
     }
     {
-      # finding IMPORTANT-2. RetroArch 1.22.2's `video_driver_find_driver`
+      # Exempt for a mechanism this test's own overrides cannot reach, not
+      # for licensing. RetroArch 1.22.2's `video_driver_find_driver`
       # (`gfx/video_driver.c`) begins with `if
       # (video_driver_is_hw_context())` and then forces the HW-render-
       # capable driver, overwriting `video_driver` and logging "[Video]
@@ -347,9 +348,9 @@ let
     {
       # CI has proven this one directly, not by the same forced-HW-render
       # mechanism as the three `"mechanism"` entries above: the
-      # 240pSuite.sfc launch hangs under Snes9x rather than exiting, and CI
-      # run 33359693788 killed it at the launch subtest's own 60 s
-      # per-launch cap with exit 124. In an earlier run, before that
+      # 240pSuite.sfc launch hangs under Snes9x rather than exiting, and a
+      # CI run killed it at the launch subtest's own 60 s per-launch cap
+      # with exit 124. In an earlier run, before that
       # per-launch timeout existed, the same hang consumed the driver's
       # entire one-hour global timeout instead.
       #
@@ -369,7 +370,7 @@ let
       family = "SNES (Snes9x)";
       core = "snes9x_libretro.so";
       kind = "unresolved";
-      reason = "the 240pSuite.sfc launch hangs rather than exiting and was killed at the launch subtest's 60 s per-launch cap with exit 124 in CI run 33359693788 (an earlier run, before that per-launch timeout existed, saw the same hang consume the driver's entire one-hour global timeout instead); it is not known whether the Snes9x core or this particular fixture/port is at fault - Mesen passes on the same 240p Test Suite, which rules out the suite itself but not which of the other two it is";
+      reason = "the 240pSuite.sfc launch hangs rather than exiting and was killed at the launch subtest's 60 s per-launch cap with exit 124 in CI (an earlier run, before that per-launch timeout existed, saw the same hang consume the driver's entire one-hour global timeout instead); it is not known whether the Snes9x core or this particular fixture/port is at fault - Mesen passes on the same 240p Test Suite, which rules out the suite itself but not which of the other two it is";
       recheck = "trying a second, licence-clean 240p-style fixture against Snes9x - a second hang would implicate the core; a clean run would implicate the first fixture or its port instead";
     }
     {
@@ -415,10 +416,10 @@ let
   # `modules/emulators` bundles lands in exactly one of `homebrewFixtures`,
   # `exemptFamilies` or this list; the point of naming BIOS-dependent cores
   # here rather than leaving them merely absent from the other two lists is
-  # that the "every installed core is accounted for" assertion below
-  # (finding IMPORTANT-3) can then fail loudly the moment a core is added to
-  # the bundle and left off all three, instead of the new family quietly
-  # going untested and unnoticed. Confirmed against the actual installed
+  # that the "every installed core is accounted for" assertion below can
+  # then fail loudly the moment a core is added to the bundle and left off
+  # all three, instead of the new family quietly going untested and
+  # unnoticed. Confirmed against the actual installed
   # core filenames by building `retroarchWithCores` (below) on the
   # x86_64-linux remote builder and listing its cores directory - not typed
   # from the design table's emulator names, which name the emulator, not
@@ -437,8 +438,8 @@ in
 assert lib.assertMsg (lib.length homebrewFixtures == 12) ''
   tests/kiosk.nix: expected 12 pinned homebrew fixtures (the vm-test spec's
   core-family coverage minus the six families now exempt - two for
-  licensing, N64 and Dreamcast for the forced-HW-render mechanism (finding
-  IMPORTANT-2), Vectrex for the same mechanism (builder-sweep evidence),
+  licensing, N64 and Dreamcast for the forced-HW-render mechanism
+  (CI-confirmed), Vectrex for the same mechanism (builder-sweep evidence),
   and SNES for an unresolved core-or-fixture hang, CI-observed), got
   ${toString (lib.length homebrewFixtures)}.
 '';
@@ -446,8 +447,8 @@ assert lib.assertMsg (lib.length exemptFamilies == 6) ''
   tests/kiosk.nix: expected 6 named-exempt core families (2 licensing, 3
   mechanism, 1 unresolved), got ${toString (lib.length exemptFamilies)}.
 '';
-# MINOR finding: the count message just above claims a specific partition
-# by `kind` (2 licensing, 3 mechanism, 1 unresolved) that nothing checked -
+# The count message just above claims a specific partition by `kind`
+# (2 licensing, 3 mechanism, 1 unresolved) that nothing checked -
 # `kind` and `reason` are never read by any assertion in this file, so a
 # future edit that changes an entry's `kind` without updating that prose
 # would leave a message that is simply wrong. This makes it true by
@@ -670,8 +671,8 @@ assert lib.assertMsg
       RA_PASSWORD = ${py values.raPassword}
       MOCK_TOKEN = ${py mockToken}
 
-      # finding IMPORTANT-6: the document `modules/emulators` actually ships,
-      # distinct from this node's own `emubox.kiosk.customSystems` (below,
+      # The document `modules/emulators` actually ships, distinct from this
+      # node's own `emubox.kiosk.customSystems` (below,
       # `mkForce`d to a 10-line test document) - see `shippedCustomSystems`'s
       # own comment at the top of this file for why the two have to differ.
       SHIPPED_CUSTOM_SYSTEMS = ${py shippedCustomSystems}
@@ -759,7 +760,7 @@ assert lib.assertMsg
 
       def owned_file_value(fmt, text, section, key):
           """The on-disk value for one owned key of an emulator config file
-          (finding IMPORTANT-5), in the same string form the rendered
+          in the same string form the rendered
           owned-values JSON carries for it: `ini`'s writer never quotes
           (`emubox_prepare.py`'s `_render_ini`, `f"{k} = {v}"`), so the
           value read back needs no unwrapping there, but `retroarch`'s own
@@ -780,7 +781,7 @@ assert lib.assertMsg
           "token" for the ppsspp target, which carries it in `token_file`
           instead), if the file does not have it written, or if the file
           itself does not exist at all. That last case is not a special
-          case bolted on for one finding: a target's `keys` table only
+          case bolted on for one report: a target's `keys` table only
           records where a value would live if it were ever written, and a
           file with nothing ever written to it - PCSX2's `secrets.ini`
           before any token has resolved, say, the file its only owned key
@@ -855,8 +856,8 @@ assert lib.assertMsg
               if rc == 0:
                   assert RA_PASSWORD not in out, f"{path} contains the RA password"
 
-      # --- emulators: the shipped custom-systems document parses (design D5,
-      # finding IMPORTANT-6) -------------------------------------------------
+      # --- emulators: the shipped custom-systems document parses (design
+      # D5) -----------------------------------------------------------------
       #
       # No node, no boot: this runs on the driver host, before
       # `machine.wait_for_unit` below ever touches the VM, because the
@@ -928,7 +929,7 @@ assert lib.assertMsg
           owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
           # The document's shape itself is pinned here: `files` carries what
           # this test already checked. `retroachievements` is never null on
-          # a shipped box (N2 fix: a null namespace would make prepare skip
+          # a shipped box (a null namespace would make prepare skip
           # credential removal along with the login, which is not what
           # switching the feature off is supposed to do to a token already
           # on disk) - `modules/emulators` always renders it, with its own
@@ -978,7 +979,7 @@ assert lib.assertMsg
           assert got["UIMode_passkey"] == ("string", ${py passkey}), got["UIMode_passkey"]
           assert got["UIMode"] == ("string", "kiosk"), got["UIMode"]
 
-      # PINNED_OWNED_KEYS: finding IMPORTANT-5. The emulators spec's
+      # PINNED_OWNED_KEYS. The emulators spec's
       # headline requirement - the owned values "SHALL pin at least" the
       # core directory, `/data/bios`, the 30 s autosave interval,
       # fullscreen, the two online/core-download menu entries disabled and
@@ -1162,7 +1163,7 @@ assert lib.assertMsg
                   # (token, or enabled/hardcore/username/token) written at
                   # runtime rather than through this static table (design
                   # D1-D4). There is nothing this walk could check here even
-                  # if the file existed, and IMPORTANT-5's prepare-side fix
+                  # if the file existed, and the matching prepare-side fix
                   # (the ini/retroarch editors now leave a file alone
                   # entirely rather than touching it for zero keys) means
                   # such a file is legitimately absent until something
@@ -1449,8 +1450,8 @@ assert lib.assertMsg
           rerun_prepare(OWNED_VALUES)
 
       with subtest("A box that had a token then loses the endpoint carries no stale account name or token"):
-          # finding IMPORTANT-7. Placed here, after "Tokens asserted against
-          # the mock" and "Both hardcore positions" above, deliberately: this
+          # Placed here, after "Tokens asserted against the mock" and "Both
+          # hardcore positions" above, deliberately: this
           # is the one point in the file where every target already carries
           # a real username and token and a real cache file exists on disk -
           # only a prior successful login (the earlier subtest) produces
@@ -1506,7 +1507,7 @@ assert lib.assertMsg
           rerun_prepare(OWNED_VALUES)
 
       with subtest("Switching RetroAchievements off removes every credential from disk"):
-          # N2: `enable = false` used to leave a stale username and a live
+          # `enable = false` used to leave a stale username and a live
           # bearer token sitting in every supporting emulator's config,
           # PPSSPP's raw token file and the login cache - `raDisabledFiles`
           # (modules/emulators) only ever forced `enabled`/`hardcore` off,
@@ -1586,8 +1587,8 @@ assert lib.assertMsg
           rerun_prepare(OWNED_VALUES)
 
       with subtest("emubox-check-bios reports the declared BIOS files as missing from an empty /data/bios"):
-          # M4: the checker ships (design D6) but nothing ran it against the
-          # inventory it actually reads on a real box. This node's
+          # The checker ships (design D6) but nothing ran it against the
+          # inventory it actually reads on a real box until this subtest. This node's
           # `/data/bios` is an empty tmpfs (no disko layout here, above), so
           # every declared file is legitimately missing - proving the PATH
           # claim (bare name, no store path needed) and the report's schema
@@ -1634,8 +1635,8 @@ assert lib.assertMsg
           # is left set to the semantically correct value rather than
           # omitted. `video_driver = "null"` itself does not hold for every
           # core, though: N64, Dreamcast and Vectrex are exempt above
-          # (finding IMPORTANT-2, three of `exemptFamilies`' `kind =
-          # "mechanism"` entries) because RetroArch forces a real HW-render
+          # (the three `exemptFamilies` entries whose `kind` is
+          # "mechanism") because RetroArch forces a real HW-render
           # driver for them regardless of this override, confirmed the same
           # way. SNES is exempt above too, but for an unrelated reason - the
           # fixture launch hangs rather than exiting, confirmed in CI rather
@@ -1725,8 +1726,8 @@ assert lib.assertMsg
               )
 
       with subtest("Every installed RetroArch core is tested, exempt, or a named BIOS checklist item"):
-          # Finding IMPORTANT-3: the two length asserts above the node
-          # definition (`homebrewFixtures`, `exemptFamilies`) only catch an
+          # The two length asserts above the node definition
+          # (`homebrewFixtures`, `exemptFamilies`) only catch an
           # edit to those two lists themselves - nothing related them to the
           # cores `modules/emulators` actually installs, so
           # adding a core there left the counts unchanged and the new family
@@ -1744,7 +1745,7 @@ assert lib.assertMsg
           bios_only = ${py biosDependentCores}
           accounted = set(tested) | set(exempt) | set(bios_only)
           # Two assertions, not one `==`: an unaccounted core (the real
-          # regression this finding is about) and a stale entry naming a
+          # regression this subtest exists for) and a stale entry naming a
           # core no longer installed (a dead line in one of the three lists)
           # are different mistakes and should read as different failures.
           assert not (installed - accounted), (

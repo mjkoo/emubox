@@ -11,20 +11,22 @@
 # default throughout, per design D7). Flipping the off spelling in that one
 # helper would ship a box with achievements enabled while the option says
 # disabled, and every other check in the repository would stay green - this
-# is the one that would not (finding IMPORTANT-4).
+# is the one that would not.
 #
-# `emubox.kiosk.retroachievementsNamespace` is checked here too (N2 fix): it
-# used to go null when the feature was off, which made `emubox-prepare` skip
-# the whole namespace - login *and* credential removal - so a box that had
-# been enabled once kept a live account name and token on disk after being
-# switched off. It is never null now; instead it carries its own `enabled`
-# field, which this file asserts is `false` here, the same way the load-
-# bearing off-spelling check above catches a regression in `raDisabledFiles`.
-# A regression that flips it back to null, or reintroduces a null-when-
-# disabled branch, would silently reopen the credential-removal gap with
-# every other check in the repository staying green - the eval-only half of
-# that guard; the VM-level proof that credential removal actually happens on
-# disk is tests/kiosk.nix's own "Switching RetroAchievements off removes
+# `emubox.kiosk.retroachievementsNamespace` is checked here too, for the
+# other half of the same scenario - credential removal, not just the two
+# disabled switches. It used to go null when the feature was off, which
+# made `emubox-prepare` skip the whole namespace - login *and* credential
+# removal - so a box that had been enabled once kept a live account name
+# and token on disk after being switched off. It is never null now;
+# instead it carries its own `enabled` field, which this file asserts is
+# `false` here, the same way the load-bearing off-spelling check above
+# catches a regression in `raDisabledFiles`. A regression that flips it
+# back to null, or reintroduces a null-when-disabled branch, would
+# silently reopen the credential-removal gap with every other check in the
+# repository staying green - the eval-only half of that guard; the
+# VM-level proof that credential removal actually happens on disk is
+# tests/kiosk.nix's own "Switching RetroAchievements off removes
 # every credential from disk" subtest, which this cheap, no-VM check cannot
 # reach on its own.
 #
@@ -140,7 +142,7 @@ assert lib.assertMsg (failures == [ ]) ''
 assert lib.assertMsg (raNamespace != null && raNamespace.enabled == false) ''
   tests/retroachievements-disabled.nix: emubox.retroachievements.enable = false
   did not leave emubox.kiosk.retroachievementsNamespace non-null with its own
-  `enabled` field false (N2 fix) - got ${builtins.toJSON raNamespace}. A null
+  `enabled` field false - got ${builtins.toJSON raNamespace}. A null
   namespace here would make emubox-prepare skip credential removal along
   with the login, leaving a token from an earlier, enabled run on disk.
 '';

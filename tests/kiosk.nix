@@ -914,13 +914,28 @@ assert lib.assertMsg (lib.length exemptFamilies == 4) ''
       # source of truth: dropping one of these keys from the module is
       # still a deliberate edit to this test (the same "the table could be
       # right and unapplied, or applied and wrong" reasoning the ES-DE pin
-      # above already applies), but a key a *concurrent* change adds - the
-      # DuckStation/PCSX2 BIOS directory keys and the setup-wizard keys
-      # observed in this same JSON while writing this test - needs no
-      # matching edit here, because the walk below reads whatever the
-      # rendered JSON actually contains, not this literal set. `None` in
-      # place of a section name is RetroArch's own flat, sectionless
-      # format (`ini_value`'s own convention above).
+      # above already applies). `None` in place of a section name is
+      # RetroArch's own flat, sectionless format (`ini_value`'s own
+      # convention above).
+      #
+      # DuckStation's `BIOS.SearchDirectory`, PCSX2's `Folders.Bios` and
+      # both emulators' own `SetupWizardIncomplete` keys are pinned here
+      # deliberately, not merely swept in by the walk below: an earlier
+      # review round found PS1 and PS2 unable to find `/data/bios` while
+      # `emubox-check-bios` reported everything present, and both
+      # emulators showing their first-run setup wizard in the path from
+      # choosing a game to playing it - shipped-behaviour Criticals, both
+      # fixed in `modules/emulators`. Leaving these four to the walk's own
+      # coverage would mean a later edit that drops one of them regresses
+      # silently: the walk only checks whatever the rendered JSON still
+      # contains, so a key removed from the module is a key the walk never
+      # notices is gone. Pinning them here is what turns that removal into
+      # a failure of this test rather than a Critical shipped quietly. A
+      # key some other, unrelated change adds still needs no matching edit
+      # here - the walk below reads whatever the rendered JSON actually
+      # contains, not this literal set - but that reasoning no longer
+      # covers these four now that their removal is load-bearing enough to
+      # pin against.
       #
       # Azahar's `\default` keys are spelled with a literal backslash, not
       # a forward slash: `modules/emulators`'s own comment on
@@ -954,7 +969,8 @@ assert lib.assertMsg (lib.length exemptFamilies == 4) ''
               "Core": {"CPUThread"},
           },
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
-              "UI": {"StartFullscreen"},
+              "UI": {"StartFullscreen", "SetupWizardIncomplete"},
+              "Folders": {"Bios"},
               "EmuCore/GS": {"upscale_multiplier"},
           },
           f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini": {
@@ -968,8 +984,9 @@ assert lib.assertMsg (lib.length exemptFamilies == 4) ''
               },
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
-              "Main": {"StartFullscreen"},
+              "Main": {"StartFullscreen", "SetupWizardIncomplete"},
               "GPU": {"PGXPEnable", "ResolutionScale"},
+              "BIOS": {"SearchDirectory"},
           },
           f"{PLAYER_HOME}/.config/scummvm/scummvm.ini": {
               "scummvm": {"fullscreen", "confirm_exit", "gui_return_to_launcher_at_exit"},

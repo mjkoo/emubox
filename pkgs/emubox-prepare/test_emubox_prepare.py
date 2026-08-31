@@ -930,6 +930,105 @@ def test_main_accepts_a_valid_non_null_retroachievements_object(
     assert ep.main([str(values), ""]) == 0
 
 
+def test_main_rejects_keys_that_is_not_an_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `keys` was checked for being present but never for being an object, so
+    # a list walked straight into the editor and died there with
+    # `AttributeError: 'list' object has no attribute 'values'` - outside
+    # the editor loop's `except OSError`, so it reached the top as a
+    # traceback. The session ends at the greeter either way; what this is
+    # about is the module docstring's promise that an admin reading
+    # `journalctl` gets a line rather than a stack trace.
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(json.dumps({"files": {"f.ini": {"format": "ini", "keys": []}}}))
+
+    assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "keys" in err
+    assert "Traceback" not in err
+
+
+def test_main_rejects_an_ini_section_table_that_is_not_an_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # One level in from the check above, and the same failure: the INI
+    # editor iterates a section's own table, so a section holding anything
+    # but an object is another AttributeError past the OSError guard.
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps({"files": {"f.ini": {"format": "ini", "keys": {"Main": "on"}}}})
+    )
+
+    assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "Main" in err
+    assert "Traceback" not in err
+
+
+def test_main_rejects_an_esde_value_that_is_not_a_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # ES-DE values reach `ET.Element.set`, which stores whatever it is given
+    # and lets `ET.tostring` raise `TypeError: cannot serialize 5` much
+    # later - past the editor loop's OSError guard, so a traceback. The Nix
+    # side types `ownedFiles.<file>.keys` as `attrsOf anything`, so a module
+    # written later that says `value = true` or `value = 5` finds this out
+    # here rather than on a box.
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "settings/es_settings.xml": {
+                        "format": "esde-xml",
+                        "keys": {"MaxVRAM": {"type": "int", "value": 5}},
+                    }
+                }
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "MaxVRAM" in err
+    assert "Traceback" not in err
+
+
+def test_main_rejects_an_esde_key_that_is_not_a_typed_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The same hole one level out: the editor subscripts the spec for
+    # `type` and `value`, so a bare string there is a TypeError rather than
+    # a journal line.
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "settings/es_settings.xml": {
+                        "format": "esde-xml",
+                        "keys": {"Theme": "slate"},
+                    }
+                }
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "Theme" in err
+    assert "Traceback" not in err
+
+
 # --- RetroAchievements: login2 and the token cache (design D2) ------------
 #
 # A real http.server.HTTPServer on 127.0.0.1:0 in a thread, never a

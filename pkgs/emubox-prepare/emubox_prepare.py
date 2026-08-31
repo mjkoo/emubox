@@ -1625,6 +1625,64 @@ _EDITORS = {
 }
 
 
+def _owned_keys_error(table: Mapping[str, object]) -> str | None:
+    """Why this file's `keys` would crash its editor, or None if it will not.
+
+    Shape checking that belongs to `main` rather than to the editors,
+    because `main` is what owes the journal a line instead of a stack
+    trace (module docstring). Everything below is an `AttributeError` or a
+    `TypeError` inside an editor, and the loop that calls the editors
+    catches `OSError` and nothing else - deliberately, so that a bug is
+    never mistaken for a full disk - so each of these would reach the top
+    of the program as a traceback an admin has to read.
+
+    Reachable from a module rather than only from a hand-written document:
+    the Nix side types `ownedFiles.<file>.keys` as `attrsOf anything`, so a
+    module written later that spells an ES-DE key `value = 5` or
+    `value = true` renders a JSON number or boolean right here.
+
+    Only what an editor subscripts or iterates is checked. An `ini` or
+    `retroarch` value that is not a string is left alone on purpose:
+    `_without_removals` keeps only the strings, so such a key is quietly
+    skipped rather than written - a poor answer, but not a traceback, and
+    tightening it here would reject documents that work on boxes today.
+    """
+    raw = table["keys"]
+    if not isinstance(raw, dict):
+        return f"expected 'keys' to be an object, got {type(raw).__name__}"
+    # Cast rather than narrow: `isinstance` gives an empty dict type here,
+    # and every lookup below would be a type error against it.
+    keys = cast("dict[str, object]", raw)
+    if table["format"] == "ini":
+        # The INI editor iterates each section's own table.
+        for section, entries in keys.items():
+            if not isinstance(entries, dict):
+                return (
+                    f"expected section {section!r} to be an object, "
+                    f"got {type(entries).__name__}"
+                )
+        return None
+    if table["format"] != "esde-xml":
+        return None
+    for name, spec in keys.items():
+        # `ET.Element.set` stores whatever it is handed and `ET.tostring`
+        # is where a non-string finally raises, which is a long way from
+        # the document that carried it.
+        if not isinstance(spec, dict):
+            return (
+                f"expected key {name!r} to be an object with 'type' and "
+                f"'value', got {type(spec).__name__}"
+            )
+        typed = cast("dict[str, object]", spec)
+        for field in ("type", "value"):
+            if not isinstance(typed.get(field), str):
+                return (
+                    f"expected key {name!r} to carry a string {field!r}, "
+                    f"got {type(typed.get(field)).__name__}"
+                )
+    return None
+
+
 def main(argv: Sequence[str]) -> int:
     if len(argv) != 2:
         note("usage: emubox-prepare <owned-values-json> <custom-systems-path>")
@@ -1682,6 +1740,10 @@ def main(argv: Sequence[str]) -> int:
             return 1
         if table["format"] not in _EDITORS:
             note(f"{relative}: unknown format {table['format']!r}")
+            return 1
+        problem = _owned_keys_error(table)
+        if problem is not None:
+            note(f"{relative}: {problem}")
             return 1
 
     # Folded into `tables` before any editor runs, so the editors themselves

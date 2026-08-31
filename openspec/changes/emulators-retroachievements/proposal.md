@@ -30,9 +30,13 @@ file once avoids a second change that reopens all of them.
   secrets store; a missing or unreachable RA endpoint never blocks the
   session.
 - The VM test grows an assertion group: headless RetroArch runs a freely
-  redistributable homebrew ROM per BIOS-free core family that has one, each
-  standalone gets a smoke launch, and a mocked RA endpoint proves every
-  config carries the token and follows the hardcore option.
+  redistributable homebrew ROM per BIOS-free core family whose core is both
+  licensed and able to start headless at all, each standalone gets a smoke
+  launch as far as it can be started, and a mocked RA endpoint proves every
+  config carries the token and follows the hardcore option. The families
+  and the standalones that fall outside those two limits are named, with
+  their reasons, in the `vm-test` capability below; they move to the
+  hardware checklist rather than going quietly untested.
 
 ## Capabilities
 

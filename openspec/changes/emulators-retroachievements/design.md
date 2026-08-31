@@ -240,9 +240,27 @@ every published reference usable and lets a sha256 entry join later
 without a second format. The requirement is untouched: it asks for a
 name and checksum list, never for a particular algorithm. Files under `/data/bios` the
 inventory does not declare are listed as informational extras and do
-not affect the exit status. It ships in `environment.systemPackages`
-for the admin over SSH; `emubox-status` (E5+) will consume the same
-exit status.
+not affect the exit status. `emubox-check-bios` itself ships in
+`environment.systemPackages` for the admin over SSH; `emubox-status` (E5+)
+will consume the same exit status.
+
+The same apply-time reading left three BIOS-dependent systems out of the
+inventory altogether, which is a deliberate gap rather than an unfinished
+one. PS2 is the first, and follows straight from the paragraph above: an
+emulator that validates by file size and a ROMVER string publishes no
+digest to declare, in any algorithm. MSX and ColecoVision are the second,
+because blueMSX needs whole `Databases` and `Machines` directory trees
+copied from a full install rather than one file with one checksum, and an
+inventory entry is one path and one digest. Arcade is the third: its BIOS
+is a per-game board ROM set that lives beside each game's own files, so
+there is no fixed image under `/data/bios` an entry could name. The
+requirement is untouched here too - it asks that emulators read from
+`/data/bios` and that the declared list be checkable, never that every
+system needing firmware be declared - but the gap has to be written down
+somewhere an admin will meet it, or a clean `emubox-check-bios` reads as
+proof that PS2 and Arcade will run. The README's BIOS section is that
+place, and the bring-up checklist carries the launch each of these systems
+needs instead.
 
 ### D7. VM assertions favour prepare-level truth over emulator-level ceremony
 
@@ -328,7 +346,10 @@ E12 line.
   render context, discarding the null-driver override, and Snes9x hangs
   rather than exiting and had to be killed at the launch cap. All six
   move to the hardware checklist, which is what the vm-test requirement
-  now says.
+  now says - concretely, to the README's bring-up checklist, alongside the
+  BIOS-dependent systems, the two standalones whose smoke launch proves
+  less, and the one thing this whole change cannot prove without hardware:
+  an achievement actually unlocking.
 
   The shape of that list is the honest finding here, and worth stating
   plainly rather than leaving implicit in a count. A third of the

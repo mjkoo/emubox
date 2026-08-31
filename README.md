@@ -341,7 +341,10 @@ no user data. Fix the disk, or reinstall.
 Items that need the physical box, the real TV or a controller in hand, and
 so are settled at bring-up rather than in CI. The `TODO(bring-up)` comments
 in `hosts/emubox/facts.nix` mark the two facts; this list is where the rest
-live, and there is no second list.
+live, and there is no second list. Where an item exists because a test
+stopped short of covering something, the evidence for stopping lives beside
+that test and is linked from the item - the item itself is still here, so
+this list stays the one place to read what is unproven.
 
 - The four USB-A `ID_PATH` values in physical port order, and the connector
   the TV is actually on (`hdmiOutput`): both `TODO(bring-up)` in
@@ -361,3 +364,40 @@ live, and there is no second list.
 - The unlock sequence entered on a controller. The kiosk VM test proves the
   configured passkey reaches the settings file; that entering it unlocks
   the full menu is ES-DE's own behaviour and needs real input.
+- One game launched per system that needs firmware, once the files are in
+  `/data/bios` and `emubox-check-bios` reports them `OK`. Nothing in CI can
+  load any of these, because neither this repository nor its cache may
+  carry the firmware: Atari Lynx, Famicom Disk System, Sega CD, Saturn,
+  PS1, PC Engine CD, Arcade, Nintendo DS, PS2, Amiga, MSX, Intellivision
+  and ColecoVision. A clean `emubox-check-bios` is not evidence for PS2,
+  MSX, ColecoVision or Arcade in particular: the inventory declares nothing
+  for those four on purpose, for the reasons the BIOS section above gives,
+  so their firmware is unchecked as well as unproven.
+- One game launched per core family the kiosk VM test names exempt from its
+  headless launches. Six of the eighteen BIOS-free families never actually
+  run a ROM in CI: Atari 7800 and Neo Geo Pocket, for want of a homebrew
+  ROM carrying an author's own licence; N64, Dreamcast and Vectrex, whose
+  cores force a real GL or Vulkan driver that a headless VM has none of;
+  and SNES, where the fixture hangs for a reason nobody has yet pinned on
+  either the core or that particular ROM. `exemptFamilies` in
+  `tests/kiosk.nix` carries each family's evidence and what would return it
+  to CI.
+- ScummVM and DuckStation coming up full screen against their written
+  configuration. The other four standalones are smoke-launched against
+  theirs in the VM; these two cannot be. ScummVM only answers `--version`,
+  which never opens `scummvm.ini`, and DuckStation crashes constructing its
+  QApplication before it reads argv at all, so CI proves only that the
+  binary runs.
+- A RetroAchievements achievement actually unlocking, on RetroArch and on
+  DuckStation. The kiosk VM test asserts what the flake wrote - RetroArch's,
+  Dolphin's and PCSX2's tokens read back from their settings files,
+  PPSSPP's from the raw file it keeps its token in, and DuckStation's by
+  decrypting it with a second implementation of the scheme - which is not
+  the same as any emulator accepting one. DuckStation is the one to check
+  first: its token is the only one this project encrypts itself, so it is
+  the only one a future DuckStation bump could silently invalidate.
+- Real performance per system. The VM asserts that PCSX2 is set to native
+  internal resolution and DuckStation to PGXP with upscaling, never that
+  either holds frame rate on this box's iGPU. A system that disappoints
+  here is settled by changing its values in `modules/emulators`, not by
+  anything CI can catch first.

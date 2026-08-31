@@ -24,6 +24,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -1240,3 +1241,475 @@ def test_duckstation_login_values_skips_login_when_machine_id_is_unreadable(
 
     assert values == {}
     assert "missing-machine-id" in capsys.readouterr().err
+
+
+# --- RetroAchievements: the owned-table merge (design D1, D2) -------------
+#
+# One function per emulator-shaped target, so each test names the target
+# the way a real one would be built rather than exercising encodings in the
+# abstract - a PCSX2-style split across two files included.
+
+
+def plain_target(
+    name: str, file_relative: str, *, booleans: dict[str, str] | None = None
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "encoding": "plain",
+        "booleans": booleans or {"true": "true", "false": "false"},
+        "keys": {
+            "enabled": {"file": file_relative, "key": "cheevos_enable"},
+            "hardcore": {"file": file_relative, "key": "cheevos_hardcore_mode_enable"},
+            "username": {"file": file_relative, "key": "cheevos_username"},
+            "token": {"file": file_relative, "key": "cheevos_token"},
+        },
+    }
+
+
+def ini_target(
+    name: str,
+    file_relative: str,
+    section: str = "Cheevos",
+    *,
+    booleans: dict[str, str] | None = None,
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "encoding": "plain",
+        "booleans": booleans or {"true": "True", "false": "False"},
+        "keys": {
+            "enabled": {"file": file_relative, "section": section, "key": "Enabled"},
+            "hardcore": {
+                "file": file_relative,
+                "section": section,
+                "key": "ChallengeMode",
+            },
+            "username": {"file": file_relative, "section": section, "key": "Username"},
+            "token": {"file": file_relative, "section": section, "key": "Token"},
+        },
+    }
+
+
+def pcsx2_target() -> dict[str, object]:
+    return {
+        "name": "pcsx2",
+        "encoding": "plain",
+        "booleans": {"true": "true", "false": "false"},
+        "keys": {
+            "enabled": {
+                "file": "PCSX2.ini",
+                "section": "Achievements",
+                "key": "Enabled",
+            },
+            "hardcore": {
+                "file": "PCSX2.ini",
+                "section": "Achievements",
+                "key": "ChallengeMode",
+            },
+            "username": {
+                "file": "secrets.ini",
+                "section": "Achievements",
+                "key": "Username",
+            },
+            "token": {"file": "secrets.ini", "section": "Achievements", "key": "Token"},
+        },
+    }
+
+
+def secret_file_target(token_file: Path) -> dict[str, object]:
+    return {
+        "name": "ppsspp",
+        "encoding": "secret-file",
+        "booleans": {"true": "True", "false": "False"},
+        "keys": {
+            "enabled": {
+                "file": "ppsspp.ini",
+                "section": "Achievements",
+                "key": "AchievementsEnable",
+            },
+            "hardcore": {
+                "file": "ppsspp.ini",
+                "section": "Achievements",
+                "key": "AchievementsChallengeMode",
+            },
+            "username": {
+                "file": "ppsspp.ini",
+                "section": "Achievements",
+                "key": "AchievementsUserName",
+            },
+        },
+        "token_file": str(token_file),
+    }
+
+
+def duckstation_target(
+    machine_id_file: Path, ini_relative: str, *, with_timestamp: bool = True
+) -> dict[str, object]:
+    keys: dict[str, object] = {
+        "enabled": {"file": ini_relative, "section": "Cheevos", "key": "Enabled"},
+        "hardcore": {
+            "file": ini_relative,
+            "section": "Cheevos",
+            "key": "ChallengeMode",
+        },
+        "username": {"file": ini_relative, "section": "Cheevos", "key": "Username"},
+        "token": {"file": ini_relative, "section": "Cheevos", "key": "Token"},
+    }
+    if with_timestamp:
+        keys["login_timestamp"] = {
+            "file": ini_relative,
+            "section": "Cheevos",
+            "key": "LoginTimestamp",
+        }
+    return {
+        "name": "duckstation",
+        "encoding": "duckstation",
+        "machine_id_file": str(machine_id_file),
+        "booleans": {"true": "true", "false": "false"},
+        "keys": keys,
+    }
+
+
+def retroachievements_namespace(
+    tmp_path: Path,
+    api_url: str,
+    targets: list[dict[str, object]],
+    *,
+    hardcore: bool = False,
+    cache: str | None = None,
+) -> dict[str, object]:
+    ra, _cache_file = ra_namespace(tmp_path, api_url, cache=cache)
+    ra["hardcore"] = hardcore
+    ra["targets"] = targets
+    return ra
+
+
+def test_apply_writes_enabled_and_hardcore_even_without_a_resolved_token(
+    tmp_path: Path,
+) -> None:
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    target = plain_target("retroarch", "retroarch.cfg")
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [target], hardcore=True
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    keys = files["retroarch.cfg"]["keys"]
+    assert keys["cheevos_enable"] == "true"
+    assert keys["cheevos_hardcore_mode_enable"] == "true"
+    assert "cheevos_username" not in keys
+    assert "cheevos_token" not in keys
+
+
+def test_apply_writes_username_and_token_for_a_plain_target(tmp_path: Path) -> None:
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-1"})) as url:
+        files: dict[str, object] = {
+            "retroarch.cfg": {"format": "retroarch", "keys": {}}
+        }
+        target = plain_target("retroarch", "retroarch.cfg")
+        ra = retroachievements_namespace(tmp_path, url, [target])
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    keys = files["retroarch.cfg"]["keys"]
+    assert keys["cheevos_username"] == "alice"
+    assert keys["cheevos_token"] == "tok-1"
+    assert keys["cheevos_enable"] == "true"
+    assert keys["cheevos_hardcore_mode_enable"] == "false"
+
+
+def test_apply_writes_a_dolphin_style_ini_target_with_its_own_boolean_spellings(
+    tmp_path: Path,
+) -> None:
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-2"})) as url:
+        files: dict[str, object] = {"Dolphin.ini": {"format": "ini", "keys": {}}}
+        target = ini_target("dolphin", "Dolphin.ini")
+        ra = retroachievements_namespace(tmp_path, url, [target], hardcore=True)
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    section = files["Dolphin.ini"]["keys"]["Cheevos"]
+    assert section == {
+        "Enabled": "True",
+        "ChallengeMode": "True",
+        "Username": "alice",
+        "Token": "tok-2",
+    }
+
+
+def test_apply_splits_pcsx2_keys_across_two_files(tmp_path: Path) -> None:
+    # Nothing special is needed for this - it falls out of the per-key
+    # `file` - but the design calls it out explicitly as worth proving.
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-3"})) as url:
+        files: dict[str, object] = {
+            "PCSX2.ini": {"format": "ini", "keys": {}},
+            "secrets.ini": {"format": "ini", "keys": {}},
+        }
+        ra = retroachievements_namespace(tmp_path, url, [pcsx2_target()])
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    assert files["PCSX2.ini"]["keys"]["Achievements"] == {
+        "Enabled": "true",
+        "ChallengeMode": "false",
+    }
+    assert files["secrets.ini"]["keys"]["Achievements"] == {
+        "Username": "alice",
+        "Token": "tok-3",
+    }
+
+
+def test_apply_writes_a_secret_file_token_for_ppsspp(tmp_path: Path) -> None:
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-4"})) as url:
+        files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+        ra = retroachievements_namespace(
+            tmp_path, url, [secret_file_target(token_file)]
+        )
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    section = files["ppsspp.ini"]["keys"]["Achievements"]
+    assert section["AchievementsUserName"] == "alice"
+    assert "token" not in {k.lower() for k in section}
+    # No trailing newline: the file's entire content is the raw token bytes.
+    assert token_file.read_bytes() == b"tok-4"
+    assert token_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_apply_forces_the_secret_files_mode_even_if_it_pre_existed(
+    tmp_path: Path,
+) -> None:
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    token_file.write_bytes(b"stale-token")
+    token_file.chmod(0o644)
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-5"})) as url:
+        files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+        ra = retroachievements_namespace(
+            tmp_path, url, [secret_file_target(token_file)]
+        )
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    assert token_file.read_bytes() == b"tok-5"
+    assert token_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_apply_removes_a_stale_secret_file_when_no_token_resolves(
+    tmp_path: Path,
+) -> None:
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    token_file.write_bytes(b"stale-token")
+    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [secret_file_target(token_file)]
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    assert not token_file.exists()
+
+
+def test_apply_never_leaks_the_password_into_the_secret_file(tmp_path: Path) -> None:
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-6"})) as url:
+        files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+        ra = retroachievements_namespace(
+            tmp_path, url, [secret_file_target(token_file)]
+        )
+
+        ep.apply_retroachievements(files, ra, tmp_path)
+
+    assert b"hunter2" not in token_file.read_bytes()
+
+
+def test_apply_writes_a_duckstation_target_end_to_end(tmp_path: Path) -> None:
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("abc123\n")
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-7"})) as url:
+        files: dict[str, object] = {"settings.ini": {"format": "ini", "keys": {}}}
+        target = duckstation_target(machine_id_file, "settings.ini")
+        ra = retroachievements_namespace(tmp_path, url, [target])
+
+        assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+
+    section = files["settings.ini"]["keys"]["Cheevos"]
+    assert section["Username"] == "alice"
+    assert section["Token"] == ep.encrypt_duckstation_token(
+        b"abc123\n", "alice", "tok-7"
+    )
+    assert section["Enabled"] == "true"
+    assert section["ChallengeMode"] == "false"
+    assert "LoginTimestamp" in section
+
+
+def test_apply_with_no_targets_is_a_no_op(tmp_path: Path) -> None:
+    files: dict[str, object] = {}
+    ra = retroachievements_namespace(tmp_path, closed_port_url(), [])
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 0
+    assert files == {}
+
+
+def test_apply_rejects_a_target_key_naming_an_undeclared_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "retroarch.cfg" in capsys.readouterr().err
+
+
+def test_apply_rejects_an_ini_key_missing_a_section(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"Dolphin.ini": {"format": "ini", "keys": {}}}
+    # plain_target's key entries have no "section", which an ini file needs.
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("dolphin", "Dolphin.ini")]
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "section" in capsys.readouterr().err
+
+
+def test_apply_rejects_a_retroarch_key_carrying_a_section(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    # ini_target's key entries carry a "section", which a retroarch file must not.
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [ini_target("retroarch-ish", "retroarch.cfg")]
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "section" in capsys.readouterr().err
+
+
+def test_apply_rejects_a_target_key_naming_an_esde_xml_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"es_settings.xml": {"format": "esde-xml", "keys": {}}}
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("bogus", "es_settings.xml")]
+    )
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "es_settings.xml" in capsys.readouterr().err
+
+
+def test_apply_rejects_a_secret_file_target_that_declares_a_token_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    target = secret_file_target(tmp_path / "ppsspp.dat")
+    keys = cast("dict[str, object]", target["keys"])
+    keys["token"] = {"file": "ppsspp.ini", "section": "Achievements", "key": "Token"}
+    ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "token" in capsys.readouterr().err.lower()
+
+
+def test_apply_rejects_a_secret_file_target_missing_token_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    target = secret_file_target(tmp_path / "ppsspp.dat")
+    del target["token_file"]
+    ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "token_file" in capsys.readouterr().err
+
+
+def test_apply_rejects_a_plain_target_that_carries_a_token_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    target = plain_target("retroarch", "retroarch.cfg")
+    target["token_file"] = "/should/not/be/here"
+    ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "token_file" in capsys.readouterr().err
+
+
+def test_apply_rejects_an_unknown_encoding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    target = plain_target("retroarch", "retroarch.cfg")
+    target["encoding"] = "rot13"
+    ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
+
+    assert ep.apply_retroachievements(files, ra, tmp_path) == 1
+    assert "encoding" in capsys.readouterr().err
+
+
+def test_main_null_retroachievements_changes_nothing_beyond_ordinary_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "retroarch.cfg": {
+                        "format": "retroarch",
+                        "keys": {"menu_driver": "ozone"},
+                    }
+                },
+                "retroachievements": None,
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 0
+
+    text = (appdata / "retroarch.cfg").read_text()
+    assert 'menu_driver = "ozone"' in text
+    assert "cheevos" not in text
+
+
+def test_main_end_to_end_with_retroachievements_never_leaks_the_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    username_file = tmp_path / "username"
+    password_file = tmp_path / "password"
+    username_file.write_text("alice\n")
+    password_file.write_text("hunter2\n")
+
+    with ra_server(_json_handler(200, {"Success": True, "Token": "tok-e2e"})) as url:
+        values = tmp_path / "owned.json"
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {"retroarch.cfg": {"format": "retroarch", "keys": {}}},
+                    "retroachievements": {
+                        "api_url": url,
+                        "username_file": str(username_file),
+                        "password_file": str(password_file),
+                        "cache_file": str(tmp_path / "cache" / "ra-token"),
+                        "hardcore": False,
+                        "targets": [plain_target("retroarch", "retroarch.cfg")],
+                    },
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 0
+
+    text = (appdata / "retroarch.cfg").read_text()
+    assert 'cheevos_username = "alice"' in text
+    assert 'cheevos_token = "tok-e2e"' in text
+    assert "hunter2" not in text
+    assert "hunter2" not in capsys.readouterr().err

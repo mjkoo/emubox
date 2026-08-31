@@ -727,6 +727,224 @@ def duckstation_login_values(
     return values
 
 
+# --- RetroAchievements: the owned-table merge (design D1, D2) -------------
+#
+# The only emulator-specific spelling this program tolerates is the
+# `encoding` discriminator below - which at-rest form a target's token
+# takes - never a key name or a file path, which arrive from the JSON.
+
+
+def _target_validation_error(
+    files: Mapping[str, object], target: Mapping[str, object]
+) -> str | None:
+    """Why a target's declared shape is a broken call site, or None if sound.
+
+    Every check is about the document a module rendered - a key naming a
+    file `files` does not declare, an ini key missing its `section`, a
+    retroarch key carrying one it must not, an encoding declaring the wrong
+    set of keys - never about anything read at runtime. A target that fails
+    here means `main` returns 1, the same policy as an unreadable
+    owned-values document. A runtime failure (network, credentials, a
+    missing machine id) degrades the tables written instead, and never
+    reaches this function.
+    """
+    name = target.get("name", "<unnamed>")
+    encoding = target.get("encoding")
+    keys = target.get("keys")
+    if not isinstance(keys, dict):
+        return f"retroachievements target {name!r}: expected 'keys' to be an object"
+
+    # enabled/hardcore/username are written for every encoding (design D2);
+    # token is only for the two encodings that keep it in a `files` key at
+    # all - secret-file's token lives in `token_file` instead, checked below.
+    required = {"enabled", "hardcore", "username"}
+    if encoding in ("plain", "duckstation"):
+        required.add("token")
+    missing = sorted(required - keys.keys())
+    if missing:
+        return f"retroachievements target {name!r}: missing key(s) {missing}"
+
+    for key_name, raw_entry in keys.items():
+        if not isinstance(raw_entry, dict):
+            return f"retroachievements target {name!r}.{key_name}: expected an object"
+        entry = cast("Mapping[str, object]", raw_entry)
+        file_name = entry.get("file")
+        raw_file_table = files.get(file_name) if isinstance(file_name, str) else None
+        if not isinstance(raw_file_table, dict):
+            return (
+                f"retroachievements target {name!r}.{key_name}: "
+                f"{file_name!r} is not declared in 'files'"
+            )
+        # `cast`, not the bare `isinstance` narrowing above, because a
+        # checker narrows `isinstance(x, dict)` on an `object` to an
+        # unparameterized `dict` that cannot then be subscripted or `.get`
+        # by a `str` key (dict is invariant in its type parameters).
+        file_table = cast("Mapping[str, object]", raw_file_table)
+        file_format = file_table.get("format")
+        if not isinstance(file_format, str):
+            return (
+                f"retroachievements target {name!r}.{key_name}: "
+                f"{file_name!r} is not declared in 'files'"
+            )
+        if file_format not in ("ini", "retroarch"):
+            # Covers esde-xml explicitly and any other format the files map
+            # might one day carry: neither shape below is one this merge
+            # knows how to fold a key into.
+            return (
+                f"retroachievements target {name!r}.{key_name}: "
+                f"{file_name!r} has format {file_format!r}, which cannot "
+                "carry a retroachievements key"
+            )
+        if file_format == "ini" and "section" not in entry:
+            return (
+                f"retroachievements target {name!r}.{key_name}: "
+                f"{file_name!r} is an ini file and needs a 'section'"
+            )
+        if file_format == "retroarch" and "section" in entry:
+            return (
+                f"retroachievements target {name!r}.{key_name}: "
+                f"{file_name!r} is a retroarch file and must not carry a 'section'"
+            )
+
+    booleans = target.get("booleans")
+    if (
+        not isinstance(booleans, dict)
+        or "true" not in booleans
+        or "false" not in booleans
+    ):
+        return f"retroachievements target {name!r}: expected 'booleans' with 'true' and 'false'"
+
+    if encoding == "secret-file":
+        if "token" in keys:
+            return f"retroachievements target {name!r}: secret-file must not declare 'token'"
+        if not target.get("token_file"):
+            return f"retroachievements target {name!r}: secret-file needs 'token_file'"
+    elif encoding in ("plain", "duckstation"):
+        if target.get("token_file"):
+            return f"retroachievements target {name!r}: {encoding} must not carry 'token_file'"
+    else:
+        return f"retroachievements target {name!r}: unknown encoding {encoding!r}"
+
+    return None
+
+
+def _merge_target_key(
+    files: dict[str, object], entry: Mapping[str, object], value: str
+) -> None:
+    """Fold one key entry's value into its file's own keys table, in place.
+
+    The file's format decides the shape - ini's `{section: {key: value}}`,
+    retroarch's flat `{key: value}` - so the unmodified editors write it.
+    Only ever called after `_target_validation_error` has confirmed the
+    file is declared and the entry's shape matches its format.
+    """
+    file_table = cast("dict[str, object]", files[str(entry["file"])])
+    file_keys = cast("dict[str, object]", file_table.setdefault("keys", {}))
+    if file_table.get("format") == "ini":
+        section = cast(
+            "dict[str, object]", file_keys.setdefault(str(entry["section"]), {})
+        )
+        section[str(entry["key"])] = value
+    else:  # "retroarch" - the only other format a validated entry can name
+        file_keys[str(entry["key"])] = value
+
+
+def _apply_secret_file_token(
+    root: Path, target: Mapping[str, object], resolved: tuple[str, str] | None
+) -> None:
+    """Write or remove a secret-file target's whole-file token (PPSSPP).
+
+    The file IS the token - no section, no key framing - so it is written
+    directly rather than through the `files` map's editors, with the same
+    mode-0600 treatment as the login cache: it is a credential, not an
+    ordinary preference. No token resolved this run - offline with no
+    cache, a rejection, unreadable credentials - removes any file a
+    previous run left, so no stale token survives; the spec's offline
+    scenario is explicit that no configuration may carry one.
+    """
+    token_file = _resolve_path(root, str(target["token_file"]))
+    if resolved is None:
+        token_file.unlink(missing_ok=True)
+        return
+    _, token = resolved
+    # No trailing newline: PPSSPP's login path reads the file's raw bytes
+    # as the token with no line-oriented parsing shown to tolerate one, so
+    # the conservative choice, absent a way to confirm otherwise, is none.
+    _write(token_file, token)
+    token_file.chmod(_CACHE_MODE)
+
+
+def apply_retroachievements(
+    files: dict[str, object], retroachievements: Mapping[str, object], root: Path
+) -> int:
+    """Fold every retroachievements target's values into `files`, in place.
+
+    Returns 0 on success, 1 on a broken call site (already noted) - a
+    target whose declared shape does not match its file's format, or that
+    mixes an encoding with the wrong token declaration. Runtime failures
+    (network, credentials, a missing machine id) are never call-site
+    failures: they degrade to fewer keys written - enabled and hardcore
+    always, username and token only when a login actually resolved one -
+    never a non-zero return (design D2's whole point).
+    """
+    targets = retroachievements.get("targets", [])
+    if not isinstance(targets, list):
+        note("retroachievements: expected 'targets' to be an array")
+        return 1
+
+    validated: list[Mapping[str, object]] = []
+    for raw_target in targets:
+        if not isinstance(raw_target, dict):
+            note("retroachievements: expected each target to be an object")
+            return 1
+        target = cast("Mapping[str, object]", raw_target)
+        error = _target_validation_error(files, target)
+        if error is not None:
+            note(error)
+            return 1
+        validated.append(target)
+
+    # The login happens once per run, ahead of every target, rather than
+    # once per target: one account serves every supporting emulator.
+    resolved = resolve_retroachievements_token(retroachievements, root)
+    hardcore = bool(retroachievements.get("hardcore", False))
+
+    for target in validated:
+        booleans = cast("Mapping[str, object]", target["booleans"])
+        keys = cast("Mapping[str, object]", target["keys"])
+        encoding = target["encoding"]
+
+        # enabled and hardcore are written unconditionally: the namespace
+        # being non-null already means the feature is enabled (design D1),
+        # and the emulators fail their own login harmlessly with no token.
+        values: dict[str, str] = {
+            "enabled": str(booleans["true"]),
+            "hardcore": str(booleans["true"] if hardcore else booleans["false"]),
+        }
+
+        if encoding == "duckstation":
+            if resolved is not None:
+                username, token = resolved
+                values.update(duckstation_login_values(root, target, username, token))
+        elif encoding == "plain":
+            if resolved is not None:
+                username, token = resolved
+                values["username"] = username
+                values["token"] = token
+        elif encoding == "secret-file":
+            if resolved is not None:
+                username, _token = resolved
+                values["username"] = username
+            _apply_secret_file_token(root, target, resolved)
+
+        for key_name, value in values.items():
+            entry = keys.get(key_name)
+            if isinstance(entry, dict):
+                _merge_target_key(files, cast("Mapping[str, object]", entry), value)
+
+    return 0
+
+
 # --- The custom systems step ----------------------------------------------
 
 
@@ -833,10 +1051,20 @@ def main(argv: Sequence[str]) -> int:
         if not isinstance(table, dict) or "format" not in table or "keys" not in table:
             note(f"{relative}: expected an object with 'format' and 'keys'")
             return 1
-        editor = _EDITORS.get(table["format"])
-        if editor is None:
+        if table["format"] not in _EDITORS:
             note(f"{relative}: unknown format {table['format']!r}")
             return 1
+
+    # Folded into `tables` before any editor runs, so the editors themselves
+    # stay unaware that a key came from the retroachievements namespace
+    # rather than the module that declared the file (design D1).
+    if retroachievements is not None:
+        status = apply_retroachievements(tables, retroachievements, root)
+        if status != 0:
+            return status
+
+    for relative, table in tables.items():
+        editor = _EDITORS[table["format"]]
         editor(root / relative, table["keys"])
 
     install_custom_systems(root / "custom_systems" / "es_systems.xml", custom_systems)

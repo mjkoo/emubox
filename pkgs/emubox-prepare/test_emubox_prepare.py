@@ -829,6 +829,26 @@ class _QuietHandler(http.server.BaseHTTPRequestHandler):
         pass  # A passing test should print nothing; failures show the assert.
 
 
+class _QuietErrors:
+    """Swallow socketserver's traceback when a client walks away early.
+
+    Several tests below prove exactly that: the login gives up on a body
+    the server is still writing, so the write fails with EPIPE and
+    socketserver prints a traceback that means nothing but noise here.
+    """
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        pass
+
+
+class _QuietHTTPServer(_QuietErrors, http.server.HTTPServer):
+    pass
+
+
+class _QuietThreadingHTTPServer(_QuietErrors, http.server.ThreadingHTTPServer):
+    pass
+
+
 def _json_handler(
     status: int, payload: object
 ) -> type[http.server.BaseHTTPRequestHandler]:
@@ -869,20 +889,126 @@ def _body_handler(status: int, body: bytes) -> type[http.server.BaseHTTPRequestH
 
 
 def _sleepy_handler(delay: float) -> type[http.server.BaseHTTPRequestHandler]:
+    """A successful login that arrives late.
+
+    The body is the point. With none - a bare `send_response(200)` and
+    `end_headers()`, which is what this handler used to do - the client
+    reaches `json.loads(b"")`, and that is itself the "unreachable"
+    outcome, so every test asserting a timeout passed whether or not the
+    timeout fired: deleting `timeout=timeout` from the urlopen call left
+    the whole suite green. With a valid success body the only route to
+    "unreachable" is the deadline actually firing.
+    """
+    body = json.dumps({"Success": True, "Token": "slow-tok"}).encode()
+
     class Handler(_QuietHandler):
         def do_POST(self) -> None:
             self.rfile.read(int(self.headers.get("Content-Length", 0)))
             time.sleep(delay)
             self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            self.wfile.write(body)
+
+    return Handler
+
+
+def _dribbling_handler(
+    duration: float, chunks: int = 40
+) -> type[http.server.BaseHTTPRequestHandler]:
+    """A successful login trickled out one byte at a time over `duration`.
+
+    The case a per-socket timeout cannot catch: every individual gap is
+    far inside the configured timeout, so the socket deadline is reset on
+    every byte and never fires, however long the whole response takes.
+    Only a wall-clock bound around the entire call ends this.
+    """
+    body = json.dumps({"Success": True, "Token": "dribble-tok"}).encode()
+    body = body.ljust(chunks, b" ")  # trailing spaces still parse as JSON
+    gap = duration / len(body)
+
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            # Suppressed because the client is expected to walk away
+            # mid-response: that is what the test is proving.
+            with contextlib.suppress(OSError):
+                for index in range(len(body)):
+                    self.wfile.write(body[index : index + 1])
+                    self.wfile.flush()
+                    time.sleep(gap)
+
+    return Handler
+
+
+def _endless_handler() -> type[http.server.BaseHTTPRequestHandler]:
+    """A valid login followed by a body that never ends.
+
+    Exactly the cap's job: the first 64 KiB carry the whole answer, and a
+    reader with no bound would sit here until the wall-clock deadline gave
+    up on a login that had in fact succeeded.
+    """
+    payload = json.dumps({"Success": True, "Token": "capped-tok"}).encode()
+    prefix = payload.ljust(1 << 16, b" ")  # trailing spaces still parse
+
+    class Handler(_QuietHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(200)
+            self.send_header("Content-Length", str(1 << 30))
+            self.end_headers()
+            with contextlib.suppress(OSError):
+                self.wfile.write(prefix)
+                while True:
+                    self.wfile.write(b" " * 4096)
 
     return Handler
 
 
 @contextlib.contextmanager
-def ra_server(handler_class: type[http.server.BaseHTTPRequestHandler]) -> Iterator[str]:
-    """A throwaway HTTP server, yielding the login2 URL to point prepare at."""
-    server = http.server.HTTPServer(("127.0.0.1", 0), handler_class)
+def raw_reply_server(reply: bytes) -> Iterator[str]:
+    """A listener that answers whatever it is sent with bytes that are not HTTP.
+
+    `http.client` raises `BadStatusLine` for this - an `HTTPException`,
+    which is not an `OSError`, so it escaped the login's own guard.
+    """
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def serve() -> None:
+        with contextlib.suppress(OSError):
+            connection, _address = listener.accept()
+            with connection:
+                connection.recv(65536)
+                connection.sendall(reply)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}/dorequest.php"
+    finally:
+        listener.close()
+        thread.join(timeout=2.0)
+
+
+@contextlib.contextmanager
+def ra_server(
+    handler_class: type[http.server.BaseHTTPRequestHandler], *, threaded: bool = False
+) -> Iterator[str]:
+    """A throwaway HTTP server, yielding the login2 URL to point prepare at.
+
+    `threaded` for the slow handlers: `ThreadingHTTPServer` sets
+    `daemon_threads`, so `shutdown()` returns at once instead of waiting
+    out a response the client has already abandoned - which is every test
+    that proves the login deadline fires.
+    """
+    server_class = _QuietThreadingHTTPServer if threaded else _QuietHTTPServer
+    server = server_class(("127.0.0.1", 0), handler_class)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -951,7 +1077,9 @@ def test_login2_reports_unreachable_on_connection_refused() -> None:
 def test_login2_reports_unreachable_on_a_timeout() -> None:
     # A short configured timeout against a handler that sleeps past it, so
     # the real timeout path is exercised without the suite paying 5 seconds.
-    with ra_server(_sleepy_handler(0.5)) as url:
+    # The handler answers Success once it wakes, so the only way to reach
+    # "unreachable" here is the deadline firing first.
+    with ra_server(_sleepy_handler(0.5), threaded=True) as url:
         outcome = ep._login2(url, "alice", "hunter2", timeout=0.05)
 
     assert outcome == ("unreachable", None)
@@ -1058,7 +1186,7 @@ def test_resolve_token_continues_with_no_token_when_unreachable_and_no_cache(
 
 
 def test_resolve_token_falls_back_to_the_cache_on_a_timeout(tmp_path: Path) -> None:
-    with ra_server(_sleepy_handler(0.5)) as url:
+    with ra_server(_sleepy_handler(0.5), threaded=True) as url:
         ra, cache_file = ra_namespace(tmp_path, url, cache="cached-token")
 
         result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=0.05)
@@ -1920,3 +2048,180 @@ def test_main_survives_a_settings_ini_that_is_not_valid_utf8(
     # Recreated by the editors' ordinary policy, carrying the owned keys.
     assert "Username = alice" in ini_path.read_text()
     assert "unreadable" in capsys.readouterr().err
+
+
+def test_login2_bounds_a_dribbling_server_by_wall_clock() -> None:
+    # C2: urlopen's timeout is per socket operation, so a server sending a
+    # byte at a time resets it forever and the login never returns. The
+    # assertion on elapsed time is the one that pins the bound: without a
+    # wall-clock deadline this call runs for the whole dribble and beyond.
+    dribble = 1.0
+    with ra_server(_dribbling_handler(dribble), threaded=True) as url:
+        started = time.monotonic()
+        outcome = ep._login2(url, "alice", "hunter2", timeout=0.2)
+        elapsed = time.monotonic() - started
+
+    assert outcome == ("unreachable", None)
+    assert elapsed < dribble
+
+
+def test_resolve_token_falls_back_to_the_cache_when_the_server_dribbles(
+    tmp_path: Path,
+) -> None:
+    # The same bound where it matters: the session gets the cached token
+    # and the frontend, rather than a black screen for as long as the
+    # server feels like trickling.
+    dribble = 1.0
+    with ra_server(_dribbling_handler(dribble), threaded=True) as url:
+        ra, _cache_file = ra_namespace(tmp_path, url, cache="cached-token")
+        started = time.monotonic()
+        result = ep.resolve_retroachievements_token(ra, tmp_path, timeout=0.2)
+        elapsed = time.monotonic() - started
+
+    assert result == ("alice", "cached-token")
+    assert elapsed < dribble
+
+
+def _login_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.name == "emubox-ra-login2"]
+
+
+def test_login2_does_not_leave_its_abandoned_request_running() -> None:
+    # The wall-clock deadline abandons the request rather than cancelling
+    # it, which leaves the per-socket timeout a job of its own: without it
+    # the abandoned thread sits in recv for as long as the server holds the
+    # connection - five seconds here, indefinitely on a half-up network.
+    with ra_server(_sleepy_handler(10.0), threaded=True) as url:
+        assert ep._login2(url, "alice", "hunter2", timeout=0.2) == (
+            "unreachable",
+            None,
+        )
+        deadline = time.monotonic() + 3.0
+        while _login_threads() and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+        assert not _login_threads()
+
+
+# The four exception families below are asserted against `_login2_request`,
+# the function whose except clauses they are about, rather than through
+# `_login2`: the wall-clock wrapper has a catch-all of its own, so going
+# through it would report "unreachable" whether the clauses were right or
+# missing entirely. The wrapper's own note is asserted absent in the first
+# of them, which is what says the request handled its failure itself.
+
+
+def test_login2_reports_unreachable_when_the_reply_is_not_http(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # C3: BadStatusLine is an http.client.HTTPException, not an OSError, so
+    # it escaped to main as a traceback and the session ended at a greeter.
+    with raw_reply_server(b"gibberish not a status line\r\n\r\n") as url:
+        assert ep._login2_request(url, "alice", "hunter2", 5.0) == (
+            "unreachable",
+            None,
+        )
+    with raw_reply_server(b"gibberish not a status line\r\n\r\n") as url:
+        assert ep._login2(url, "alice", "hunter2", timeout=5.0) == ("unreachable", None)
+
+    assert "unexpectedly" not in capsys.readouterr().err
+
+
+def test_login2_reports_unreachable_when_the_reply_headers_are_endless() -> None:
+    # LineTooLong, the other HTTPException a listener can produce at will.
+    with raw_reply_server(b"HTTP/1.1 200 OK\r\nX: " + b"a" * 200000) as url:
+        outcome = ep._login2_request(url, "alice", "hunter2", 5.0)
+
+    assert outcome == ("unreachable", None)
+
+
+def test_login2_reports_unreachable_on_a_url_with_no_usable_scheme() -> None:
+    # ValueError("unknown url type"), raised by Request() before any socket
+    # exists - which is why the construction had to move inside the try.
+    outcome = ep._login2_request("not a url at all", "alice", "hunter2", 5.0)
+
+    assert outcome == ("unreachable", None)
+
+
+def test_login2_reports_unreachable_on_a_deeply_nested_json_body() -> None:
+    # RecursionError, which is not a ValueError, so the json.loads guard
+    # missed it entirely.
+    with ra_server(_body_handler(200, b"[" * 100000)) as url:
+        outcome = ep._login2_request(url, "alice", "hunter2", 5.0)
+
+    assert outcome == ("unreachable", None)
+
+
+def test_login2_reads_a_bounded_body() -> None:
+    # An unbounded read() against a body that never ends is another way to
+    # block the session forever; the cap turns it into an ordinary success.
+    with ra_server(_endless_handler(), threaded=True) as url:
+        outcome = ep._login2(url, "alice", "hunter2", timeout=5.0)
+
+    assert outcome == ("success", "capped-tok")
+
+
+def test_main_absorbs_an_unexpected_failure_in_the_retroachievements_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # C3: an exception from anywhere in the RA step costs the achievements
+    # and nothing else. Anything else ends the session at the greeter, and
+    # nobody in the family can play until an admin logs in over SSH.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+
+    def explode(*_args: object, **_kwargs: object) -> int:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(ep, "apply_retroachievements", explode)
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "retroarch.cfg": {
+                        "format": "retroarch",
+                        "keys": {"menu_driver": "ozone"},
+                    }
+                },
+                "retroachievements": retroachievements_namespace(
+                    tmp_path,
+                    closed_port_url(),
+                    [plain_target("retroarch", "retroarch.cfg")],
+                ),
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 0
+
+    # The ordinary files are still written: only the achievements are lost.
+    assert 'menu_driver = "ozone"' in (appdata / "retroarch.cfg").read_text()
+    assert "No space left on device" in capsys.readouterr().err
+
+
+def test_main_still_refuses_a_malformed_retroachievements_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other half of the guard: a malformed owned-values document is a
+    # broken call site, and the greeter remains the correct answer to it.
+    # The blanket except must not swallow this into a silent success.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    target = plain_target("retroarch", "retroarch.cfg")
+    target["encoding"] = "rot13"
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {"retroarch.cfg": {"format": "retroarch", "keys": {}}},
+                "retroachievements": retroachievements_namespace(
+                    tmp_path, closed_port_url(), [target]
+                ),
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 1
+    assert "encoding" in capsys.readouterr().err
+    assert not (appdata / "retroarch.cfg").exists()

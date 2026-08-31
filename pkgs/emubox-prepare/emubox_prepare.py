@@ -51,12 +51,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import json
 import os
 import re
 import stat
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -64,7 +66,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -483,6 +485,16 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str]) -> bool:
 # the timeout path itself without the suite paying 5 seconds for it.
 LOGIN_TIMEOUT = 5.0
 
+# The three outcomes of a login attempt, spelled as a type so a typo in a
+# comparison against one of them is a checker error rather than a branch
+# that silently never runs.
+LoginOutcome = Literal["success", "rejected", "unreachable"]
+
+# The most of a login2 response body this program will read. RA's is a few
+# hundred bytes; a bare `read()` would let a server that never stops sending
+# fill the box's memory instead.
+_MAX_LOGIN_BODY = 65536
+
 # The cache is a bearer credential like the secrets it is derived from, so
 # it gets their mode regardless of what a previous run - or an admin's `chmod`
 # - left it at. `_write` preserves an existing file's mode for ordinary
@@ -548,7 +560,55 @@ def _read_cached_token(path: Path) -> str | None:
 
 def _login2(
     api_url: str, username: str, password: str, timeout: float
-) -> tuple[str, str | None]:
+) -> tuple[LoginOutcome, str | None]:
+    """The login2 call of `_login2_request`, under a wall-clock deadline.
+
+    `urlopen`'s own `timeout` is a per-socket-operation deadline, not a
+    total one: a server dribbling one byte every two seconds resets it on
+    every byte and blocks forever, and `socket.getaddrinfo` does not honour
+    it at all, so a blackholed DNS server costs the resolver's own budget -
+    tens of seconds - before the timeout is even armed. Either one strands
+    the box on a black screen, which is exactly what the spec's "the
+    network never blocks the session" and design D2's "worst case adds 5 s
+    before the frontend" forbid. Only a deadline around the whole call
+    delivers them.
+
+    A daemon thread joined with the timeout, rather than
+    `signal.setitimer`/SIGALRM: signals only work on the main thread of the
+    main interpreter, which is true of prepare today but stops being true
+    the moment anything calls this from a worker (the test suite already
+    drives it from several), and the signal route would also have to save
+    and restore whatever handler was installed. The abandoned work is one
+    socket read on a thread nobody joins: it is a daemon, so it cannot hold
+    the process open past `main` returning, and the per-socket timeout is
+    still passed down so it does not sit there forever in the ordinary
+    case. Nothing it could still append is read after the deadline.
+    """
+    outcome: list[tuple[LoginOutcome, str | None]] = []
+
+    def attempt() -> None:
+        try:
+            outcome.append(_login2_request(api_url, username, password, timeout))
+        except Exception as error:
+            # A thread that dies with an exception would otherwise print a
+            # bare traceback through threading's excepthook and leave the
+            # caller to infer the failure from an empty list. The RA step
+            # costs the achievements and nothing else (design D2), so it
+            # gets a journal line and the catch-all outcome.
+            note(f"the RetroAchievements login failed unexpectedly ({error!r})")
+            outcome.append(("unreachable", None))
+
+    worker = threading.Thread(target=attempt, daemon=True, name="emubox-ra-login2")
+    worker.start()
+    worker.join(timeout)
+    if not outcome:
+        return "unreachable", None
+    return outcome[0]
+
+
+def _login2_request(
+    api_url: str, username: str, password: str, timeout: float
+) -> tuple[LoginOutcome, str | None]:
     """POST RetroAchievements' login2 API, form-encoded per the RA docs.
 
     Returns exactly one of three outcomes, matching design D2's
@@ -568,8 +628,12 @@ def _login2(
     body = urllib.parse.urlencode(
         {"r": "login2", "u": username, "p": password}
     ).encode()
-    request = urllib.request.Request(api_url, data=body, method="POST")
     try:
+        # Inside the try, not above it: `Request` raises
+        # `ValueError("unknown url type")` for a URL whose scheme it does not
+        # recognise, and a malformed `api_url` has to cost the achievements
+        # like every other login failure rather than the whole session.
+        request = urllib.request.Request(api_url, data=body, method="POST")
         # S310 flags urlopen for an unbounded scheme (file://, etc.), which
         # matters when the URL comes from somewhere untrusted. Here it comes
         # from the retroachievements namespace's `api_url`, which - like
@@ -577,23 +641,34 @@ def _login2(
         # the module rendered, not anything a user or the network supplies;
         # the same trust boundary the rest of this program already assumes.
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            raw = response.read()
+            raw = response.read(_MAX_LOGIN_BODY)
     except urllib.error.HTTPError as error:
         # HTTPError is also an OSError (it subclasses URLError), so it must
         # be caught ahead of the broad except below to read its status code.
         if error.code in (401, 403):
             return "rejected", None
         return "unreachable", None
-    except OSError:
-        # Everything else urlopen can raise for a POST that never got a
-        # clean response: connection refused, DNS failure, and a timeout,
-        # which surfaces as TimeoutError - itself an OSError, not wrapped in
-        # HTTPError since no response was ever received to have a status.
+    except (OSError, ValueError, http.client.HTTPException, RecursionError):
+        # Four families, none of which may reach `main`:
+        #
+        # - OSError: connection refused, DNS failure, and a timeout, which
+        #   surfaces as TimeoutError - itself an OSError, not wrapped in
+        #   HTTPError since no response was ever received to have a status.
+        # - ValueError: the unrecognised URL scheme above.
+        # - http.client.HTTPException: a listener that answers with
+        #   something that is not HTTP at all - BadStatusLine, LineTooLong.
+        #   It is *not* an OSError, so it needs naming; anything on the
+        #   network can produce it.
+        # - RecursionError: raised rather than returned by the redirect
+        #   handling, and not an OSError either.
         return "unreachable", None
 
     try:
         payload = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # RecursionError beside ValueError because a deeply nested array is
+        # how `json.loads` fails on a hostile or corrupted body, and it is
+        # not a ValueError subclass.
         return "unreachable", None
     if isinstance(payload, dict) and payload.get("Success") is True:
         token = payload.get("Token")
@@ -1117,7 +1192,26 @@ def main(argv: Sequence[str]) -> int:
     # stay unaware that a key came from the retroachievements namespace
     # rather than the module that declared the file (design D1).
     if retroachievements is not None:
-        status = apply_retroachievements(tables, retroachievements, root)
+        try:
+            status = apply_retroachievements(tables, retroachievements, root)
+        except Exception as error:
+            # The subsystem's entire contract (design D2) is that any
+            # failure costs the achievements and nothing else: this program
+            # runs before every launch, so an exception escaping here ends
+            # the session at a greeter and nobody in the family can play.
+            # `/data` full or remounted read-only after a power cut is the
+            # most plausible way in, but the guard is deliberately blanket -
+            # an unforeseen failure in the newest, most exposed part of the
+            # program must not be able to take the frontend down with it.
+            #
+            # Distinct from the non-zero return below on purpose: a value of
+            # 1 means the owned-values document itself is malformed, which
+            # is a broken call site the greeter is the correct answer to.
+            note(
+                "the RetroAchievements step failed unexpectedly "
+                f"({error!r}); continuing without achievements"
+            )
+            status = 0
         if status != 0:
             return status
 

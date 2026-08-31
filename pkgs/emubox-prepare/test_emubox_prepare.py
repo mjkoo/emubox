@@ -9,7 +9,9 @@ calling and assert it is still 0 afterwards, so a rewrite that happens to
 produce identical bytes is still a failure.
 """
 
+import base64
 import contextlib
+import hashlib
 import http.server
 import json
 import os
@@ -24,6 +26,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import emubox_prepare as ep
 
@@ -1090,3 +1093,150 @@ def test_resolve_token_never_leaks_the_password(
     assert result is not None
     assert "hunter2" not in cache_file.read_text()
     assert "hunter2" not in capsys.readouterr().err
+
+
+# --- DuckStation's encrypted token (design D3) -----------------------------
+
+
+def _independent_duckstation_decrypt(
+    machine_id: bytes, username: str, ciphertext_b64: str
+) -> str:
+    """Decrypt a duckstation token without calling any of ep's own functions.
+
+    Re-derives the key and IV by design D3's steps directly - SHA-256 seed,
+    100 further rounds, key/IV split from the digest - rather than reusing
+    ep._duckstation_key_iv, so a bug shared between encrypt and decrypt
+    would not cancel out and hide behind a green round-trip test.
+    """
+    digest = hashlib.sha256(machine_id + username.encode()).digest()
+    for _ in range(100):
+        digest = hashlib.sha256(digest).digest()
+    key, iv = digest[:16], digest[16:32]
+    ciphertext = base64.b64decode(ciphertext_b64)
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+    return plaintext.rstrip(b"\x00").decode()
+
+
+def test_duckstation_token_round_trips_through_an_independent_decrypt() -> None:
+    machine_id = b"machine-id-bytes-for-the-round-trip-test\n"
+    username = "player_one"
+    token = "sess-token-0123456789abcdef"
+
+    encrypted = ep.encrypt_duckstation_token(machine_id, username, token)
+
+    assert _independent_duckstation_decrypt(machine_id, username, encrypted) == token
+
+
+def test_duckstation_token_matches_a_pinned_fixed_vector() -> None:
+    # Computed once from the implementation, then checked step by step
+    # against design D3's description - SHA-256 seed over machine id plus
+    # username, 100 FURTHER rounds over that seed (101 SHA-256 calls in
+    # total), key = digest[0:16], IV = digest[16:32], AES-128-CBC over the
+    # zero-padded token, base64 - before being pinned here. Its only job is
+    # to catch a silent change to the transform (an off-by-one round, a
+    # swapped key/IV split, PKCS#7 instead of zero padding) that a
+    # round-trip test alone would miss, because a self-consistent bug on
+    # both sides of encrypt/decrypt still round-trips.
+    machine_id = b"11111111111111111111111111111111\n"
+    username = "testuser"
+    token = "abcdef0123456789abcdef0123456789"
+
+    encrypted = ep.encrypt_duckstation_token(machine_id, username, token)
+
+    assert encrypted == "vs/l4/P2mg4aPqlzx+sppCBB+HjVOIk3shjxX5F0KHc="
+
+
+def test_duckstation_login_values_includes_username_and_encrypted_token(
+    tmp_path: Path,
+) -> None:
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("abc123\n")
+    target = {
+        "name": "duckstation",
+        "encoding": "duckstation",
+        "machine_id_file": str(machine_id_file),
+        "keys": {
+            "token": {"file": "settings.ini", "section": "Cheevos", "key": "Token"},
+        },
+    }
+
+    values = ep.duckstation_login_values(tmp_path, target, "alice", "tok-1")
+
+    assert values["username"] == "alice"
+    assert values["token"] == ep.encrypt_duckstation_token(
+        b"abc123\n", "alice", "tok-1"
+    )
+    assert "login_timestamp" not in values
+
+
+def test_duckstation_login_values_writes_login_timestamp_when_the_token_changes(
+    tmp_path: Path,
+) -> None:
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("abc123\n")
+    ini_path = tmp_path / "settings.ini"
+    ini_path.write_text("[Cheevos]\nToken = stale-ciphertext\n")
+    target = {
+        "name": "duckstation",
+        "encoding": "duckstation",
+        "machine_id_file": str(machine_id_file),
+        "keys": {
+            "token": {"file": str(ini_path), "section": "Cheevos", "key": "Token"},
+            "login_timestamp": {
+                "file": str(ini_path),
+                "section": "Cheevos",
+                "key": "LoginTimestamp",
+            },
+        },
+    }
+
+    values = ep.duckstation_login_values(tmp_path, target, "alice", "tok-1")
+
+    assert "login_timestamp" in values
+    assert values["login_timestamp"].isdigit()
+
+
+def test_duckstation_login_values_omits_login_timestamp_when_the_token_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    machine_id_file = tmp_path / "machine-id"
+    machine_id_file.write_text("abc123\n")
+    ini_path = tmp_path / "settings.ini"
+    encrypted = ep.encrypt_duckstation_token(b"abc123\n", "alice", "tok-1")
+    ini_path.write_text(f"[Cheevos]\nToken = {encrypted}\n")
+    target = {
+        "name": "duckstation",
+        "encoding": "duckstation",
+        "machine_id_file": str(machine_id_file),
+        "keys": {
+            "token": {"file": str(ini_path), "section": "Cheevos", "key": "Token"},
+            "login_timestamp": {
+                "file": str(ini_path),
+                "section": "Cheevos",
+                "key": "LoginTimestamp",
+            },
+        },
+    }
+
+    values = ep.duckstation_login_values(tmp_path, target, "alice", "tok-1")
+
+    assert "login_timestamp" not in values
+
+
+def test_duckstation_login_values_skips_login_when_machine_id_is_unreadable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = {
+        "name": "duckstation",
+        "encoding": "duckstation",
+        "machine_id_file": str(tmp_path / "missing-machine-id"),
+        "keys": {
+            "token": {"file": "settings.ini", "section": "Cheevos", "key": "Token"}
+        },
+    }
+
+    values = ep.duckstation_login_values(tmp_path, target, "alice", "tok-1")
+
+    assert values == {}
+    assert "missing-machine-id" in capsys.readouterr().err

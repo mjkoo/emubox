@@ -49,18 +49,24 @@ records it.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
 import stat
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import cast
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # ES-DE writes its settings as a rootless sequence of typed elements - pugixml
 # appends them straight to the document - so the file has no single root and
@@ -464,13 +470,15 @@ def _resolve_path(root: Path, value: str) -> Path:
     """A path from the retroachievements namespace, resolved like `files`.
 
     Same convention as the file map's paths (module docstring): relative
-    resolves under the appdata root, absolute is used as written. The
-    secrets store paths are always absolute in practice, but one rule for
-    every path in the namespace costs nothing and is one less thing to get
-    wrong at a call site.
+    resolves under the appdata root, absolute is used as written. `Path.
+    __truediv__` already implements exactly this rule - joining an absolute
+    path onto another discards the left side - which is also why `main`'s
+    own `root / relative` needs no such check; this is a named alias for
+    the same behaviour so every call site in this namespace reads the same
+    way. The secrets store paths are always absolute in practice, but one
+    rule for every path in the namespace is one less thing to get wrong.
     """
-    path = Path(value)
-    return path if path.is_absolute() else root / value
+    return root / value
 
 
 def _read_secret(path: Path) -> str | None:
@@ -604,6 +612,119 @@ def resolve_retroachievements_token(
     if cached is not None:
         return username, cached
     return None
+
+
+# --- DuckStation's encrypted token (design D3) ----------------------------
+
+
+def _duckstation_key_iv(machine_id: bytes, username: str) -> tuple[bytes, bytes]:
+    """The AES-128-CBC key and IV DuckStation v0.1-11752 derives for one account.
+
+    SHA-256 over the machine id file's raw bytes followed by the username's
+    UTF-8 bytes gives a seed digest; "100 further rounds" (design D3, and
+    the Context section's verified reading of `achievements.cpp`) then
+    re-hashes that seed 100 more times. That is 101 SHA-256 calls in total,
+    not 100 - the seed digest is the *result* of the first call, and the
+    100 further rounds start from it rather than being counted from zero.
+    Getting this off by one silently produces a token DuckStation rejects,
+    since the whole scheme has no error signal of its own; only a fixed
+    test vector catches a regression here.
+    """
+    digest = hashlib.sha256(machine_id + username.encode()).digest()
+    for _ in range(100):
+        digest = hashlib.sha256(digest).digest()
+    return digest[:16], digest[16:32]
+
+
+def encrypt_duckstation_token(machine_id: bytes, username: str, token: str) -> str:
+    """The base64 ciphertext DuckStation v0.1-11752 stores as `Cheevos.Token`.
+
+    AES-128-CBC over the token's UTF-8 bytes, zero-padded up to the next
+    16-byte block boundary (not PKCS#7 - DuckStation pads with zero bytes,
+    and a token that already lands on a block boundary gets no padding at
+    all). The scheme has no randomness: the same three inputs always
+    produce the same string, which is what lets the write path treat it
+    like any other owned value under the ordinary assert-and-compare flow.
+    """
+    key, iv = _duckstation_key_iv(machine_id, username)
+    plaintext = token.encode()
+    plaintext += b"\x00" * ((-len(plaintext)) % 16)
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    ciphertext = encryptor.update(plaintext) + encryptor.finalize()
+    return base64.b64encode(ciphertext).decode()
+
+
+def _current_ini_value(path: Path, section: str, key: str) -> str | None:
+    """The value already on disk for one INI key, read quietly.
+
+    Deliberately not the editors' `_parse_ini`: that parser's job is to
+    decide whether a file is healthy enough to edit in place, and it notes
+    ("recreating it") whenever it is not. Calling it here - purely to see
+    what a key currently holds - would print a spurious recreation notice
+    before this run has decided to write anything. A missing file, an
+    unreadable one or a key that is not there all mean the same thing here:
+    there is nothing to compare against, so treat it as changed.
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    lines = _lines(text.rstrip("\n"))
+    bounds = _ini_section_bounds(lines, section)
+    if bounds is None:
+        return None
+    index = _ini_key_index(lines, *bounds, key)
+    if index is None:
+        return None
+    assignment = _split_ini_assignment(lines[index])
+    assert assignment is not None  # _ini_key_index only matches these
+    return assignment[2].strip()
+
+
+def duckstation_login_values(
+    root: Path, target: Mapping[str, object], username: str, token: str
+) -> dict[str, str]:
+    """The username/token/login_timestamp values for one duckstation target.
+
+    Returns "username" and "token" (already encrypted, ready to write
+    verbatim) unconditionally, and "login_timestamp" only when the target
+    declares that key and the newly encrypted token differs from what the
+    ini file already holds - design D3's change-gating, without which an
+    unchanged token would still rewrite the file, and its timestamp, on
+    every single run. An unreadable machine-id file notes the failure and
+    returns an empty mapping, so the caller folds in no username or token
+    for this target while still writing its enabled and hardcore keys.
+    """
+    machine_id_file = _resolve_path(root, str(target["machine_id_file"]))
+    try:
+        machine_id = machine_id_file.read_bytes()
+    except OSError as error:
+        note(f"{machine_id_file} could not be read ({error}); skipping its RA login")
+        return {}
+
+    encrypted = encrypt_duckstation_token(machine_id, username, token)
+    values = {"username": username, "token": encrypted}
+
+    keys_value = target.get("keys")
+    if isinstance(keys_value, dict) and "login_timestamp" in keys_value:
+        # `cast`, not the `isinstance` narrowing alone, because a checker
+        # narrows `isinstance(x, dict)` on an `object` to an unparameterized
+        # `dict` that cannot then be subscripted by a `str` key (dict is
+        # invariant in its type parameters). The owned-values document's
+        # shape is validated at the top of `main` before any target is
+        # built, so treating this as `Mapping[str, object]` here is a
+        # checker accommodation, not a real type hazard.
+        keys = cast("Mapping[str, object]", keys_value)
+        token_entry = cast("Mapping[str, object]", keys["token"])
+        current = _current_ini_value(
+            _resolve_path(root, str(token_entry["file"])),
+            str(token_entry["section"]),
+            str(token_entry["key"]),
+        )
+        if current != encrypted:
+            values["login_timestamp"] = str(int(time.time()))
+
+    return values
 
 
 # --- The custom systems step ----------------------------------------------

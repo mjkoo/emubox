@@ -216,6 +216,15 @@
         system:
         let
           pkgs = pkgsFor system;
+          # emubox-prepare's own interpreter, carrying pytest to run its
+          # tests by hand and cryptography for the DuckStation token
+          # transform it imports - one environment, not python3 plus a
+          # separately-wrapped python3.pkgs.pytest, so `import cryptography`
+          # works from the same `pytest` this shell puts on PATH.
+          preparePython = pkgs.python3.withPackages (ps: [
+            ps.pytest
+            ps.cryptography
+          ]);
         in
         {
           default = pkgs.mkShell {
@@ -236,8 +245,7 @@
               # emubox-prepare: what its checkPhase runs, so the same
               # commands are available by hand. `nix fmt` reaches ruff
               # through the formatter override, but only for formatting.
-              python3
-              python3.pkgs.pytest
+              preparePython
               ruff
               ty
               # binary cache (`just cache-push`)

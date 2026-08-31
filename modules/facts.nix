@@ -9,7 +9,7 @@
       description = ''
         Public key of the `emubox` Cachix cache (`emubox.cachix.org-1:...`),
         which holds the store paths cache.nixos.org never has (the unfree
-        emulator cores, the vendored packages). Null until the cache exists;
+        emulator cores and what pkgs/ builds). Null until the cache exists;
         the substituter is only configured once it is set.
       '';
     };

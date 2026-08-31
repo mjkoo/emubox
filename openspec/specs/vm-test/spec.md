@@ -1,6 +1,6 @@
 ## Purpose
 
-CI proves what the host configuration guarantees, the base layer's ephemeral root, persisted state, secrets and networking declaration, and the presence of the programs the box installs, on every push without hardware, through the same boot path the real box uses.
+CI proves what the host configuration guarantees on every push, without hardware. In a VM twice over: through the same boot path the real box uses, for the base layer's ephemeral root, persisted state, secrets and networking declaration and the presence of the programs the box installs; and on a plain node with a graphical stack, for the kiosk session. Outside a VM once: the config editor's unit tests, lint and type check, which run on every system the flake is checked on, the admin's Mac included.
 
 ## Requirements
 
@@ -55,9 +55,23 @@ The test SHALL assert, on the booted node, that the frontend and the vendored em
 - **WHEN** the test runs `es-de --version` on the booted node, which has no display
 - **THEN** the command succeeds and its output contains `ES-DE 3.4.1`
 
+### Requirement: The kiosk session is proven in a second VM
+A second VM test SHALL boot the host's software modules as a plain test node with a graphical stack (no disk layout, no boot loader, enough memory for the frontend, a virtual GPU) and SHALL assert, on that node: the display manager active, `player` holding the seat's active session, the frontend running inside the compositor within the test's startup budget, the settings file carrying the flake-owned values including the unlock sequence the configuration declares, the custom systems file present for a non-empty definition and absent for an empty one, a relaunch after the frontend is killed, a reboot returning to the frontend, and, after three consecutive short runs, no frontend running with the display manager still serving a login. The `kiosk` capability owns the constants these assertions check against; the wait budgets and test-only thresholds it uses to do so are implementation choices of the test, not requirements. The install test is unchanged by this requirement and keeps its display manager off. Which VM tests `nix flake check` runs, and that each is runnable on its own, is stated once by the "The test runs in CI and locally" requirement and is not restated here.
+
+#### Scenario: Session assertions
+- **WHEN** the kiosk test node has booted
+- **THEN** each behaviour this requirement lists is asserted on that node, and the test fails if any assertion does not hold
+
+### Requirement: The config editor is tested without a VM
+The program that seeds and asserts configuration files SHALL be unit-tested, linted and type-checked as part of its build, and those checks SHALL run under `nix flake check` on every system the flake is checked on, including the admin's macOS machine.
+
+#### Scenario: Editor checks on macOS
+- **WHEN** `nix flake check` runs on the admin's macOS machine
+- **THEN** the config editor's tests, lint and type check run and their failure fails the check
+
 ### Requirement: The test runs in CI and locally
-The test SHALL be part of `nix flake check` so CI runs it on every push, and SHALL be runnable with the documented recipe on any `x86_64-linux` builder that exposes KVM; CI's runner is the one this change uses, and no local KVM builder is assumed.
+Each VM test SHALL be part of `nix flake check` so CI runs it on every push, and SHALL be runnable with a documented recipe on any `x86_64-linux` builder that exposes KVM; CI's runner is the one the tests are built on, and no local KVM builder is assumed.
 
 #### Scenario: CI runs the test
 - **WHEN** a push to `main` or a pull request runs CI
-- **THEN** the VM test is built and its failure fails the job
+- **THEN** every VM test the flake defines is built and any one's failure fails the job

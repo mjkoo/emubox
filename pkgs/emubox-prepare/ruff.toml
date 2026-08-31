@@ -1,0 +1,5 @@
+# Defaults plus ARG: an unused argument in an editor signature is almost
+# always a key table or a path that stopped being threaded through.
+# Under `[lint]` rather than at the top level, which this ruff deprecates.
+[lint]
+extend-select = ["ARG"]

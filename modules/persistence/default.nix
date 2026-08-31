@@ -31,7 +31,7 @@ in
       # future re-queue of the unit while /sysroot is up (see
       # RemainAfterExit below) is a skipped, logged no-op rather than the
       # deletion of the live root. A skipped wipe shows up as surviving
-      # markers in the VM test.
+      # markers in the install test.
       ConditionPathIsMountPoint = "!/sysroot";
     };
     # The partition's device unit is what sysroot.mount itself waits for;

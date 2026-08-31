@@ -21,10 +21,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # The VM test needs KVM. The runner has /dev/kvm, but as 0660 root:kvm,
-      # which the nix build users cannot open: nix still advertises the
-      # `kvm` feature and schedules the test, QEMU's accel=kvm:tcg silently
-      # falls back to TCG, and the run crawls into the driver's timeout.
+      # Both VM tests need KVM. The runner has /dev/kvm, but as 0660
+      # root:kvm, which the nix build users cannot open: nix still
+      # advertises the `kvm` feature and schedules them, QEMU's
+      # accel=kvm:tcg silently falls back to TCG, and the run crawls into
+      # the driver's timeout.
       - name: Make /dev/kvm openable by the nix build users
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm-nix.rules
@@ -47,7 +48,7 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
       # The project's public binary cache: what cache.nixos.org never has
-      # (the unfree emulator cores, the vendored packages), also used by the
+      # (the redistributable unfree cores and what pkgs/ builds), also used by the
       # box and the Mac's builder. Pull only here; the push is the explicit
       # step at the end, so a system toplevel's closure never goes up.
       - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17

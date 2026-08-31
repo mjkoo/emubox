@@ -25,25 +25,40 @@ fmt-check:
 flake-check:
     nix flake check
 
-# Evaluate the host closure and both x86_64-linux checks without building (works on macOS)
+# Evaluate the host closure and the x86_64-linux checks without building (works on macOS)
 eval:
     nix eval --raw .#nixosConfigurations.{{host}}.config.system.build.toplevel.drvPath
     nix eval --raw .#checks.x86_64-linux.vm.drvPath
+    nix eval --raw .#checks.x86_64-linux.kiosk.drvPath
+    nix eval --raw .#checks.x86_64-linux.session.drvPath
     nix eval --raw .#checks.x86_64-linux.closure-no-secrets.drvPath
 
 # Build the host closure (needs an x86_64-linux builder)
 build:
     nix build .#nixosConfigurations.{{host}}.config.system.build.toplevel --no-link --print-out-paths
 
-# Build and run the VM test (x86_64-linux builder with KVM)
+# Build and run the install VM test (x86_64-linux builder with KVM)
 vm-test:
     nix build .#checks.x86_64-linux.vm --no-link
+
+# Build and run the kiosk VM test (x86_64-linux builder with KVM)
+kiosk-test:
+    nix build .#checks.x86_64-linux.kiosk --no-link
+
+# Build the kiosk session script, which is what runs its shellcheck
+# (x86_64-linux builder, no KVM needed). writeShellApplication shellchecks in
+# its check phase, and `just check-all` is evaluation-only, so without this an
+# edit to emubox-session can pass every check runnable on macOS and still fail
+# CI. Seconds, unlike `just build`.
+session-check:
+    nix build .#checks.x86_64-linux.session --no-link
 
 # Prove no test secret value is in the system closure (x86_64-linux builder)
 closure-check:
     nix build .#checks.x86_64-linux.closure-no-secrets --no-link
 
-# Push the cache roots (unfree cores, vendored packages) to the emubox Cachix
+# Push the cache roots (redistributable unfree cores, the packages pkgs/
+# builds) to the emubox Cachix
 # cache, as CI does; needs CACHIX_AUTH_TOKEN and an x86_64-linux builder
 cache-push:
     nix build .#packages.x86_64-linux.cache-roots --no-link --print-out-paths | xargs cachix push emubox
@@ -69,7 +84,7 @@ secrets-edit:
 secrets-rekey:
     SOPS_AGE_KEY_FILE={{quote(age_key)}} sops updatekeys secrets/secrets.yaml
 
-# Edit the VM test's secrets (decrypts with the committed test host key)
+# Edit the VM tests' secrets (decrypts with the committed test host key)
 test-secrets-edit:
     SOPS_AGE_KEY="$(ssh-to-age -private-key -i tests/test_host_ed25519_key)" sops secrets/test.yaml
 

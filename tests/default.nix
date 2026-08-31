@@ -1,4 +1,5 @@
-# The VM test: disko's `installTest` over the real host configuration.
+# The install VM test: disko's `installTest` over the real host
+# configuration. The session the box shows is tests/kiosk.nix's subject.
 #
 # This is a NixOS module. `flake.nix` extends `nixosConfigurations.emubox`
 # with it; the harness then formats the real disko layout in an installer
@@ -21,7 +22,9 @@
 # budget): the graphical stack is neither started nor waited on, the
 # console login lands on tty1's getty instead of a VT the kiosk session
 # picks at runtime, and the initrd, persistence, secrets and networking
-# paths are unaffected. The graphical session is proven on hardware.
+# paths are unaffected. The graphical session is proven by tests/kiosk.nix,
+# which boots the same modules as a plain node with a memory knob and a
+# virtual GPU; what needs a screen and a person stays a bring-up item.
 { config, lib, ... }:
 let
   values = import ./values.nix;

@@ -11,8 +11,8 @@ off-site save backups, and remote administration over a Cloudflare Tunnel.
 flake.nix          inputs, nixosConfigurations.emubox, packages, checks, devShell
 hosts/emubox/      the physical box: hardware facts, disko layout
 modules/           the software stack, one directory per concern
-overlays/, pkgs/   vendored packages (ES-DE, freeimage, DuckStation)
-tests/             VM test module (disko install test), test values and test key
+overlays/, pkgs/   the packages the flake builds: vendored, and its own
+tests/             VM tests (disko install, kiosk session), test values and key
 secrets/           sops files (encrypted); recipients in .sops.yaml
 ```
 
@@ -21,25 +21,45 @@ secrets/           sops files (encrypted); recipients in .sops.yaml
 `direnv allow` (or `nix develop`) provides every tool the justfile needs;
 `just` lists the recipes. `just check-all` runs everything that can run
 on this machine: the formatting, flake check and evaluation steps CI runs,
-plus the workflow lint. Evaluating the host and both Linux checks works
+plus the workflow lint. Evaluating the host and the Linux checks works
 from macOS; building the host (`just build`, `just closure-check`) needs
-an `x86_64-linux` builder, and the VM test (`just vm-test`) needs one that
+an `x86_64-linux` builder, and the two VM tests (`just vm-test` for the
+disko install test, `just kiosk-test` for the kiosk session) need one that
 exposes KVM. CI builds all of it on every push.
 
+One local gap is worth knowing about: the kiosk session script is a
+`writeShellApplication`, so shellcheck runs when it is *built*, and nothing
+in `just check-all` builds anything. An edit to it can pass every check
+macOS can run and still fail CI. `just session-check` builds just that
+script on an `x86_64-linux` builder (no KVM, seconds rather than a closure)
+and is the quick way to check it.
+
+`emubox-prepare` is Python, so `nix flake check` and `nix fmt` cover more
+than Nix. Its unit tests, `ruff check`, `ruff format --check` and `ty check`
+run in the package's own `checkPhase`, and `checks.<system>.emubox-prepare`
+is defined for every system, so `nix flake check` runs them natively on
+macOS with no VM involved. `nix fmt` formats Python as well as Nix, and
+`nix fmt -- --ci` (what `just fmt-check` and CI run) checks both.
+
 The `emubox` Cachix cache (`https://emubox.cachix.org`) holds what
-cache.nixos.org never has: the unfree emulator cores and the vendored
-packages, the flake's `cache-roots` output. CI pushes it after a green
+cache.nixos.org never has, the flake's `cache-roots` output, in three
+kinds: the redistributable unfree emulator cores, the vendored packages,
+and the programs this project writes itself. Every one of them carries a
+licence permitting redistribution of the form pushed - for the cores that
+is enforced by the selection, which admits only cores whose licence
+metadata records that permission, rather than merely asserted. CI pushes it after a green
 run (`just cache-push` does the same by hand with `CACHIX_AUTH_TOKEN`
 set), the box substitutes from it once `binaryCachePublicKey` is set in
 `hosts/emubox/facts.nix`, and a local builder gains the same by adding the
 cache to its own `nix.settings`.
 
-### Vendored packages
+### Packages the flake builds
 
-`pkgs/` holds the three packages the pinned nixpkgs no longer carries,
-built against the flake's own nixpkgs and exposed both through the
-overlay and as `packages.x86_64-linux.{es-de,freeimage,duckstation}`.
-Each `package.nix` opens with where it came from and why it is here.
+`pkgs/` holds what this project builds rather than takes from nixpkgs,
+built against the flake's own nixpkgs and exposed both through the overlay
+and as `packages.x86_64-linux.*`. Each `package.nix` opens with where it
+came from and why it is here. Three are vendored, because the pinned
+nixpkgs no longer carries them; the fourth is the project's own.
 
 - `es-de`, the frontend, is built from source at release 3.4.1 with the
   in-app updater compiled out, from the derivation nixpkgs removed in PR
@@ -62,6 +82,60 @@ Each `package.nix` opens with where it came from and why it is here.
   edit `version` in `pkgs/duckstation/package.nix`, set
   `hash = lib.fakeHash`, rebuild, and record the hash the failed fetch
   reports; nothing else in the file changes.
+- `emubox-prepare` is not vendored: it is this project's own program, the
+  config editor the kiosk session runs before every launch of the frontend
+  (see below). One stdlib-only Python file, whose unit tests, lint and type
+  check run in its build.
+
+The repository itself is MIT licensed (`LICENSE`), which is what the
+programs it writes carry onto the public cache. The vendored packages keep
+their upstream licences, recorded in each `package.nix`.
+
+## Kiosk session
+
+Power-on reaches the game library with nobody touching a keyboard. SDDM
+logs `player` in automatically and starts the `emubox` Wayland session,
+whose script loops: assert the settings the flake owns, then run the
+frontend full screen under the `cage` compositor. When ES-DE exits the
+loop relaunches it after two seconds, so quitting a game or a crash
+mid-play returns to the library rather than to a blank screen.
+
+A frontend that cannot stay up ends somewhere a person can act. A run
+shorter than 60 seconds counts as a crash; three in a row and the session
+script exits. Because SDDM's autologin is configured for the first start
+only (`relogin = false`), what appears then is its login greeter, not
+another doomed relaunch. `admin` can log in there and read the journal,
+choosing the recovery desktop from the greeter's session list rather than
+the pre-selected `emubox` session, which is `player`'s. A reboot restores
+automatic login and starts over.
+
+The frontend runs in ES-DE's kiosk UI mode: no metadata editor, no
+scraper, no collection editing, every game still launchable. The full menu
+is behind an unlock sequence, `emubox.kiosk.passkey`, which defaults to
+ES-DE's own `uuddlrlrba` until the host sets another. Kiosk mode is
+reasserted before every launch, so unlocking the full menu once does not
+leave the box unlocked after the next restart.
+
+`emubox-prepare` is what asserts it. The flake owns exactly these ES-DE
+settings - the UI mode, the unlock sequence, the ROM and media directories
+under `/data`, the `linear-es-de` theme, the `en_US` language and the quit
+menu - and leaves every other setting as the frontend last wrote it, so a
+preference changed in ES-DE's own menus survives a reboot. A settings file
+that cannot be read (truncated by a frontend killed mid-write, say) is
+replaced rather than treated as a failure, because the alternative is the
+family staring at a greeter.
+
+`emubox.kiosk.customSystems` takes the complete contents of an ES-DE
+custom `es_systems.xml`, `<systemList>` wrapper included, written verbatim
+to `/data/es-de/custom_systems/`. Empty, its default, means no such file
+exists and a stale one from an earlier configuration is removed.
+
+Power off and reboot come from the frontend's own QUIT menu, each behind a
+confirmation, and reach logind as `player` through a polkit rule. Upstream
+ES-DE hides that menu entirely in kiosk mode, so `pkgs/es-de` carries a
+patch that shows it and, in kiosk mode, offers only those two entries:
+quitting the frontend would just be relaunched by the loop, and the box
+refuses to suspend.
 
 ## Install
 
@@ -165,3 +239,29 @@ The boot stops in the initrd's emergency mode by design rather than
 continuing with an empty root: both volumes are needed for boot, and a
 root populated without them would have no persisted state, no secrets and
 no user data. Fix the disk, or reinstall.
+
+## Bring-up checklist
+
+Items that need the physical box, the real TV or a controller in hand, and
+so are settled at bring-up rather than in CI. The `TODO(bring-up)` comments
+in `hosts/emubox/facts.nix` mark the two facts; this list is where the rest
+live, and there is no second list.
+
+- The four USB-A `ID_PATH` values in physical port order, and the connector
+  the TV is actually on (`hdmiOutput`): both `TODO(bring-up)` in
+  `hosts/emubox/facts.nix`.
+- A stable `by-id` disk path replacing today's probe-order
+  `by-diskseq` one, once the real disk is known (see "Reinstall and disk
+  swap").
+- Boot time under 30 seconds, measured power-on to the frontend being
+  usable. This is the end-to-end number for a person waiting in front of
+  the TV; it is not the kiosk session's 60-second crash window, nor the
+  kiosk VM test's 120-second wait budget, and none of the three is derived
+  from the others.
+- The TV's native mode driven without overscan or rescaling.
+- Power off from the patched quit menu, chosen on a controller, on the real
+  TV: that the menu applies is proven by the build, but how it looks and
+  that the sequence works end to end is not.
+- The unlock sequence entered on a controller. The kiosk VM test proves the
+  configured passkey reaches the settings file; that entering it unlocks
+  the full menu is ES-DE's own behaviour and needs real input.

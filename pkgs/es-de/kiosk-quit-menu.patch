@@ -1,0 +1,53 @@
+--- a/es-app/src/guis/GuiMenu.cpp
++++ b/es-app/src/guis/GuiMenu.cpp
+@@ -82,8 +82,11 @@
+     if (isFullUI)
+         addEntry(_("UTILITIES"), mMenuColorPrimary, true, [this] { openUtilities(); });
+ 
+-    if (!Settings::getInstance()->getBool("ForceKiosk") &&
+-        Settings::getInstance()->getString("UIMode") != "kiosk") {
++    // emubox: upstream hides the whole quit menu in kiosk mode (commit
++    // defb16b6). The box has no other way to power off from the frontend,
++    // so the entry is added whatever the UI mode; openQuitMenu() below is
++    // what keeps kiosk mode from offering to quit or suspend.
++    {
+ #if defined(__APPLE__)
+         addEntry(_("QUIT ES-DE"), mMenuColorPrimary, false, [this] { openQuitMenu(); });
+ #elif defined(__ANDROID__)
+@@ -2377,10 +2380,15 @@
+ 
+ void GuiMenu::openQuitMenu()
+ {
++    // emubox: the effective kiosk mode, as the UI-mode check above reads it.
++    const bool isKiosk {Settings::getInstance()->getBool("ForceKiosk") ||
++                        Settings::getInstance()->getString("UIMode") == "kiosk"};
+ #if defined(__APPLE__) || defined(__ANDROID__)
+     if (true) {
+ #else
+-    if (!Settings::getInstance()->getBool("ShowQuitMenu")) {
++    // emubox: `&& !isKiosk`, so kiosk mode reaches the submenu below rather
++    // than this box, which quits the frontend, whatever ShowQuitMenu says.
++    if (!Settings::getInstance()->getBool("ShowQuitMenu") && !isKiosk) {
+ #endif
+         mWindow->pushGui(new GuiMsgBox(
+             _("REALLY QUIT?"), _("YES"),
+@@ -2410,7 +2418,8 @@
+             _("QUIT ES-DE"), Font::get(FONT_SIZE_MEDIUM), mMenuColorPrimary);
+         quitText->setSelectable(true);
+         row.addElement(quitText, true);
+-        s->addRow(row);
++        if (!isKiosk) // emubox: the session relaunches the frontend anyway.
++            s->addRow(row);
+ 
+         row.elements.clear();
+         row.makeAcceptInputHandler([window] {
+@@ -2467,7 +2476,8 @@
+             _("SUSPEND SYSTEM"), Font::get(FONT_SIZE_MEDIUM), mMenuColorPrimary);
+         suspendText->setSelectable(true);
+         row.addElement(suspendText, true);
+-        s->addRow(row);
++        if (!isKiosk) // emubox: the box refuses to suspend (modules/hardware).
++            s->addRow(row);
+ #endif
+ 
+         s->setSize(mSize);

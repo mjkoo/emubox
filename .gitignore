@@ -2,3 +2,7 @@
 result
 result-*
 .scratch/
+# Python tooling in pkgs/emubox-prepare when its checks are run by hand
+__pycache__/
+.pytest_cache/
+.ruff_cache/

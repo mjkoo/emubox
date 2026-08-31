@@ -2084,25 +2084,37 @@ def test_resolve_token_falls_back_to_the_cache_when_the_server_dribbles(
     assert elapsed < dribble
 
 
-def _login_threads() -> list[threading.Thread]:
-    return [t for t in threading.enumerate() if t.name == "emubox-ra-login2"]
+def _login_threads() -> set[threading.Thread]:
+    return {t for t in threading.enumerate() if t.name == "emubox-ra-login2"}
+
+
+def _wait_for_login_threads(timeout: float) -> bool:
+    """Whether every abandoned login thread has finished within `timeout`."""
+    deadline = time.monotonic() + timeout
+    while _login_threads() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return not _login_threads()
 
 
 def test_login2_does_not_leave_its_abandoned_request_running() -> None:
     # The wall-clock deadline abandons the request rather than cancelling
     # it, which leaves the per-socket timeout a job of its own: without it
     # the abandoned thread sits in recv for as long as the server holds the
-    # connection - five seconds here, indefinitely on a half-up network.
+    # connection - ten seconds here, indefinitely on a half-up network.
+    #
+    # An earlier test may still have an abandoned request finishing, so the
+    # field is cleared first; after that any surviving login thread is this
+    # test's own. The thread is deliberately not held onto - it may well be
+    # gone before the call even returns, which is the passing case.
+    assert _wait_for_login_threads(5.0), "an earlier login was still running"
+
     with ra_server(_sleepy_handler(10.0), threaded=True) as url:
         assert ep._login2(url, "alice", "hunter2", timeout=0.2) == (
             "unreachable",
             None,
         )
-        deadline = time.monotonic() + 3.0
-        while _login_threads() and time.monotonic() < deadline:
-            time.sleep(0.02)
 
-        assert not _login_threads()
+        assert _wait_for_login_threads(5.0)
 
 
 # The four exception families below are asserted against `_login2_request`,

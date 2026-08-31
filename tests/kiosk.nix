@@ -1074,6 +1074,13 @@ assert lib.assertMsg
           f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
               "Display": {"Fullscreen": "True"},
               "Core": {"CPUThread": "False"},
+              # The emulators spec's "no emulator setup screen in the path
+              # from choosing a game to playing it", for the third emulator
+              # that has one: Dolphin's analytics consent dialog is modal
+              # and is NOT skipped by the `-b` ES-DE launches it with.
+              # `PermissionAsked` is what suppresses it; `Enabled` pins the
+              # answer the suppressed dialog would otherwise have decided.
+              "Analytics": {"PermissionAsked": "True", "Enabled": "False"},
           },
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
               "UI": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},

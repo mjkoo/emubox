@@ -990,6 +990,59 @@ in
           # dual core *off* - the UI's "Enable Dual Core" checkbox is this
           # same key inverted (DolphinQt/Settings/GeneralPane.cpp:144).
           Core.CPUThread = "False";
+          # Dolphin's first-run analytics consent dialog, the third
+          # instance of the same shape PCSX2's `UI.SetupWizardIncomplete`
+          # and DuckStation's `Main.SetupWizardIncomplete` already close:
+          # something modal standing between choosing a game and playing
+          # it, on a box whose only input device is a controller.
+          #
+          # Verified at the tag this flake's nixpkgs actually locks,
+          # dolphin-emu `2603a` (`pkgs.dolphin-emu.src.rev` is
+          # `refs/tags/2603a`):
+          #
+          # - `Source/Core/DolphinQt/Main.cpp:266-284` shows
+          #   `ShowAnalyticsPrompt(&win)` whenever
+          #   `!Config::Get(Config::MAIN_ANALYTICS_PERMISSION_ASKED)`. Its
+          #   only guard is `#if defined(USE_ANALYTICS) && USE_ANALYTICS`.
+          #   Batch mode does NOT skip it: the block immediately below, at
+          #   lines 286-291, is the one wrapped in
+          #   `if (!Settings::Instance().IsBatchModeEnabled())`, and that
+          #   wraps the `Updater`, not this. ES-DE launches Dolphin as
+          #   `-b -e %ROM%` (the frontend override table above), so `-b`
+          #   buys nothing here.
+          # - `Source/Core/DolphinQt/QtUtils/AnalyticsPrompt.cpp:15-41`
+          #   is a `ModalMessageBox` with Yes/No and a blocking `exec()`.
+          # - `Source/Core/Core/Config/MainSettings.cpp:451-454` declares
+          #   `MAIN_ANALYTICS_ENABLED{{System::Main, "Analytics",
+          #   "Enabled"}, false}` and `MAIN_ANALYTICS_PERMISSION_ASKED{...
+          #   "PermissionAsked"}, false}`, and
+          #   `Core/ConfigLoaders/BaseConfigLoader.cpp:129` maps
+          #   `System::Main` to `F_DOLPHINCONFIG_IDX`, i.e.
+          #   `Dolphin.ini` (`Common/CommonPaths.h:104`) - so these are
+          #   `[Analytics] PermissionAsked` / `Enabled` in the file bound
+          #   above, both defaulting false.
+          # - `CMakeLists.txt:107` is `option(ENABLE_ANALYTICS "..." ON)`
+          #   and lines 585-587 turn it into `-DUSE_ANALYTICS=1`. The
+          #   locked nixpkgs `dolphin-emu` passes no
+          #   `-DENABLE_ANALYTICS=OFF` (its `cmakeFlags` are only
+          #   `DISTRIBUTOR`, `DOLPHIN_WC_DESCRIBE`, `DOLPHIN_WC_BRANCH`
+          #   and `CMAKE_POLICY_VERSION_MINIMUM`) and carries no patches,
+          #   so this flake's build really does compile the prompt in.
+          #   This is the check the earlier Azahar comment skipped and had
+          #   to be corrected for; it is done here first.
+          #
+          # `PermissionAsked = True` is what suppresses the dialog.
+          # `Enabled = False` is owned alongside it for the same reason
+          # ScummVM's `confirm_exit` is: the prompt is the only thing that
+          # would ever have set the value, so suppressing the prompt
+          # without pinning the answer would leave the box's reporting
+          # posture to whatever Dolphin's default happened to be at the
+          # next bump. False is also what `ShowAnalyticsPrompt` writes for
+          # a "No", so this is the declined answer, stated declaratively.
+          # `True`/`False` capitalized, per `Core.CPUThread`'s own citation
+          # of `StringUtil.cpp:290-293` above - the same writer emits both.
+          Analytics.PermissionAsked = "True";
+          Analytics.Enabled = "False";
         };
       };
       # No performance keys of its own - see the comment on
@@ -1054,8 +1107,14 @@ in
         keys = {
           Graphics.FullScreen = "True";
           # No suppressible splash or first-run dialog exists in PPSSPP's
-          # source to own a "quiet-start" key for - `FirstRun` only gates a
-          # one-line OSD toast, not a blocking dialog.
+          # source to own a "quiet-start" key for, checked rather than
+          # skipped: at the locked `pkgs.ppsspp.version` 1.20.4 the only
+          # reader of the `FirstRun` setting (`Core/Config.cpp:231`) is
+          # `UI/EmuScreen.cpp:397-401`, which shows a self-dismissing OSD
+          # toast ("Press ESC to open the pause menu") through `g_OSD.Show`
+          # - not a `screenManager()->push` of any dialog, and nothing that
+          # blocks the boot it sits inside. So there is no Dolphin- or
+          # PCSX2-shaped consent or wizard key to own here.
         };
       };
 
@@ -1179,6 +1238,27 @@ in
         keys = {
           scummvm = {
             fullscreen = "true";
+            # No first-run key here, and it was checked rather than
+            # skipped. ScummVM 2026.1.0 (the locked `pkgs.scummvm.version`)
+            # has exactly one startup-time modal that fires on a config
+            # with no prior state: `base/main.cpp:621-625`'s
+            # `GUI::UpdatesDialog` ("check for updates?"), shown when
+            # `!ConfMan.hasKey("updates_check")`. It is compiled out here.
+            # `configure:7291-7301` only defines `USE_UPDATES` when
+            # `_sparkle` is `yes`, and `_sparkle` is only ever probed
+            # under `case $_host_os in darwin*|mingw*` (configure:5910
+            # onward) - on Linux it keeps its `configure:170` initial
+            # value `auto`, so `--enable-release` (the one flag nixpkgs
+            # passes) setting `_updates=yes` at configure:1584 is undone
+            # again at 7295. The guard is doubled anyway:
+            # `OSystem::getUpdateManager` (`common/system.h:1781`) returns
+            # null on this backend, which the same `if` also requires.
+            # `main.cpp:592`'s "Bad config file format. overwrite?" is not
+            # a first-run dialog - it needs an already-corrupt config, and
+            # prepare's recreate policy is what answers that case.
+            #
+            # PPSSPP was checked the same way; see its own `keys` block
+            # above for the verdict (an OSD toast, not a dialog).
             # Suppresses the "really quit?" confirmation dialog.
             confirm_exit = "false";
             # false is what makes quitting a game exit the process (and so

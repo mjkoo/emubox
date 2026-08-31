@@ -241,7 +241,24 @@ headless (`video_driver` overridden for the run) with one freely
 redistributable homebrew ROM per BIOS-free core family, fetched by
 URL and hash as test-only fixtures, asserting exit 0 and a core log
 line; standalones smoke-launched just far enough to prove the binary
-runs against the asserted config. The group also proves the offline
+runs against the asserted config.
+
+Read at apply time, and the reason the requirement now reads narrower
+than this paragraph: four of the eighteen BIOS-free families are
+exempt, not two. Atari 7800 and Neo Geo Pocket for licensing, as the
+Open Questions record. N64 and Dreamcast for mechanism - RetroArch's
+`video_driver_find_driver` forces a real GL driver whenever a core sets
+a hardware render context, so the null-driver override is discarded and
+the launch dies after the core log line is already printed (verified on
+the x86_64-linux builder: mupen64plus-next segfaults, flycast exits on
+"Cannot open video driver"). The log-line assertion also had to change:
+the line the design first had in mind is echoed from the command line
+before the core is opened at all, so it proved nothing, and the test now
+requires a marker emitted only after content loads plus the absence of
+the content-failure marker. And one standalone, ScummVM, cannot be
+started far enough headless to read its config, so its smoke launch is
+a version check that proves less; the requirement now says so, and the
+test says which one and why. The group also proves the offline
 path: a boot with no cached token and no route to the endpoint asserts
 the frontend still arrives and the journal records the failed login.
 Because `modules/emulators` now contributes custom-systems entries
@@ -277,14 +294,16 @@ E12 line.
 
 - Which homebrew title serves each BIOS-free core family, and the
   final override list D5's diff produces - both enumerable at apply
-  time without changing the approach. Enumerated: 16 of the 18 BIOS-free
-  families have a ROM whose author states a licence, seven of them from
-  the 240p Test Suite and its ports. Atari 7800 and Neo Geo Pocket do
-  not, after two independent searches: binaries exist, but none is
-  paired with a written grant, and the fixtures are fetched by public CI
-  and pushed through a public binary cache. Those two are named exempt
-  in the configuration and move to the hardware checklist, which is what
-  the vm-test requirement now says.
+  time without changing the approach. Enumerated: 14 of the 18 BIOS-free
+  families launch headless, seven of their fixtures from the 240p Test
+  Suite and its ports. Four are exempt, for two different reasons, and
+  the configuration records which reason applies to each. Atari 7800 and
+  Neo Geo Pocket for licensing, after two independent searches: binaries
+  exist, but none is paired with a written grant, and the fixtures are
+  fetched by public CI and pushed through a public binary cache. N64 and
+  Dreamcast for mechanism: their cores demand a hardware render context,
+  which no VM can offer. All four move to the hardware checklist, which
+  is what the vm-test requirement now says.
 - The exact uniform hotkey combo set (menu, save, load, fast-forward,
   screenshot) - config data settled during apply with the controller
   layout in mind, before E6 maps it per pad. Settled: RetroArch's

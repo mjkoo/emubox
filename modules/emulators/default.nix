@@ -107,6 +107,304 @@ let
   );
   coresDirectory = "${retroarchWithCores}/lib/retroarch/cores";
 
+  # ---------------------------------------------------------------------
+  # Frontend overrides (design D5): every system whose assigned emulator
+  # differs from ES-DE 3.4.1's bundled default, contributed to
+  # `emubox.kiosk.customSystems`.
+  #
+  # Read directly from the pinned upstream tarball `pkgs/es-de/package.nix`
+  # fetches (v3.4.1, `sha256-MVmJIdxwEG3wgvwbhuIEYCxKaYss/3hq9xszGLjZ1Xw=`),
+  # specifically `resources/systems/linux/es_systems.xml`. ES-DE's own rule
+  # (`FileData::findEmulator`, `es-app/src/FileData.cpp`) treats a system's
+  # *first* `<command>` as the default when no per-game preference is
+  # saved, so overriding an assignment means rewriting command order, not
+  # inventing new command text. Its custom-systems loader
+  # (`SystemData::loadConfig`, `es-app/src/SystemData.cpp`) skips any
+  # `<system>` missing a `<fullname>`, `<path>`, `<extension>` or at least
+  # one `<command>` - there is no partial-override form that names only the
+  # one command to change - and replaces a bundled system with a custom one
+  # by matching `<path>` text exactly ("systems with identical <path> tags
+  # will be overwritten by the last occurrence"). Every entry below is
+  # therefore the bundled system copied in full and verbatim - every field,
+  # every `<command label>` string, every `%EMULATOR_X%`/`%CORE_RETROARCH%`
+  # placeholder - with only the command order rewritten. `<path>` is never
+  # touched, since that identity is what makes the override take effect at
+  # all.
+  #
+  # The placeholders resolve with no override needed: every standalone this
+  # flake installs lands in `environment.systemPackages`, which puts it on
+  # `player`'s PATH via `/run/current-system/sw/bin`, and ES-DE's bundled
+  # `es_find_rules.xml` resolves `%EMULATOR_X%` by an exact, literal search
+  # of PATH for one of a short list of binary names - `duckstation`,
+  # `ppsspp`, `dolphin-emu`, `pcsx2-qt`, `azahar` and `scummvm` are each a
+  # literal entry in that list, confirmed by inspecting each derivation's
+  # `bin/` directly rather than assumed from the attribute name.
+  # `%CORE_RETROARCH%` resolves the same way against
+  # `/run/current-system/sw/lib/retroarch/cores`, the exact path
+  # `pkgs/es-de/package.nix`'s `postInstall` guard already asserts is
+  # present in the shipped find rules.
+  #
+  # Every alternate command ES-DE ships is kept, reordered but never
+  # trimmed - including the handful naming a core or standalone this flake
+  # does not install (SD Beetle PSX, PCSX ReARMed, SwanStation, ares and
+  # Mednafen for PS1; the MAME family for Arcade; Citra/DeSmuME/NooDS/SkyEmu
+  # for DS; Citra/Mandarine/Lime3DS/Panda3DS for 3DS, and so on). Selecting
+  # one of those is no worse than on vanilla ES-DE - the frontend reports
+  # "emulator not found" - and dropping them would mean maintaining a
+  # curated list the design never asked for; the design's ask is only which
+  # command comes first.
+  psxOverride = ''
+    <system>
+      <name>psx</name>
+      <fullname>Sony PlayStation</fullname>
+      <path>%ROMPATH%/psx</path>
+      <extension>.bin .BIN .cbn .CBN .ccd .CCD .chd .CHD .cue .CUE .ecm .ECM .exe .EXE .img .IMG .iso .ISO .m3u .M3U .mdf .MDF .mds .MDS .minipsf .MINIPSF .pbp .PBP .psexe .PSEXE .psf .PSF .toc .TOC .z .Z .znx .ZNX .7z .7Z .zip .ZIP</extension>
+      <command label="DuckStation (Standalone)">%EMULATOR_DUCKSTATION% -batch %ROM%</command>
+      <command label="Beetle PSX HW">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_psx_hw_libretro.so %ROM%</command>
+      <command label="Beetle PSX">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_psx_libretro.so %ROM%</command>
+      <command label="PCSX ReARMed">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/pcsx_rearmed_libretro.so %ROM%</command>
+      <command label="SwanStation">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/swanstation_libretro.so %ROM%</command>
+      <command label="ares (Standalone)">%EMULATOR_ARES% --fullscreen --system "PlayStation" %ROM%</command>
+      <command label="Mednafen (Standalone)">%EMULATOR_MEDNAFEN% -force_module psx %ROM%</command>
+      <platform>psx</platform>
+      <theme>psx</theme>
+    </system>'';
+
+  # This flake's RetroArch build (see `retroarchWithCores` above) installs
+  # `beetle-pce-fast` (`mednafen_pce_fast_libretro.so`), not the SD
+  # `beetle-pce` ES-DE defaults to. Same override, same reason, for both the
+  # cartridge and CD systems - they are separate ES-DE systems sharing the
+  # same command list.
+  pcengineOverride = ''
+    <system>
+      <name>pcengine</name>
+      <fullname>NEC PC Engine</fullname>
+      <path>%ROMPATH%/pcengine</path>
+      <extension>.ccd .CCD .chd .CHD .cue .CUE .img .IMG .iso .ISO .m3u .M3U .pce .PCE .rom .ROM .sgx .SGX .toc .TOC .7z .7Z .zip .ZIP</extension>
+      <command label="Beetle PCE FAST">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_pce_fast_libretro.so %ROM%</command>
+      <command label="Beetle PCE">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_pce_libretro.so %ROM%</command>
+      <command label="Beetle SuperGrafx">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_supergrafx_libretro.so %ROM%</command>
+      <command label="Geargrafx">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/geargrafx_libretro.so %ROM%</command>
+      <command label="Geargrafx (Standalone)">%EMULATOR_GEARGRAFX% %ROM%</command>
+      <command label="Mednafen (Standalone)">%EMULATOR_MEDNAFEN% -force_module pce %ROM%</command>
+      <command label="Mesen (Standalone)">%EMULATOR_MESEN% --fullscreen %ROM%</command>
+      <command label="ares (Standalone)">%EMULATOR_ARES% --fullscreen --system "PC Engine" %ROM%</command>
+      <platform>pcengine</platform>
+      <theme>pcengine</theme>
+    </system>'';
+
+  pcenginecdOverride = ''
+    <system>
+      <name>pcenginecd</name>
+      <fullname>NEC PC Engine CD</fullname>
+      <path>%ROMPATH%/pcenginecd</path>
+      <extension>.ccd .CCD .chd .CHD .cue .CUE .img .IMG .iso .ISO .m3u .M3U .pce .PCE .sgx .SGX .toc .TOC .7z .7Z .zip .ZIP</extension>
+      <command label="Beetle PCE FAST">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_pce_fast_libretro.so %ROM%</command>
+      <command label="Beetle PCE">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_pce_libretro.so %ROM%</command>
+      <command label="Beetle SuperGrafx">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mednafen_supergrafx_libretro.so %ROM%</command>
+      <command label="Geargrafx">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/geargrafx_libretro.so %ROM%</command>
+      <command label="Geargrafx (Standalone)">%EMULATOR_GEARGRAFX% %ROM%</command>
+      <command label="Mednafen (Standalone)">%EMULATOR_MEDNAFEN% -force_module pce %ROM%</command>
+      <command label="Mesen (Standalone)">%EMULATOR_MESEN% --fullscreen %ROM%</command>
+      <command label="ares (Standalone)">%EMULATOR_ARES% --fullscreen --system "PC Engine CD" %ROM%</command>
+      <platform>pcenginecd</platform>
+      <theme>pcenginecd</theme>
+    </system>'';
+
+  # No MAME core is installed at all; FinalBurn Neo is the design's pick and
+  # is `fbneo` in `retroarchWithCores` above.
+  arcadeOverride = ''
+    <system>
+      <name>arcade</name>
+      <fullname>Arcade</fullname>
+      <path>%ROMPATH%/arcade</path>
+      <extension>.cmd .CMD .desktop .gam .GAM .lindbergh .neo .NEO .sh .7z .7Z .zip .ZIP</extension>
+      <command label="FinalBurn Neo">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/fbneo_libretro.so %ROM%</command>
+      <command label="MAME - Current">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mame_libretro.so %ROM%</command>
+      <command label="MAME 2010">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mame2010_libretro.so %ROM%</command>
+      <command label="MAME 2003-Plus">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mame2003_plus_libretro.so %ROM%</command>
+      <command label="MAME 2003">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mame2003_libretro.so %ROM%</command>
+      <command label="MAME 2000">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mame2000_libretro.so %ROM%</command>
+      <command label="MAME (Standalone)">%STARTDIR%=~/.mame %EMULATOR_MAME% -rompath %GAMEDIR%\;%ROMPATH%/arcade %BASENAME%</command>
+      <command label="FinalBurn Neo (Standalone)">%EMULATOR_FINALBURN-NEO% -fullscreen %BASENAME%</command>
+      <command label="FB Alpha 2012">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/fbalpha2012_libretro.so %ROM%</command>
+      <command label="Geolith">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/geolith_libretro.so %ROM%</command>
+      <command label="Flycast">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/flycast_libretro.so %ROM%</command>
+      <command label="Flycast (Standalone)">%EMULATOR_FLYCAST% %ROM%</command>
+      <command label="Flycast Dojo (Standalone)">%EMULATOR_FLYCAST-DOJO% %ROM%</command>
+      <command label="Kronos">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/kronos_libretro.so %ROM%</command>
+      <command label="DICE">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/dice_libretro.so %ROM%</command>
+      <command label="Supermodel (Standalone)">%STARTDIR%=%GAMEDIR% %EMULATOR_SUPERMODEL% -log-output=%GAMEDIR%/Config/Supermodel.log %INJECT%=%BASENAME%.commands %ROM%</command>
+      <command label="Lindbergh Loader (Standalone)">%STARTDIR%=%GAMEENTRYDIR% %EMULATOR_LINDBERGH-LOADER% %INJECT%=%BASENAME%/%BASENAME%.commands</command>
+      <command label="MFME (Wine)">%PRECOMMAND_WINE% %EMULATOR_MFME-WINDOWS% "%ROMRAWWIN%"</command>
+      <command label="MFME (Proton)">%PRECOMMAND_PROTON% %EMULATOR_MFME-WINDOWS% "%ROMRAWWIN%"</command>
+      <command label="Shortcut or script">%ENABLESHORTCUTS% %EMULATOR_OS-SHELL% %ROM%</command>
+      <platform>arcade</platform>
+      <theme>arcade</theme>
+    </system>'';
+
+  # This flake installs `melonds` (the older DS+DSi core, `melonds_libretro.so`),
+  # not `melondsds` (the newer DS-only core) ES-DE defaults to.
+  ndsOverride = ''
+    <system>
+      <name>nds</name>
+      <fullname>Nintendo DS</fullname>
+      <path>%ROMPATH%/nds</path>
+      <extension>.app .APP .bin .BIN .nds .NDS .7z .7Z .zip .ZIP</extension>
+      <command label="melonDS">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/melonds_libretro.so %ROM%</command>
+      <command label="melonDS DS">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/melondsds_libretro.so %ROM%</command>
+      <command label="melonDS (Standalone)">%EMULATOR_MELONDS% -f %ROM%</command>
+      <command label="DeSmuME">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/desmume_libretro.so %ROM%</command>
+      <command label="DeSmuME 2015">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/desmume2015_libretro.so %ROM%</command>
+      <command label="DeSmuME (Standalone)">%EMULATOR_DESMUME% %ROM%</command>
+      <command label="NooDS">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/noods_libretro.so %ROM%</command>
+      <command label="NooDS (Standalone)">%EMULATOR_NOODS% %ROM%</command>
+      <command label="SkyEmu">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/skyemu_libretro.so %ROM%</command>
+      <command label="SkyEmu (Standalone)">%EMULATOR_SKYEMU% %ROM%</command>
+      <platform>nds</platform>
+      <theme>nds</theme>
+    </system>'';
+
+  # Only the standalone `ppsspp` package is installed, not the RetroArch
+  # PPSSPP core ES-DE defaults to.
+  pspOverride = ''
+    <system>
+      <name>psp</name>
+      <fullname>Sony PlayStation Portable</fullname>
+      <path>%ROMPATH%/psp</path>
+      <extension>.chd .CHD .cso .CSO .elf .ELF .iso .ISO .pbp .PBP .prx .PRX .7z .7Z .zip .ZIP</extension>
+      <command label="PPSSPP (Standalone)">%EMULATOR_PPSSPP% %ROM%</command>
+      <command label="PPSSPP">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/ppsspp_libretro.so %ROM%</command>
+      <platform>psp</platform>
+      <theme>psp</theme>
+    </system>'';
+
+  # Only the standalone `dolphin-emu` package is installed, not the
+  # RetroArch Dolphin core ES-DE defaults to. Same override, same reason,
+  # for both GameCube and Wii - ES-DE ships them as separate systems with
+  # identical command lists.
+  gcOverride = ''
+    <system>
+      <name>gc</name>
+      <fullname>Nintendo GameCube</fullname>
+      <path>%ROMPATH%/gc</path>
+      <extension>.ciso .CISO .dff .DFF .dol .DOL .elf .ELF .gcm .GCM .gcz .GCZ .iso .ISO .json .JSON .m3u .M3U .rvz .RVZ .tgc .TGC .wad .WAD .wbfs .WBFS .wia .WIA .7z .7Z .zip .ZIP</extension>
+      <command label="Dolphin (Standalone)">%INJECT%=%BASENAME%.esprefix %EMULATOR_DOLPHIN% -b -e %ROM%</command>
+      <command label="Dolphin">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/dolphin_libretro.so %ROM%</command>
+      <command label="PrimeHack (Standalone)">%INJECT%=%BASENAME%.esprefix %EMULATOR_PRIMEHACK% -b -e %ROM%</command>
+      <command label="Triforce (Standalone)">%INJECT%=%BASENAME%.esprefix %EMULATOR_TRIFORCE% -b -e %ROM%</command>
+      <platform>gc</platform>
+      <theme>gc</theme>
+    </system>'';
+
+  wiiOverride = ''
+    <system>
+      <name>wii</name>
+      <fullname>Nintendo Wii</fullname>
+      <path>%ROMPATH%/wii</path>
+      <extension>.ciso .CISO .dff .DFF .dol .DOL .elf .ELF .gcm .GCM .gcz .GCZ .iso .ISO .json .JSON .m3u .M3U .rvz .RVZ .tgc .TGC .wad .WAD .wbfs .WBFS .wia .WIA .7z .7Z .zip .ZIP</extension>
+      <command label="Dolphin (Standalone)">%INJECT%=%BASENAME%.esprefix %EMULATOR_DOLPHIN% -b -e %ROM%</command>
+      <command label="Dolphin">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/dolphin_libretro.so %ROM%</command>
+      <command label="PrimeHack (Standalone)">%INJECT%=%BASENAME%.esprefix %EMULATOR_PRIMEHACK% -b -e %ROM%</command>
+      <platform>wii</platform>
+      <theme>wii</theme>
+    </system>'';
+
+  # Only the standalone `pcsx2` package (its binary is `pcsx2-qt`) is
+  # installed, not the RetroArch PCSX2 core (labelled "LRPS2" first and
+  # "PCSX2" second for the same core file) ES-DE defaults to.
+  ps2Override = ''
+    <system>
+      <name>ps2</name>
+      <fullname>Sony PlayStation 2</fullname>
+      <path>%ROMPATH%/ps2</path>
+      <extension>.bin .BIN .chd .CHD .ciso .CISO .cso .CSO .desktop .dump .DUMP .elf .ELF .gz .GZ .m3u .M3U .mdf .MDF .img .IMG .iso .ISO .isz .ISZ .ngr .NRG .zso .ZSO</extension>
+      <command label="PCSX2 (Standalone)">%EMULATOR_PCSX2% -batch %ROM%</command>
+      <command label="LRPS2">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/pcsx2_libretro.so %ROM%</command>
+      <command label="PCSX2">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/pcsx2_libretro.so %ROM%</command>
+      <command label="PCSX2 Legacy (Standalone)">%EMULATOR_PCSX2-LEGACY% --nogui %ROM%</command>
+      <command label="Play! (Standalone)">%EMULATOR_PLAY!% --fullscreen --disc %ROM%</command>
+      <command label="Shortcut or script">%ENABLESHORTCUTS% %EMULATOR_OS-SHELL% %ROM%</command>
+      <platform>ps2</platform>
+      <theme>ps2</theme>
+    </system>'';
+
+  # Only the standalone `azahar` package is installed, not the RetroArch
+  # Azahar core ES-DE defaults to.
+  n3dsOverride = ''
+    <system>
+      <name>n3ds</name>
+      <fullname>Nintendo 3DS</fullname>
+      <path>%ROMPATH%/n3ds</path>
+      <extension>.3ds .3DS .3dsx .3DSX .app .APP .axf .AXF .cci .CCI .cxi .CXI .desktop .elf .ELF .z3dsx .Z3DSX .zcci .ZCCI .zcxi .ZCXI .7z .7Z .zip .ZIP</extension>
+      <command label="Azahar (Standalone)">%EMULATOR_AZAHAR% %ROM%</command>
+      <command label="Azahar">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/azahar_libretro.so %ROM%</command>
+      <command label="Azahar Shortcut (Standalone)">%ENABLESHORTCUTS% %EMULATOR_OS-SHELL% %ROM%</command>
+      <command label="AzaharPlus (Standalone)">%EMULATOR_AZAHARPLUS% %ROM%</command>
+      <command label="Citra">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/citra_libretro.so %ROM%</command>
+      <command label="Citra 2018">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/citra2018_libretro.so %ROM%</command>
+      <command label="Citra (Standalone)">%EMULATOR_CITRA% %ROM%</command>
+      <command label="Mandarine (Standalone)">%EMULATOR_MANDARINE% %ROM%</command>
+      <command label="Lime3DS (Standalone)">%EMULATOR_LIME3DS% %ROM%</command>
+      <command label="Panda3DS (Standalone)">%EMULATOR_PANDA3DS% %ROM%</command>
+      <platform>n3ds</platform>
+      <theme>n3ds</theme>
+    </system>'';
+
+  # Only the standalone `scummvm` package is installed, not the RetroArch
+  # ScummVM core ES-DE defaults to.
+  scummvmOverride = ''
+    <system>
+      <name>scummvm</name>
+      <fullname>ScummVM Game Engine</fullname>
+      <path>%ROMPATH%/scummvm</path>
+      <extension>.scummvm .SCUMMVM .svm .SVM</extension>
+      <command label="ScummVM (Standalone)">%STARTDIR%=%GAMEDIR% %EMULATOR_SCUMMVM% %BASENAME%</command>
+      <command label="ScummVM">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/scummvm_libretro.so %ROM%</command>
+      <command label="DREAMM (Standalone)">%STARTDIR%=%GAMEDIR% %EMULATOR_DREAMM% .</command>
+      <platform>scummvm</platform>
+      <theme>scummvm</theme>
+    </system>'';
+
+  # This flake's RetroArch build installs `vice-x64`, confirmed by build to
+  # produce `vice_x64_libretro.so` ("VICE x64 Fast"), not the
+  # `vice_x64sc_libretro.so` ("VICE x64sc Accurate") core ES-DE defaults to.
+  c64Override = ''
+    <system>
+      <name>c64</name>
+      <fullname>Commodore 64</fullname>
+      <path>%ROMPATH%/c64</path>
+      <extension>.bin .BIN .cmd .CMD .crt .CRT .d2m .D2M .d4m .D4M .d64 .D64 .d6z .D6Z .d71 .D71 .d7z .D7Z .d80 .D80 .d81 .D81 .d82 .D82 .d8z .D8Z .g41 .G41 .g4z .G4Z .g64 .G64 .g6z .G6Z .gz .GZ .lnx .LNX .m3u .M3U .nbz .NBZ .nib .NIB .p00 .P00 .prg .PRG .t64 .T64 .tap .TAP .vfl .VFL .vsf .VSF .x64 .X64 .x6z .X6Z .7z .7Z .zip .ZIP</extension>
+      <command label="VICE x64 Fast">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/vice_x64_libretro.so %ROM%</command>
+      <command label="VICE x64sc Accurate">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/vice_x64sc_libretro.so %ROM%</command>
+      <command label="VICE x64sc Accurate (Standalone)">%EMULATOR_VICE-X64SC% %ROM%</command>
+      <command label="VICE x64 SuperCPU">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/vice_xscpu64_libretro.so %ROM%</command>
+      <command label="VICE x128">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/vice_x128_libretro.so %ROM%</command>
+      <command label="Frodo">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/frodo_libretro.so %ROM%</command>
+      <platform>c64</platform>
+      <theme>c64</theme>
+    </system>'';
+
+  customSystems = ''
+    <?xml version="1.0"?>
+    <systemList>
+    ${lib.concatStringsSep "\n" [
+      psxOverride
+      pcengineOverride
+      pcenginecdOverride
+      arcadeOverride
+      ndsOverride
+      pspOverride
+      gcOverride
+      wiiOverride
+      ps2Override
+      n3dsOverride
+      scummvmOverride
+      c64Override
+    ]}
+    </systemList>
+  '';
+
   # RetroAchievements' per-emulator tables (design D1-D4). One attrset per
   # supporting emulator, each shaped exactly as `emubox-prepare`'s
   # `retroachievements.targets[]` entries (design D1) minus the `name`
@@ -532,6 +830,11 @@ in
         };
       };
     } (lib.optionalAttrs (!cfg.enable) raDisabledFiles);
+
+    # design D5. `modules/kiosk` defines the option itself and owns its
+    # empty-means-no-file semantics; this is the one place that ever sets
+    # it to a non-empty value on the shipped box.
+    emubox.kiosk.customSystems = customSystems;
 
     emubox.kiosk.retroachievementsNamespace =
       if cfg.enable then

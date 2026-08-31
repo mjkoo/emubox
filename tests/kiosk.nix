@@ -111,7 +111,14 @@ in
 
       # A complete es_systems.xml document, <systemList> wrapper included,
       # because the module writes the option verbatim and adds no wrapper.
-      emubox.kiosk.customSystems = ''
+      #
+      # mkForce, load-bearing since emulators-retroachievements: `modules/emulators`
+      # now contributes its own (non-empty) definition of this same option
+      # (design D5), so two plain definitions would conflict and the kiosk
+      # check would stop evaluating. This node deliberately proves the
+      # custom-systems mechanism against a document it controls, not against
+      # the shipped override list - design D7.
+      emubox.kiosk.customSystems = lib.mkForce ''
         <?xml version="1.0"?>
         <systemList>
           <system>

@@ -299,6 +299,32 @@ def _without_removals(keys: Mapping[str, str | Removal]) -> dict[str, str]:
     return {key: value for key, value in keys.items() if isinstance(value, str)}
 
 
+def _holds_something(path: Path) -> bool:
+    """Whether there is anything on disk here a recreation would drop.
+
+    The question the all-removals branch of both flat-file editors has to
+    ask before deciding to write nothing at all. A parser answers None for
+    "absent" and for "present but unparseable" alike, and the difference
+    between those two is a security one: PCSX2's `secrets.ini` is the one
+    owned file whose only owned key on the disabled path is a removal, so
+    reading None as "there is nothing to remove from" left `Token = <live
+    token>` on disk through every launch, forever, for a file the box had
+    only to tear one line of - and this appliance is switched off at the
+    wall, so a torn line is routine rather than exotic. The same goes for a
+    non-UTF-8 byte or a mode that forbids reading it.
+
+    A `stat` that fails is not evidence of absence either - a directory in
+    the way, a parent that cannot be searched - so the fallback asks
+    `exists()`, which answers False only for the genuinely absent. Being
+    wrong in this direction costs one recreation of a file that turns out
+    to be empty; being wrong in the other costs the credential.
+    """
+    try:
+        return path.stat().st_size > 0
+    except OSError:
+        return path.exists()
+
+
 # --- ES-DE settings XML ---------------------------------------------------
 
 
@@ -451,13 +477,20 @@ def set_ini_settings(
     same properties: everything around it survives, and removing a key that
     is not there is a no-op that reports no write.
 
-    A file in which nothing is owned is left alone entirely - not parsed,
-    not recreated, not mentioned. PCSX2 declares `secrets.ini` with no keys
-    of its own, and every launch that resolves no token (the spec's offline
-    scenario, and any box with RetroAchievements off) leaves it that way.
-    Without this guard `_render_ini({})` wrote a lone newline, which the
-    parser read back as an empty file, so the box rewrote it and logged
-    "is empty; recreating it" before every single launch, forever.
+    A file in which nothing at all is owned is left alone entirely - not
+    parsed, not recreated, not mentioned. PCSX2 declares `secrets.ini` with
+    no keys of its own, so a document carrying no retroachievements
+    namespace (design D1's null) never touches that file. Without this
+    guard `_render_ini({})` wrote a lone newline, which the parser read
+    back as an empty file, so the box rewrote it and logged "is empty;
+    recreating it" before every single launch, forever.
+
+    A file whose owned keys are *all* removals is a different case, and one
+    `secrets.ini` reaches on every launch that resolves no token and every
+    launch of a box with RetroAchievements switched off: it is parsed, and
+    if it turns out to be present but unparseable it is recreated, since a
+    recreation is the only way a removal can be kept against a file no
+    parser can see into. See `_holds_something`.
     """
     if not any(sections.values()):
         return False
@@ -465,10 +498,15 @@ def set_ini_settings(
     lines = _parse_ini(path)
     if lines is None:
         fresh = {section: _without_removals(keys) for section, keys in sections.items()}
-        if not any(fresh.values()):
-            # Every owned key in this file is a removal and there is no
-            # readable file to remove them from: creating one to hold
-            # nothing would only be recreated on the next launch.
+        if not any(fresh.values()) and not _holds_something(path):
+            # Every owned key in this file is a removal and there is
+            # genuinely nothing on disk to remove them from: creating a
+            # file to hold nothing would only be recreated on the next
+            # launch. A file that is present but unparseable does *not*
+            # take this branch (see `_holds_something`): it falls through
+            # to the recreation below, which is what takes the credential
+            # off the disk - and what makes the note about to be printed
+            # true rather than a lie repeated before every launch.
             return False
         # The empty-file note, deferred from `_parse_ini` (see its own
         # comment): only worth telling the journal once a write is
@@ -592,7 +630,13 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
     lines = _parse_retroarch(path)
     if lines is None:
         fresh = _without_removals(keys)
-        if not fresh:
+        if not fresh and not _holds_something(path):
+            # The INI editor's guard, with the same reasoning: absent means
+            # write nothing, unparseable means recreate, because only the
+            # recreation drops a credential a parser cannot see. Unreachable
+            # in this configuration - RetroArch's target owns static keys
+            # too, so `fresh` is never empty - but the two editors keep the
+            # same rule so a later target cannot inherit the bug back.
             return False
         _write(path, _render_retroarch(fresh))
         return True

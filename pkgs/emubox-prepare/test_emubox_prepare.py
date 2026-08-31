@@ -2697,6 +2697,92 @@ def test_retroarch_removing_a_key_that_is_not_there_reports_no_write(
     assert unwritten(path)
 
 
+# --- Final wave: an unparseable file is not an absent one -----------------
+#
+# The all-removals branch of both flat-file editors used to read "the parser
+# said None" as "there is nothing on disk", and return without writing so as
+# not to create a file to hold nothing. `secrets.ini` is the one owned file
+# whose only owned key on the disabled path is a removal, so a single torn
+# line in it - the box is switched off at the wall, so torn writes are
+# routine - left a live bearer token sitting there through every launch,
+# forever, while the journal said "recreating it" each time.
+
+
+def test_ini_a_torn_file_owning_only_a_removal_is_recreated_without_the_token(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "secrets.ini"
+    path.write_text("[Achievements]\nTok\nToken = TOKENabc123DEADBEEF\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    assert "TOKENabc123DEADBEEF" not in path.read_text()
+    # The note `_parse_ini` already printed is now true: the recreation it
+    # promises is the very thing that drops the credential.
+    assert "recreating it" in capsys.readouterr().err
+
+
+def test_ini_recreating_a_torn_removal_only_file_reaches_a_steady_state(
+    tmp_path: Path,
+) -> None:
+    # The property that makes the fall-through safe to run before every
+    # launch: what it writes parses cleanly, so the second run changes
+    # nothing and the journal stays quiet from then on.
+    path = tmp_path / "secrets.ini"
+    path.write_text("[Achievements]\nTok\nToken = TOKENabc123DEADBEEF\n")
+    sections: dict[str, dict[str, str | ep.Removal]] = {
+        "Achievements": {"Token": ep.REMOVE}
+    }
+
+    assert ep.set_ini_settings(path, sections) is True
+    freeze(path)
+
+    assert ep.set_ini_settings(path, sections) is False
+    assert unwritten(path)
+
+
+def test_ini_an_unreadable_file_owning_only_a_removal_is_recreated(
+    tmp_path: Path,
+) -> None:
+    # The other ways `_parse_ini` answers None for a file that is very much
+    # present: a non-UTF-8 byte, and a mode that forbids reading it. Both
+    # have to reach the same recreation, because both may be hiding a live
+    # token from a parser that cannot see it.
+    undecodable = tmp_path / "undecodable.ini"
+    undecodable.write_bytes(b"[Achievements]\nToken = TOKEN\xff\xfebytes\n")
+    unreadable = tmp_path / "unreadable.ini"
+    unreadable.write_text("[Achievements]\nToken = TOKENabc123DEADBEEF\n")
+    unreadable.chmod(0o000)
+
+    for path in (undecodable, unreadable):
+        assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    assert b"TOKEN" not in undecodable.read_bytes()
+    # `_write` carries the old file's mode onto the replacement, so the
+    # recreated file is still mode 000 and has to be opened up to read back.
+    assert unreadable.stat().st_mode & 0o777 == 0o000
+    unreadable.chmod(0o600)
+    assert "TOKEN" not in unreadable.read_text()
+
+
+def test_retroarch_a_torn_file_owning_only_a_removal_is_recreated(
+    tmp_path: Path,
+) -> None:
+    # The identical shape in the other flat-file editor. Unreachable in this
+    # configuration - RetroArch always owns static keys too - but the guard
+    # moves with its twin so a later target that owns only credentials in a
+    # retroarch-format file cannot inherit the bug back.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('torn line with no separator\ncheevos_token = "TOKENabc123"\n')
+
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+
+    assert "TOKENabc123" not in path.read_text()
+    freeze(path)
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is False
+    assert unwritten(path)
+
+
 def test_a_rejected_login_leaves_no_token_behind_in_retroarch(tmp_path: Path) -> None:
     # I8, the reproduction: after a success then a rejection, retroarch.cfg
     # still held the username, the token and cheevos_enable = "true". The
@@ -2932,6 +3018,51 @@ def test_apply_disabled_removing_absent_credentials_is_a_silent_no_op(
     assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
     assert not token_file.exists()
+    assert capsys.readouterr().err == ""
+
+
+def test_main_disabled_recreates_a_torn_secrets_file_without_the_live_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The end-to-end shape of the unparseable-file finding, on the exact
+    # file it bites: PCSX2's `secrets.ini` is the one owned file whose only
+    # owned key on the disabled path is a removal, so it is the one file for
+    # which "the parser said None" used to mean "write nothing" - and the
+    # box is switched off at the wall, so one torn line in it is routine.
+    # Before the fix these three runs each printed "recreating it" and each
+    # left `Token = <live token>` exactly where it was.
+    appdata = tmp_path / "es-de"
+    appdata.mkdir()
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    secrets = appdata / "secrets.ini"
+    secrets.write_text("[Achievements]\nTok\nToken = TOKENabc123DEADBEEF\n")
+
+    ra = retroachievements_namespace(tmp_path, closed_port_url(), [pcsx2_target()])
+    ra["enabled"] = False
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "PCSX2.ini": {"format": "ini", "keys": {}},
+                    "secrets.ini": {"format": "ini", "keys": {}},
+                },
+                "retroachievements": ra,
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 0
+
+    assert "TOKENabc123DEADBEEF" not in secrets.read_text()
+    assert "Token" not in secrets.read_text()
+    capsys.readouterr()
+
+    # And it settles: what the recreation wrote parses, so a disabled box
+    # neither rewrites the file nor repeats the note on every later launch.
+    freeze(secrets)
+    assert ep.main([str(values), ""]) == 0
+    assert unwritten(secrets)
     assert capsys.readouterr().err == ""
 
 

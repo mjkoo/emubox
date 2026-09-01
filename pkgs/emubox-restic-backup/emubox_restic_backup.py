@@ -250,16 +250,21 @@ def _invocation_journal(unit: str, invocation_id: str) -> list[str]:
     return output.splitlines()
 
 
-def _fresh(timestamp: str, maximum_age_seconds: int) -> bool:
+def _fresh(timestamp: str, maximum_age_seconds: int, *, now: datetime | None = None) -> bool:
     try:
         instant = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except ValueError:
         return False
-    return (datetime.now(UTC) - instant).total_seconds() <= maximum_age_seconds
+    return ((now or datetime.now(UTC)) - instant).total_seconds() <= maximum_age_seconds
 
 
 def status_layer(
-    *, unit: str, kind: str, required_fields: Sequence[str], maximum_age_seconds: int
+    *,
+    unit: str,
+    kind: str,
+    required_fields: Sequence[str],
+    maximum_age_seconds: int,
+    now: datetime | None = None,
 ) -> tuple[bool, str]:
     """Read current systemd evidence, never a historical result database."""
 
@@ -285,7 +290,7 @@ def status_layer(
     )
     assert marker is not None
     timestamp = marker["timestamp"]
-    if not _fresh(timestamp, maximum_age_seconds):
+    if not _fresh(timestamp, maximum_age_seconds, now=now):
         return False, f"{unit}: success marker is stale ({timestamp})"
     recovery = (
         marker.get("snapshotId") or marker.get("newestProtectedSnapshotId") or marker.get("path")

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import subprocess
 from typing import Sequence
@@ -5,6 +6,198 @@ from typing import Sequence
 import pytest
 
 import emubox_restic_backup as erb
+
+
+NOW = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
+
+
+def _timestamp(age_seconds: int) -> str:
+    return (NOW - timedelta(seconds=age_seconds)).isoformat().replace("+00:00", "Z")
+
+
+def _status_marker(kind: str, invocation_id: str, timestamp: str) -> str:
+    payloads = {
+        "local": {"path": "/data/.snapshots/data.20260831T1200", "timestamp": timestamp},
+        "backup": {
+            "snapshotId": "snapshot",
+            "repositoryId": "repository",
+            "host": "emubox",
+            "tag": "emubox-save",
+            "timestamp": timestamp,
+        },
+        "maintenance": {
+            "repositoryId": "repository",
+            "newestProtectedSnapshotId": "snapshot",
+            "timestamp": timestamp,
+        },
+    }
+    return erb.marker_line(kind, payloads[kind], invocation_id=invocation_id)
+
+
+def _mock_status_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    result: str,
+    invocation_id: str,
+    journal: list[str],
+) -> list[tuple[str, str]]:
+    journal_calls: list[tuple[str, str]] = []
+
+    def property_value(_unit: str, property_name: str) -> str:
+        return {"Result": result, "InvocationID": invocation_id}[property_name]
+
+    def invocation_journal(unit: str, actual_invocation_id: str) -> list[str]:
+        journal_calls.append((unit, actual_invocation_id))
+        return journal
+
+    monkeypatch.setattr(erb, "_unit_property", property_value)
+    monkeypatch.setattr(erb, "_invocation_journal", invocation_journal)
+    return journal_calls
+
+
+@pytest.mark.parametrize("maximum_age_seconds", [2 * 60 * 60, 8 * 60 * 60, 14 * 24 * 60 * 60])
+def test_freshness_boundaries_are_current_at_limit_and_warn_after(
+    maximum_age_seconds: int,
+) -> None:
+    assert erb._fresh(_timestamp(maximum_age_seconds), maximum_age_seconds, now=NOW)
+    assert not erb._fresh(_timestamp(maximum_age_seconds + 1), maximum_age_seconds, now=NOW)
+
+
+@pytest.mark.parametrize(
+    ("kind", "required_fields", "maximum_age_seconds"),
+    [
+        ("local", ["path", "timestamp"], 2 * 60 * 60),
+        ("backup", ["snapshotId", "repositoryId", "host", "tag", "timestamp"], 8 * 60 * 60),
+        (
+            "maintenance",
+            ["repositoryId", "newestProtectedSnapshotId", "timestamp"],
+            14 * 24 * 60 * 60,
+        ),
+    ],
+)
+def test_status_layer_applies_the_layer_freshness_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    required_fields: list[str],
+    maximum_age_seconds: int,
+) -> None:
+    current_invocation = "current-invocation"
+    journal_calls = _mock_status_sources(
+        monkeypatch,
+        result="success",
+        invocation_id=current_invocation,
+        journal=[_status_marker(kind, current_invocation, _timestamp(maximum_age_seconds + 1))],
+    )
+
+    healthy, output = erb.status_layer(
+        unit="example.service",
+        kind=kind,
+        required_fields=required_fields,
+        maximum_age_seconds=maximum_age_seconds,
+        now=NOW,
+    )
+
+    assert not healthy
+    assert "stale" in output
+    assert journal_calls == [("example.service", current_invocation)]
+
+
+@pytest.mark.parametrize("journal", [[], ["EMUBOX_MARKER={not json}"]])
+def test_status_layer_rejects_missing_or_malformed_current_marker(
+    monkeypatch: pytest.MonkeyPatch, journal: list[str]
+) -> None:
+    _mock_status_sources(
+        monkeypatch,
+        result="success",
+        invocation_id="current",
+        journal=journal,
+    )
+
+    healthy, output = erb.status_layer(
+        unit="backup.service",
+        kind="backup",
+        required_fields=["snapshotId", "repositoryId", "host", "tag", "timestamp"],
+        maximum_age_seconds=8 * 60 * 60,
+        now=NOW,
+    )
+
+    assert not healthy
+    assert "missing, malformed" in output
+
+
+def test_status_layer_warns_when_the_unit_never_ran(monkeypatch: pytest.MonkeyPatch) -> None:
+    journal_calls = _mock_status_sources(
+        monkeypatch,
+        result="success",
+        invocation_id="",
+        journal=[],
+    )
+
+    healthy, output = erb.status_layer(
+        unit="backup.service",
+        kind="backup",
+        required_fields=["snapshotId", "repositoryId", "host", "tag", "timestamp"],
+        maximum_age_seconds=8 * 60 * 60,
+        now=NOW,
+    )
+
+    assert not healthy
+    assert "never run" in output
+    assert journal_calls == []
+
+
+def test_status_layer_filters_journal_to_current_invocation_and_failure_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_invocation = "current"
+    old_success = _status_marker("backup", "older", _timestamp(1))
+    journal_calls = _mock_status_sources(
+        monkeypatch,
+        result="exit-code",
+        invocation_id=current_invocation,
+        journal=[old_success],
+    )
+
+    healthy, output = erb.status_layer(
+        unit="backup.service",
+        kind="backup",
+        required_fields=["snapshotId", "repositoryId", "host", "tag", "timestamp"],
+        maximum_age_seconds=8 * 60 * 60,
+        now=NOW,
+    )
+
+    assert not healthy
+    assert "latest invocation failed (exit-code)" in output
+    assert journal_calls == [("backup.service", current_invocation)]
+
+
+def test_status_systemd_and_journal_queries_are_bound_to_one_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def check_output(command: list[str], *, text: bool) -> str:
+        assert text
+        calls.append(command)
+        if command[0] == "systemctl":
+            return "current-invocation\n"
+        return "journal line\n"
+
+    monkeypatch.setattr(subprocess, "check_output", check_output)
+
+    assert erb._unit_property("backup.service", "InvocationID") == "current-invocation"
+    assert erb._invocation_journal("backup.service", "current-invocation") == ["journal line"]
+    assert calls == [
+        ["systemctl", "show", "--value", "--property=InvocationID", "backup.service"],
+        [
+            "journalctl",
+            "--unit=backup.service",
+            "--output=cat",
+            "--no-pager",
+            "--quiet",
+            "_SYSTEMD_INVOCATION_ID=current-invocation",
+        ],
+    ]
 
 
 def test_marker_requires_the_systemd_invocation_identity() -> None:

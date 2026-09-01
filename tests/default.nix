@@ -198,6 +198,7 @@ in
 
   disko.tests.extraChecks = ''
     import json
+    import shlex
 
     # The harness itself only waits for local-fs.target; every boot phase
     # starts by waiting for multi-user.target and asserts that nothing
@@ -322,7 +323,7 @@ in
         unit = machine.succeed(
             f"systemd-escape --path --suffix=mount {mapping['where']}"
         ).strip()
-        machine.succeed(f"systemctl stop {unit}")
+        machine.succeed(f"systemctl stop {shlex.quote(unit)}")
         machine.succeed(f"mkdir -p {mapping['where']} {mapping['what']}")
         machine.succeed(f"printf equal > {mapping['where']}/equal.sav")
         machine.succeed(f"printf equal > {mapping['what']}/equal.sav")
@@ -334,7 +335,7 @@ in
         assert machine.succeed(f"cat {mapping['where']}/conflict.sav").strip() == "old"
         assert machine.succeed(f"cat {mapping['what']}/conflict.sav").strip() == "new"
         machine.succeed(f"rm {mapping['where']}/conflict.sav")
-        machine.succeed(f"systemctl start {unit}")
+        machine.succeed(f"systemctl start {shlex.quote(unit)}")
         machine.succeed(f"mountpoint -q {mapping['where']}")
 
     # --- off-site backups: local fake repository, real service transaction --

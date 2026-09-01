@@ -54,6 +54,10 @@ let
       backup)
         test ! -e /run/emubox/restic-test-fail || exit 1
         if test -e /run/emubox/restic-test-pause; then
+          test -r /run/emubox/restic-source/saves/snapshot-consistency-fixture
+          findmnt -no OPTIONS --target /run/emubox/restic-source \
+            | tr ',' '\n' \
+            | grep -qx ro
           : > /run/emubox/restic-test-ready
           while test -e /run/emubox/restic-test-pause; do sleep 1; done
         fi
@@ -357,8 +361,6 @@ in
         machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
         machine.succeed("systemctl start --no-block emubox-restic-backup.service")
         machine.wait_until_succeeds("test -e /run/emubox/restic-test-ready")
-        machine.succeed("test -r /run/emubox/restic-source/saves/snapshot-consistency-fixture")
-        machine.succeed("mountpoint -q /run/emubox/restic-source")
         machine.succeed("printf changed-after-snapshot > /data/saves/snapshot-consistency-fixture")
         machine.succeed("rm /run/emubox/restic-test-pause")
         machine.wait_until_succeeds("test -e /data/cache/emubox-restic-test/backup-ran")

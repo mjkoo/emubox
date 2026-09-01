@@ -198,7 +198,6 @@ in
 
   disko.tests.extraChecks = ''
     import json
-    import shlex
 
     # The harness itself only waits for local-fs.target; every boot phase
     # starts by waiting for multi-user.target and asserts that nothing

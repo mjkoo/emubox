@@ -46,6 +46,7 @@ let
         test ! -e /run/emubox/restic-test-init-auth-fail || exit 12
         test ! -e /run/emubox/restic-test-init-network-fail || exit 1
         test -f "$repo/config" || exit 10
+        printf '%s\n' '{"id":"emubox-test-repository"}'
         ;;
       init)
         : > "$repo/config"
@@ -83,7 +84,16 @@ let
         fi
         : > "$repo/backup-ran"
         ;;
+      snapshots)
+        printf '%s\n' '[{"short_id":"emubox-test-snapshot"}]'
+        ;;
       forget|check)
+        ;;
+      restore)
+        test "$1" = "--verify"
+        test "$3" = "--target"
+        mkdir -p "$4"
+        cp -a "$repo/snapshot/." "$4/"
         ;;
       *)
         echo "unexpected fake restic command: $*" >&2
@@ -352,6 +362,13 @@ in
         machine.fail("mountpoint -q /run/emubox/restic-source")
         machine.fail("find /data/.snapshots/restic -mindepth 1 -maxdepth 1 -name 'restic-*' | grep .")
         assert machine.succeed("systemctl show -p Result --value emubox-restic-backup.service").strip() == "success"
+        machine.succeed("rm -rf /run/emubox-restored")
+        machine.succeed(
+            "${fakeRestic}/bin/restic restore --verify emubox-test-snapshot --target /run/emubox-restored"
+        )
+        assert machine.succeed(
+            "cat /run/emubox-restored/saves/snapshot-consistency-fixture"
+        ).strip() == "original"
 
     with subtest("Runtime symlink aliases fail before restic sees backup inputs"):
         before = machine.succeed("stat -c %Y /data/cache/emubox-restic-test/backup-ran").strip()
@@ -366,6 +383,19 @@ in
         machine.succeed("systemctl reset-failed emubox-restic-backup.service")
         machine.fail("systemctl start emubox-restic-backup.service")
         machine.succeed("rm /data/home/player/.local/cache && mkdir -p /data/home/player/.local/cache")
+
+    with subtest("Maintenance and status use exact-invocation journal markers"):
+        machine.succeed("systemctl start emubox-restic-maintenance.service")
+        machine.succeed(
+            "journalctl -u emubox-restic-maintenance.service -o cat --no-pager | grep -F 'EMUBOX_MARKER='"
+        )
+        machine.succeed("emubox-status")
+        machine.succeed("touch /run/emubox/restic-test-fail")
+        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
+        machine.fail("systemctl start emubox-restic-backup.service")
+        status = machine.fail("emubox-status")
+        assert "emubox-restic-backup.service: latest invocation failed" in status, status
+        machine.succeed("rm /run/emubox/restic-test-fail")
 
     with subtest("Cloud failures do not disable local gameplay or future backup scheduling"):
         machine.succeed("touch /run/emubox/restic-test-fail")

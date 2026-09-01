@@ -33,6 +33,7 @@ stdenvNoCC.mkDerivation {
   '';
   installPhase = ''
     install -Dm755 emubox_restic_backup.py $out/bin/emubox-restic-backup
+    ln -s emubox-restic-backup $out/bin/emubox-status
   '';
   meta = {
     description = "Snapshot-consistent restic backup helper for EmuBox";

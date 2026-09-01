@@ -222,6 +222,10 @@ in
       serviceConfig = {
         User = lib.mkForce "root";
         Group = lib.mkForce "root";
+        # The marker is journal evidence for the exact btrbk invocation,
+        # not a persisted shadow state file. It fails the unit if btrbk
+        # reported success without leaving a recoverable source snapshot.
+        ExecStartPost = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --emit-local-marker --snapshot-dir /data/.snapshots";
       };
     };
 

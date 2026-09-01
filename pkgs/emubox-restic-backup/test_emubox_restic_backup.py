@@ -7,6 +7,100 @@ import pytest
 import emubox_restic_backup as erb
 
 
+def test_marker_requires_the_systemd_invocation_identity() -> None:
+    with pytest.raises(RuntimeError, match="INVOCATION_ID"):
+        erb.marker_line("backup", {}, invocation_id="")
+
+
+def test_marker_is_parseable_only_for_its_own_invocation() -> None:
+    line = erb.marker_line(
+        "backup",
+        {"snapshotId": "abc", "repositoryId": "repo"},
+        invocation_id="run-1",
+    )
+    assert erb.parse_marker(line, kind="backup", invocation_id="run-1") == {
+        "kind": "backup",
+        "invocationId": "run-1",
+        "repositoryId": "repo",
+        "snapshotId": "abc",
+    }
+    assert erb.parse_marker(line, kind="backup", invocation_id="run-2") is None
+    assert erb.parse_marker("EMUBOX_MARKER=not-json", kind="backup", invocation_id="run-1") is None
+
+
+def test_latest_invocation_failure_cannot_use_an_older_success_marker() -> None:
+    old = erb.marker_line(
+        "backup",
+        {
+            "snapshotId": "abc",
+            "repositoryId": "repo",
+            "timestamp": "now",
+            "host": "box",
+            "tag": "save",
+        },
+        invocation_id="old",
+    )
+    assert erb.layer_health(
+        result="exit-code",
+        invocation_id="new",
+        journal_lines=[old],
+        kind="backup",
+        required_fields=["snapshotId", "repositoryId", "timestamp", "host", "tag"],
+    ) == (False, "latest invocation failed (exit-code)")
+
+
+def test_success_requires_one_complete_marker_for_the_latest_invocation() -> None:
+    marker = erb.marker_line(
+        "maintenance",
+        {"repositoryId": "repo", "newestProtectedSnapshotId": "abc", "timestamp": "now"},
+        invocation_id="new",
+    )
+    assert erb.layer_health(
+        result="success",
+        invocation_id="new",
+        journal_lines=[marker],
+        kind="maintenance",
+        required_fields=["repositoryId", "newestProtectedSnapshotId", "timestamp"],
+    ) == (True, "success")
+    assert erb.layer_health(
+        result="success",
+        invocation_id="new",
+        journal_lines=[],
+        kind="maintenance",
+        required_fields=["repositoryId", "newestProtectedSnapshotId", "timestamp"],
+    ) == (False, "missing, malformed, or ambiguous success marker")
+
+
+def test_local_marker_selects_a_read_only_btrbk_snapshot_not_restic_transients(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    (snapshot_dir / "data.20260831T1200").mkdir(parents=True)
+    (snapshot_dir / "restic").mkdir()
+    monkeypatch.setenv("INVOCATION_ID", "local-run")
+    monkeypatch.setattr(subprocess, "check_output", lambda *_args, **_kwargs: "ro=true\n")
+
+    erb.emit_local_marker(snapshot_dir)
+
+    marker = erb.parse_marker(
+        capsys.readouterr().out.strip(), kind="local", invocation_id="local-run"
+    )
+    assert marker is not None
+    assert marker["path"] == str((snapshot_dir / "data.20260831T1200").resolve())
+
+
+def test_local_marker_rejects_a_writable_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot_dir = tmp_path / "snapshots"
+    (snapshot_dir / "data.20260831T1200").mkdir(parents=True)
+    monkeypatch.setenv("INVOCATION_ID", "local-run")
+    monkeypatch.setattr(subprocess, "check_output", lambda *_args, **_kwargs: "ro=false\n")
+
+    with pytest.raises(RuntimeError, match="read-only"):
+        erb.emit_local_marker(snapshot_dir)
+
+
 def spec() -> dict[str, object]:
     return {
         "roots": ["/data/saves", "/data/es-de", "/data/bios", "/data/home/player"],

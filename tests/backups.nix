@@ -134,6 +134,16 @@ assert lib.assertMsg (
   && maintenanceTimer.OnCalendar == "weekly"
   && maintenanceTimer.Persistent == false
 ) "tests/backups.nix: bounded native-lock maintenance must retain and check restic history";
+assert lib.assertMsg
+  (
+    lib.hasInfix "emubox-restic-maintenance" maintenance.serviceConfig.ExecStart
+    && lib.hasInfix "--emit-backup-marker" backup.serviceConfig.ExecStartPost
+    && lib.elem "emubox-restic-init.service" maintenance.requires
+  )
+  "tests/backups.nix: maintenance and backup must emit same-invocation recovery markers after conventional restic operations";
+assert lib.assertMsg
+  (lib.hasInfix "--emit-local-marker" enabled.systemd.services.btrbk-local.serviceConfig.ExecStartPost)
+  "tests/backups.nix: local snapshots must emit journal evidence";
 pkgs.runCommand "emubox-backups" { } ''
   touch "$out"
 ''

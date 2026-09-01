@@ -1660,6 +1660,10 @@ assert lib.assertMsg
           # way. SNES is exempt above too, but for an unrelated reason - the
           # fixture launch hangs rather than exiting, confirmed in CI rather
           # than by this mechanism.
+          # Achievements are disabled only for these offline core launches.
+          # The preceding tests cover their configuration and login behavior;
+          # letting this unrelated smoke test contact the public API makes its
+          # exit timing depend on network failure and retry behavior.
           override = "/tmp/emubox-retroarch-headless-override.cfg"
           machine.succeed(
               "printf '%s\\n' "
@@ -1669,6 +1673,7 @@ assert lib.assertMsg
               "'input_joypad_driver = \"null\"' "
               "'menu_driver = \"null\"' "
               "'midi_driver = \"null\"' "
+              "'cheevos_enable = \"false\"' "
               f"> {override}"
           )
 

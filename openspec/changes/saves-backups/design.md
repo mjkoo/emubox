@@ -35,11 +35,15 @@ storage are outside those roots rather than exclusions. `saveRoutes` and
 
 `homeCacheExclusions` is the one finite exclusion declaration. Every entry must
 be a strict normalized descendant of `/data/home/player`. Evaluation rejects
-duplicates, `..`, the home root itself, symlink escape or aliasing, and any
-equality, ancestor, descendant, or alias overlap with a save route. Nix passes
-restic the typed roots plus an exclude file generated only from
-`homeCacheExclusions`. Dynamic classification and session leak observation are
-rejected as complex and unnecessary for this recovery tier.
+duplicates, `..`, the home root itself, and lexical equality, ancestor, or
+descendant overlap with a save route. Before restic receives its inputs, the
+backup service resolves each declared path against the fresh source snapshot
+and fails if an existing symlink ancestor escapes `player` home or aliases a
+save route or another exclusion. This split keeps structural mistakes at Nix
+evaluation while checking filesystem identity only where the filesystem
+exists. Nix passes restic the typed roots plus an exclude file generated only
+from `homeCacheExclusions`. Dynamic classification and session leak observation
+are rejected as complex and unnecessary for this recovery tier.
 
 ### 2. The finite save-route declaration uses conventional placement
 

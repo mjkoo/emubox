@@ -1,7 +1,7 @@
 ## 1. Path Model, Migration, and Save Placement
 
 - [ ] 1.1 Add evaluation tests and implement separate `saveRoutes`, `bindMappings`, typed backup roots, and finite `homeCacheExclusions`; prove roots are exactly `/data/saves`, the complete `/data/es-de`, `/data/bios`, and `/data/home/player`, and that ROM/media/cache/snapshot storage are outside rather than excluded.
-- [ ] 1.2 Add negative evaluation fixtures proving exclusions reject duplicates, `..`, home itself, symlink escape or aliasing, and equality/ancestor/descendant/alias overlap with save routes, while arbitrary unlisted player-home paths remain included.
+- [ ] 1.2 Add negative evaluation fixtures proving exclusions reject duplicates, `..`, home itself, and lexical equality/ancestor/descendant overlap with save routes, while arbitrary unlisted player-home paths remain included.
 - [ ] 1.3 Verify the authoritative finite save-route table in the `saves` capability spec against every pinned emulator, including ScummVM, then add evaluation and preparation tests proving the implemented declaration exactly matches every table field and add owned settings for its setting-directed rows.
 - [ ] 1.4 Add module tests and required bind mounts for remaining routes; prove sources resolve beneath `/data/saves` and a forced mount failure prevents kiosk start.
 - [ ] 1.5 Add conflict-safe idempotent migration for every changed setting-directed and bind-mounted route; upgrade tests SHALL prove migration completes before settings or mounts activate, equal data is accepted, and conflicts overwrite neither path.
@@ -23,7 +23,7 @@
 - [ ] 3.3 Add service and evaluation tests encoding `M=3h`, `R=3h15m`, `P=10m`, `E=4h`, and `B=7h25m`; validate `M<R` and `B>=P+R+E`, preserve the inequalities and post-lock budget in scaled tests, keep final cleanup available outside `B`, and prove same-service non-overlap, missed activation non-queueing, and future scheduling.
 - [ ] 3.4 Add dependency-graph tests and an idempotent restic-init oneshot after `/data`, secrets, and network-online; prove it opens first, initializes only on the precise absent result, fails closed otherwise, and is retried by later independent backup and maintenance timer activations.
 - [ ] 3.5 Add secret and option tests and implement validated B2 settings, root-only sops inputs, generated restic environment, test secrets, and enabled-only placeholder handling; prove disabled off-site services consume no backup secrets.
-- [ ] 3.6 Add a local-repository VM scenario proving snapshot consistency, typed-root inclusion, every home-only exclusion, an arbitrary included unlisted home path, and no credential exposure.
+- [ ] 3.6 Add a local-repository VM scenario proving snapshot consistency, typed-root inclusion, every home-only exclusion, an arbitrary included unlisted home path, no credential exposure, and pre-restic rejection when a declared exclusion resolves through a symlink ancestor outside player home or aliases a save route or another exclusion.
 - [ ] 3.7 Add VM failures for init authentication/network errors, backup error, timeout, and hard interruption; prove cloud failure leaves gameplay and local snapshots available, transient cleanup occurs at the next same-boot run, current failure is visible, and a future timer stays enabled; leave project package checks, `just check-all`, and `just closure-check` passing.
 
 ## 4. Maintenance, Status, and Restore

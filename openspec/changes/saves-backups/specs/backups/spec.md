@@ -57,9 +57,12 @@ Backup creation SHALL take exactly four typed roots from the source snapshot:
 the data-cache subvolume, and local snapshot storage SHALL be outside those
 roots, not exclusions. One finite declarative exclude list SHALL contain only
 strict normalized descendants of `player` home that are known reconstructible
-caches and SHALL generate restic's only exclusion input. It SHALL reject
-duplicates, `..`, symlink escape or aliases, home itself, and equality,
-ancestor, descendant, or alias overlap with any save route. Any unlisted path
+caches and SHALL generate restic's only exclusion input. Evaluation SHALL
+reject duplicates, `..`, home itself, and lexical equality, ancestor, or
+descendant overlap with any save route. Before invoking restic, the backup
+service SHALL resolve every declared path against the fresh source snapshot and
+fail before generating restic input if an existing symlink ancestor escapes
+`player` home or aliases a save route or another exclusion. Any unlisted path
 beneath `player` home SHALL be included.
 
 #### Scenario: Unlisted player-home data is backed up
@@ -71,8 +74,12 @@ beneath `player` home SHALL be included.
 - **THEN** the resulting restic snapshot contains none of those files
 
 #### Scenario: Invalid home exclusion is declared
-- **WHEN** an exclusion is not a strict normalized non-overlapping descendant of player home
+- **WHEN** an exclusion is not a strict normalized lexically non-overlapping descendant of player home
 - **THEN** evaluation rejects the declaration before generating restic input
+
+#### Scenario: Runtime path aliases protected data
+- **WHEN** a declared exclusion resolves through an existing symlink ancestor outside player home or onto a save route or another exclusion in the fresh source snapshot
+- **THEN** backup fails before invoking restic and identifies the invalid declaration
 
 ### Requirement: Backup creation and maintenance use native repository locking
 Backup creation SHALL run 10 minutes after boot and every 4 hours thereafter at

@@ -11,8 +11,9 @@ exemption; verify migration ordering and conflicts; and prove persistence. It
 SHALL also prove native snapshot retention windows, snapshot-consistent backup,
 the finite exclusion list and default inclusion, verified fixture restore,
 failure visibility, transient cleanup, future scheduling, priority settings,
-and runtime secret permissions. It SHALL reject malformed typed roots and home
-exclusions, prove fail-closed idempotent repository initialization and later
+and runtime secret permissions. It SHALL reject lexically malformed typed roots
+and home exclusions at evaluation, reject symlink escape and aliasing against
+the source snapshot before restic runs, prove fail-closed idempotent repository initialization and later
 timer retry, preserve timeout inequalities in scaled timing tests, pair health
 markers to exact invocations, and keep local operation available during cloud
 failure.
@@ -34,8 +35,12 @@ failure.
 - **THEN** each exclusion is absent and the unlisted file is present
 
 #### Scenario: Path declarations are invalid
-- **WHEN** roots or home exclusions contain duplicates, traversal, escape, aliases, or save-route overlap
+- **WHEN** roots or home exclusions contain duplicates, traversal, the home root, or lexical save-route overlap
 - **THEN** evaluation fails and no restic inputs are generated
+
+#### Scenario: Filesystem path aliases protected data
+- **WHEN** a home exclusion resolves through a symlink ancestor outside player home or onto a save route or another exclusion in the source snapshot
+- **THEN** backup fails before invoking restic and reports the invalid declaration
 
 #### Scenario: Snapshot-consistent restore is verified
 - **WHEN** the VM backs up known fixture bytes, changes the live file, and restores with verification

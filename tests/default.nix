@@ -41,6 +41,19 @@ let
     set -euo pipefail
     repo=/data/cache/emubox-restic-test
     mkdir -p "$repo"
+
+    # The double models restic's command line by hand, so every time the
+    # helper's argv changes the double mis-parses it. Left to exit codes
+    # alone that is indistinguishable from a repository error and surfaces
+    # several assertions later, against a fixture that never got written.
+    # Recording the argv turns it into a located failure with the arguments
+    # that caused it; `assert_double_understood_its_arguments` reads this.
+    misuse() {
+      mkdir -p /run/emubox
+      printf 'fake restic did not model: %s\n' "$*" >> /run/emubox/restic-test-misuse
+      exit 2
+    }
+
     case "$1" in
       cat)
         test ! -e /run/emubox/restic-test-init-auth-fail || exit 12
@@ -78,6 +91,10 @@ let
                 mkdir -p "$repo/snapshot/$relative"
                 cp -a "$1/." "$repo/snapshot/$relative/"
                 ;;
+              # An option the double does not model would otherwise be
+              # skipped here, along with the value of any option that takes
+              # one, silently changing what gets backed up.
+              -*) misuse "backup $*" ;;
             esac
             shift
           fi
@@ -96,15 +113,27 @@ let
       forget|check)
         ;;
       restore)
+        # Scanned rather than indexed by position, so reordering the
+        # operator's restore command cannot silently restore the wrong
+        # target. `--verify` is what the recovery procedure promises.
+        all="$*"
         shift
-        test "$1" = "--verify"
-        test "$3" = "--target"
-        mkdir -p "$4"
-        cp -a "$repo/snapshot/." "$4/"
+        verify="" target=""
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --verify) verify=yes; shift ;;
+            --target) target="''${2-}"; shift 2 ;;
+            -*) misuse "restore $all" ;;
+            *) shift ;;
+          esac
+        done
+        test -n "$verify" || misuse "restore without --verify: $all"
+        test -n "$target" || misuse "restore without --target: $all"
+        mkdir -p "$target"
+        cp -a "$repo/snapshot/." "$target/"
         ;;
       *)
-        echo "unexpected fake restic command: $*" >&2
-        exit 2
+        misuse "$*"
         ;;
     esac
   '';
@@ -209,6 +238,7 @@ in
   ];
 
   disko.tests.extraChecks = ''
+    import contextlib
     import json
 
     # The harness itself only waits for local-fs.target; every boot phase
@@ -221,6 +251,105 @@ in
         assert not failed, f"failed units:\n{failed}"
 
     booted()
+
+    # --- harness ------------------------------------------------------------
+    # Parsed once, at the top: these were read out of the configuration inside
+    # a subtest, so a failure there left every later subtest raising NameError
+    # instead of reporting its own result.
+    save_routes = json.loads(${py saveRoutesJson})
+    save_bind_mappings = json.loads(${py saveBindMappingsJson})
+    rollback_mapping = save_bind_mappings[0]
+
+    INIT = "emubox-restic-init.service"
+    BACKUP = "emubox-restic-backup.service"
+    RESTIC_UNITS = [
+        INIT,
+        BACKUP,
+        "emubox-restic-maintenance.service",
+        "emubox-restic-reconcile.service",
+    ]
+
+    def unit_property(unit, name):
+        return machine.succeed(f"systemctl show --value --property={name} {unit}").strip()
+
+    def reset_restic_units():
+        """Clear failed state, and the start rate limiter, for the whole family.
+
+        Resetting only the backup unit is not enough: every backup start
+        re-runs the `emubox-restic-init` oneshot it `Requires=`, so init is
+        the unit that reaches a start limit first, and its refusal arrives on
+        the backup unit as a dependency failure.
+        """
+        machine.succeed("systemctl reset-failed " + " ".join(RESTIC_UNITS))
+
+    def start_backup(expect="success"):
+        """Start the backup unit and assert it *ran*, then that it ended in `expect`.
+
+        The invocation id is the discriminating evidence. `machine.fail` on a
+        `systemctl start` is satisfied by a dependency failure, a start-limit
+        refusal or a misspelled unit name just as readily as by the backup
+        running and failing, which is the only thing the fault-injection
+        subtests actually mean. A run that never happened leaves the id, and
+        so `emubox-status`, pointing at the previous success.
+        """
+        reset_restic_units()
+        before = unit_property(BACKUP, "InvocationID")
+        machine.execute(f"systemctl start {BACKUP}")
+        after = unit_property(BACKUP, "InvocationID")
+        assert after and after != before, (
+            f"{BACKUP} never activated (invocation still {before!r}); failed units:\n"
+            + machine.succeed("systemctl --failed --no-legend --plain")
+        )
+        result = unit_property(BACKUP, "Result")
+        assert result == expect, f"{BACKUP}: Result={result!r}, expected {expect!r}"
+
+    @contextlib.contextmanager
+    def restic_fault(marker):
+        """Inject a fake-restic fault, and remove it even when the block fails.
+
+        Removing the marker on the last line of a subtest skips the removal
+        exactly when it matters most, leaving every later subtest talking to a
+        restic that always fails.
+        """
+        machine.succeed(f"mkdir -p /run/emubox && touch /run/emubox/{marker}")
+        try:
+            yield
+        finally:
+            machine.succeed(f"rm -f /run/emubox/{marker}")
+
+    @contextlib.contextmanager
+    def unmounted(where):
+        """Stop the bind mount unit covering `where`, and always restart it."""
+        unit = machine.succeed(f"systemd-escape --path --suffix=mount {where}").strip()
+        machine.succeed(f"systemctl stop {shlex.quote(unit)}")
+        try:
+            yield
+        finally:
+            machine.succeed(f"systemctl start {shlex.quote(unit)}")
+
+    def assert_double_understood_its_arguments():
+        rc, recorded = machine.execute("cat /run/emubox/restic-test-misuse")
+        assert rc != 0, f"the restic double was called with arguments it does not model:\n{recorded}"
+
+    subtest_failures = []
+
+    @contextlib.contextmanager
+    def checked(name):
+        """Record a subtest failure and carry on to the next subtest.
+
+        The driver's own `subtest` re-raises, so the first failed assertion
+        ends the script and one CI build reports exactly one defect. With no
+        KVM available locally that build is the only feedback channel, which
+        is what turned a handful of harness defects into a run per defect.
+        These checks restore the machine through `start_backup` and
+        `restic_fault`, so collecting them is safe; `subtest_failures` is
+        asserted once, at the end.
+        """
+        try:
+            with subtest(name):
+                yield
+        except Exception as error:
+            subtest_failures.append(f"{name}: {error}")
 
     # --- vm-test: the VM boots through the real boot path -------------------
 
@@ -317,9 +446,7 @@ in
             assert int(mode, 8) == int(entry["mode"], 8), f"{entry['path']}: {out}"
             assert (user, group) == (entry["user"], entry["group"]), f"{entry['path']}: {out}"
 
-    with subtest("Every declared save route is writable and every bind route is mounted"):
-        save_routes = json.loads(${py saveRoutesJson})
-        save_bind_mappings = json.loads(${py saveBindMappingsJson})
+    with checked("Every declared save route is writable and every bind route is mounted"):
         for route in save_routes:
             destination = route["destination"]
             machine.succeed(f"test -d {destination}")
@@ -327,31 +454,28 @@ in
         for mapping in save_bind_mappings:
             machine.succeed(f"mountpoint -q {mapping['where']}")
 
-    with subtest("Migration accepts equal data and rejects conflicts without overwriting"):
+    with checked("Migration accepts equal data and rejects conflicts without overwriting"):
         # A bind target is unmounted only for this isolated migration check;
-        # it is immediately restored, before any kiosk path could run.
+        # `unmounted` restores it even when an assertion here fails, so a
+        # failure cannot leave the save routes down for every later subtest.
         mapping = save_bind_mappings[0]
-        unit = machine.succeed(
-            f"systemd-escape --path --suffix=mount {mapping['where']}"
-        ).strip()
-        machine.succeed(f"systemctl stop {shlex.quote(unit)}")
-        machine.succeed(f"mkdir -p {mapping['where']} {mapping['what']}")
-        machine.succeed(f"printf equal > {mapping['where']}/equal.sav")
-        machine.succeed(f"printf equal > {mapping['what']}/equal.sav")
-        machine.succeed("${pkgs.emubox-save-migrate}/bin/emubox-save-migrate /etc/emubox/save-routes.json")
-        machine.succeed(f"test -f {mapping['what']}/equal.sav")
-        machine.succeed(f"printf old > {mapping['where']}/conflict.sav")
-        machine.succeed(f"printf new > {mapping['what']}/conflict.sav")
-        machine.fail("${pkgs.emubox-save-migrate}/bin/emubox-save-migrate /etc/emubox/save-routes.json")
-        assert machine.succeed(f"cat {mapping['where']}/conflict.sav").strip() == "old"
-        assert machine.succeed(f"cat {mapping['what']}/conflict.sav").strip() == "new"
-        machine.succeed(f"rm {mapping['where']}/conflict.sav")
-        machine.succeed(f"systemctl start {shlex.quote(unit)}")
+        with unmounted(mapping["where"]):
+            machine.succeed(f"mkdir -p {mapping['where']} {mapping['what']}")
+            machine.succeed(f"printf equal > {mapping['where']}/equal.sav")
+            machine.succeed(f"printf equal > {mapping['what']}/equal.sav")
+            machine.succeed("${pkgs.emubox-save-migrate}/bin/emubox-save-migrate /etc/emubox/save-routes.json")
+            machine.succeed(f"test -f {mapping['what']}/equal.sav")
+            machine.succeed(f"printf old > {mapping['where']}/conflict.sav")
+            machine.succeed(f"printf new > {mapping['what']}/conflict.sav")
+            machine.fail("${pkgs.emubox-save-migrate}/bin/emubox-save-migrate /etc/emubox/save-routes.json")
+            assert machine.succeed(f"cat {mapping['where']}/conflict.sav").strip() == "old"
+            assert machine.succeed(f"cat {mapping['what']}/conflict.sav").strip() == "new"
+            machine.succeed(f"rm {mapping['where']}/conflict.sav")
         machine.succeed(f"mountpoint -q {mapping['where']}")
 
     # --- off-site backups: local fake repository, real service transaction --
 
-    with subtest("Restic uses one read-only source and backs up only typed roots"):
+    with checked("Restic uses one read-only source and backs up only typed roots"):
         machine.succeed("systemctl stop emubox-restic-backup.timer")
         machine.succeed("mkdir -p /data/es-de /data/bios /data/home/player/.cache /data/home/player/.local/cache")
         machine.succeed("printf original > /data/saves/snapshot-consistency-fixture")
@@ -360,15 +484,17 @@ in
         machine.succeed("printf excluded > /data/home/player/.cache/cache-fixture")
         machine.succeed("printf excluded > /data/home/player/.local/cache/cache-fixture")
         machine.succeed("printf include-me > /data/home/player/unlisted-home-fixture")
-        machine.succeed("mkdir -p /run/emubox && touch /run/emubox/restic-test-pause")
-        machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
-        machine.succeed("systemctl start --no-block emubox-restic-backup.service")
-        machine.wait_until_succeeds("test -e /run/emubox/restic-test-ready")
-        machine.succeed("printf changed-after-snapshot > /data/saves/snapshot-consistency-fixture")
-        machine.succeed("rm /run/emubox/restic-test-pause")
+        # Started with --no-block and held at the double's pause point, so the
+        # live file can be changed while the source snapshot is open. A
+        # blocking start would wait on a service that is waiting on this test.
+        with restic_fault("restic-test-pause"):
+            reset_restic_units()
+            machine.succeed(f"systemctl start --no-block {BACKUP}")
+            machine.wait_until_succeeds("test -e /run/emubox/restic-test-ready")
+            machine.succeed("printf changed-after-snapshot > /data/saves/snapshot-consistency-fixture")
         machine.wait_until_succeeds("test -e /data/cache/emubox-restic-test/backup-ran")
         machine.wait_until_succeeds(
-            "test $(systemctl show -p ActiveState --value emubox-restic-backup.service) = inactive"
+            f"test $(systemctl show -p ActiveState --value {BACKUP}) = inactive"
         )
         assert machine.succeed("cat /data/cache/emubox-restic-test/snapshot/saves/snapshot-consistency-fixture").strip() == "original"
         machine.succeed("test -e /data/cache/emubox-restic-test/snapshot/es-de/esde-fixture")
@@ -378,7 +504,7 @@ in
         machine.fail("test -e /data/cache/emubox-restic-test/snapshot/home/player/.local/cache/cache-fixture")
         machine.fail("mountpoint -q /run/emubox/restic-source")
         machine.fail("find /data/.snapshots/restic -mindepth 1 -maxdepth 1 -name 'restic-*' | grep .")
-        assert machine.succeed("systemctl show -p Result --value emubox-restic-backup.service").strip() == "success"
+        assert unit_property(BACKUP, "Result") == "success"
         machine.succeed("rm -rf /run/emubox-restored")
         machine.succeed(
             "${fakeRestic}/bin/restic restore --verify emubox-test-snapshot --target /run/emubox-restored"
@@ -387,55 +513,67 @@ in
             "cat /run/emubox-restored/saves/snapshot-consistency-fixture"
         ).strip() == "original"
 
-    with subtest("Runtime symlink aliases fail before restic sees backup inputs"):
-        before = machine.succeed("stat -c %Y /data/cache/emubox-restic-test/backup-ran").strip()
-        machine.succeed("rm -rf /data/home/player/.cache")
-        machine.succeed("ln -s /data/saves /data/home/player/.cache")
-        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
-        machine.fail("systemctl start emubox-restic-backup.service")
-        assert machine.succeed("stat -c %Y /data/cache/emubox-restic-test/backup-ran").strip() == before
-        machine.succeed("rm /data/home/player/.cache && mkdir -p /data/home/player/.cache")
-        machine.succeed("rm -rf /data/home/player/.local/cache")
-        machine.succeed("ln -s ../.cache /data/home/player/.local/cache")
-        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
-        machine.fail("systemctl start emubox-restic-backup.service")
-        machine.succeed("rm /data/home/player/.local/cache && mkdir -p /data/home/player/.local/cache")
+    with checked("Runtime symlink aliases fail before restic sees backup inputs"):
+        for alias, target in [
+            ("/data/home/player/.cache", "/data/saves"),
+            ("/data/home/player/.local/cache", "../.cache"),
+        ]:
+            before = machine.succeed("stat -c %Y /data/cache/emubox-restic-test/backup-ran").strip()
+            machine.succeed(f"rm -rf {alias}")
+            machine.succeed(f"ln -s {target} {alias}")
+            try:
+                start_backup(expect="exit-code")
+                assert machine.succeed(
+                    "stat -c %Y /data/cache/emubox-restic-test/backup-ran"
+                ).strip() == before, f"restic ran despite the {alias} alias"
+            finally:
+                machine.succeed(f"rm -f {alias} && mkdir -p {alias}")
 
-    with subtest("Maintenance and status use exact-invocation journal markers"):
-        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
-        machine.succeed("systemctl start emubox-restic-backup.service")
+    with checked("Maintenance and status use exact-invocation journal markers"):
+        start_backup()
         machine.succeed("systemctl start emubox-restic-maintenance.service")
         machine.succeed(
             "journalctl -u emubox-restic-maintenance.service -o cat --no-pager | grep -F 'EMUBOX_MARKER='"
         )
         machine.succeed("emubox-status")
-        machine.succeed("touch /run/emubox/restic-test-fail")
-        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
-        machine.fail("systemctl start emubox-restic-backup.service")
-        status = machine.fail("emubox-status")
-        assert "emubox-restic-backup.service: latest invocation failed" in status, status
-        machine.succeed("rm /run/emubox/restic-test-fail")
+        # `start_backup` asserts the backup actually ran and failed. Status
+        # reads the unit's current invocation, so a backup that never started
+        # would leave the previous success standing and report healthy.
+        with restic_fault("restic-test-fail"):
+            start_backup(expect="exit-code")
+            status = machine.fail("emubox-status")
+            assert "emubox-restic-backup.service: latest invocation failed" in status, status
 
-    with subtest("Cloud failures do not disable local gameplay or future backup scheduling"):
-        machine.succeed("touch /run/emubox/restic-test-fail")
-        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
-        machine.fail("systemctl start emubox-restic-backup.service")
-        assert machine.succeed("systemctl show -p Result --value emubox-restic-backup.service").strip() == "exit-code"
-        machine.succeed("mountpoint -q " + save_bind_mappings[0]["where"])
-        machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
-        machine.succeed("systemctl start btrbk-local.service")
-        machine.succeed("rm /run/emubox/restic-test-fail")
+    with checked("Cloud failures do not disable local gameplay or future backup scheduling"):
+        with restic_fault("restic-test-fail"):
+            start_backup(expect="exit-code")
+            machine.succeed("mountpoint -q " + save_bind_mappings[0]["where"])
+            machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
+            machine.succeed("systemctl start btrbk-local.service")
 
-    with subtest("Disabling cloud jobs keeps routed saves active without reverse migration"):
+    with checked("Init authentication and network failures remain fail-closed"):
+        # The gate is proven by what did *not* run: init must fail on its own
+        # invocation and the backup must never reach one, which is precisely
+        # what a bare `machine.fail` on the start cannot distinguish.
+        for marker in ["restic-test-init-auth-fail", "restic-test-init-network-fail"]:
+            with restic_fault(marker):
+                reset_restic_units()
+                backup_before = unit_property(BACKUP, "InvocationID")
+                init_before = unit_property(INIT, "InvocationID")
+                machine.fail(f"systemctl start {BACKUP}")
+                assert unit_property(INIT, "InvocationID") != init_before, f"{INIT} never ran"
+                assert unit_property(INIT, "Result") == "exit-code", unit_property(INIT, "Result")
+                assert unit_property(BACKUP, "InvocationID") == backup_before, (
+                    f"{BACKUP} ran despite a failed init gate"
+                )
+        start_backup()
+
+    with checked("Disabling cloud jobs keeps routed saves active without reverse migration"):
         # The declarative rollback configuration is evaluated separately in
         # tests/saves.nix. This runtime half proves that stopping the cloud
         # activation paths neither tears down save mounts nor moves data back
         # into the legacy directory that the mount covers.
-        for unit in [
-            "emubox-restic-init.service",
-            "emubox-restic-backup.service",
-            "emubox-restic-maintenance.service",
-        ]:
+        for unit in RESTIC_UNITS:
             machine.succeed(f"systemctl stop {unit}")
         for timer in [
             "emubox-restic-backup.timer",
@@ -443,7 +581,6 @@ in
         ]:
             machine.succeed(f"systemctl disable --now {timer}")
             machine.fail(f"systemctl is-enabled {timer}")
-        rollback_mapping = save_bind_mappings[0]
         machine.succeed(f"mountpoint -q {rollback_mapping['where']}")
         machine.succeed(
             f"printf rollback-routed > {rollback_mapping['where']}/rollback-routed-write"
@@ -452,30 +589,27 @@ in
             f"cat {rollback_mapping['what']}/rollback-routed-write"
         ).strip() == "rollback-routed"
 
-    with subtest("Init authentication and network failures remain fail-closed"):
-        for marker in ["restic-test-init-auth-fail", "restic-test-init-network-fail"]:
-            machine.succeed(f"touch /run/emubox/{marker}")
-            machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
-            machine.fail("systemctl start emubox-restic-backup.service")
-            machine.succeed(f"rm /run/emubox/{marker}")
-        machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
-        machine.succeed("systemctl start emubox-restic-backup.service")
-
-    with subtest("Reconciler removes interrupted sources both before backup and on boot"):
+    with checked("Reconciler removes interrupted sources both before backup and on boot"):
         machine.succeed("btrfs subvolume snapshot -r /data /data/.snapshots/restic/restic-same-boot")
-        machine.succeed("systemctl start emubox-restic-backup.service")
+        start_backup()
         machine.fail("test -e /data/.snapshots/restic/restic-same-boot")
         machine.succeed("btrfs subvolume snapshot -r /data /data/.snapshots/restic/restic-after-power-loss")
         machine.succeed("systemctl reboot")
         machine.wait_for_unit("multi-user.target")
         machine.fail("test -e /data/.snapshots/restic/restic-after-power-loss")
+        # `systemctl disable` above wrote to /etc, which lives on the root
+        # subvolume the boot rolls back, so activation restores the declared
+        # enablement. The rollback is the point: a disabled timer is not
+        # supposed to outlive it.
         machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
 
-    with subtest("A routed write survives reboot after cloud rollback"):
+    with checked("A routed write survives reboot after cloud rollback"):
         assert machine.succeed(
             f"cat {rollback_mapping['what']}/rollback-routed-write"
         ).strip() == "rollback-routed"
         machine.succeed(f"mountpoint -q {rollback_mapping['where']}")
+
+    assert_double_understood_its_arguments()
 
     # --- persistence: persisted paths are bound into the root ----------------
 
@@ -679,5 +813,9 @@ in
         # fixes forward included) fails here instead of on first use.
         out = machine.succeed("LD_BIND_NOW=1 es-de --version")
         assert "ES-DE 3.4.1" in out, out
+
+    # Every `checked` subtest above reports here, so one build lists every
+    # defect rather than the first one.
+    assert not subtest_failures, "subtests failed:\n" + "\n".join(subtest_failures)
   '';
 }

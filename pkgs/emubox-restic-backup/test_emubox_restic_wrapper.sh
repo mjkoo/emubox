@@ -2,6 +2,7 @@
 set -euo pipefail
 
 wrapper="${1:?wrapper path required}"
+status_wrapper="${2:?status wrapper path required}"
 test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
 mkdir -p "$test_root/bin" "$test_root/logs"
@@ -51,5 +52,24 @@ test ! -e "$test_root/logs/args"
 
 if run_wrapper 1000 snapshots; then
   echo "wrapper allowed non-root invocation" >&2
+  exit 1
+fi
+
+cat > "$test_root/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = show
+printf '\n'
+EOF
+chmod +x "$test_root/bin/systemctl"
+
+status_output=""
+if status_output="$(PATH="$test_root/bin:$PATH" "$status_wrapper" 2>&1)"; then
+  echo "status unexpectedly reported healthy with no unit invocations" >&2
+  exit 1
+fi
+test "$(printf '%s\n' "$status_output" | grep -c '^WARN .*: never run;')" -eq 3
+if printf '%s\n' "$status_output" | grep -q -- '--source-spec is required'; then
+  echo "status wrapper dispatched to backup mode" >&2
   exit 1
 fi

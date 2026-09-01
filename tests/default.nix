@@ -61,6 +61,8 @@ let
           : > /run/emubox/restic-test-ready
           while test -e /run/emubox/restic-test-pause; do sleep 1; done
         fi
+        rm -rf -- "$repo/snapshot"
+        mkdir -p "$repo/snapshot"
         excludes=""
         shift
         while [ "$#" -gt 0 ]; do
@@ -365,6 +367,9 @@ in
         machine.succeed("printf changed-after-snapshot > /data/saves/snapshot-consistency-fixture")
         machine.succeed("rm /run/emubox/restic-test-pause")
         machine.wait_until_succeeds("test -e /data/cache/emubox-restic-test/backup-ran")
+        machine.wait_until_succeeds(
+            "test $(systemctl show -p ActiveState --value emubox-restic-backup.service) = inactive"
+        )
         assert machine.succeed("cat /data/cache/emubox-restic-test/snapshot/saves/snapshot-consistency-fixture").strip() == "original"
         machine.succeed("test -e /data/cache/emubox-restic-test/snapshot/es-de/esde-fixture")
         machine.succeed("test -e /data/cache/emubox-restic-test/snapshot/bios/bios-fixture")

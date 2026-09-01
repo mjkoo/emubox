@@ -57,13 +57,16 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     install -Dm755 emubox_restic_backup.py $out/bin/emubox-restic-backup
     install -Dm755 emubox_restic_wrapper.sh $out/bin/emubox-restic
-    ln -s emubox-restic-backup $out/bin/emubox-status
     ${lib.optionalString stdenvNoCC.hostPlatform.isLinux ''
       wrapProgram $out/bin/emubox-restic-backup --prefix PATH : ${runtimePath}
     ''}
+    makeWrapper $out/bin/emubox-restic-backup $out/bin/emubox-status \
+      --add-flags --status
   '';
   installCheckPhase = ''
-    bash test_emubox_restic_wrapper.sh "$out/bin/emubox-restic"
+    bash test_emubox_restic_wrapper.sh \
+      "$out/bin/emubox-restic" \
+      "$out/bin/emubox-status"
   '';
   meta = {
     description = "Snapshot-consistent restic backup helper for EmuBox";

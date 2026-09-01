@@ -348,7 +348,7 @@ in
         machine.succeed("printf excluded > /data/home/player/.cache/cache-fixture")
         machine.succeed("printf excluded > /data/home/player/.local/cache/cache-fixture")
         machine.succeed("printf include-me > /data/home/player/unlisted-home-fixture")
-        machine.succeed("touch /run/emubox/restic-test-pause")
+        machine.succeed("mkdir -p /run/emubox && touch /run/emubox/restic-test-pause")
         machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
         machine.succeed("systemctl start emubox-restic-backup.service &")
         machine.wait_until_succeeds("test -e /run/emubox/restic-test-ready")

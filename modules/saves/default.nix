@@ -19,9 +19,11 @@ let
       evidence
       ;
     legacyPaths = [ "${playerHome}/${legacy}" ];
-    preparation = "create destination, migrate legacy tree, then ${
-      if mechanism == "bind" then "mount" else "write key"
-    }";
+    preparation =
+      if mechanism == "bind" then
+        "create destination, migrate covered legacy tree, then mount"
+      else
+        "create destination, migrate legacy tree, then write key";
   };
   routeTable = [
     (route "RetroArch saves" ".config/retroarch/saves" "/data/saves/retroarch/saves" "setting"

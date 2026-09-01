@@ -142,11 +142,27 @@ let
     "mount-source assertion and deterministic SD fixture or fixture exemption naming the unavailable title"
     "parsed owned-key assertion and deterministic save fixture or fixture exemption naming the unavailable game engine"
   ];
-  expectedPreparation =
-    route:
-    "create destination, migrate legacy tree, then ${
-      if route.mechanism == "bind" then "mount" else "write key"
-    }";
+  expectedPreparations = [
+    "create destination, migrate legacy tree, then write key"
+    "create destination, migrate legacy tree, then write key"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate covered legacy tree, then mount"
+    "create destination, migrate legacy tree, then write key"
+  ];
+  overlapFixtures = [
+    "${home}/.config/retroarch"
+    "${home}/.config/retroarch/saves/child"
+  ];
+  unlistedHomePath = "${home}/unlisted-plugin-state";
   invalidExclusion =
     value:
     let
@@ -192,7 +208,7 @@ assert lib.assertMsg (actualRouteFields == expectedRouteFields) ''
 assert lib.assertMsg
   (
     map (route: route.evidence) routes == expectedEvidence
-    && lib.all (route: route.preparation == expectedPreparation route) routes
+    && map (route: route.preparation) routes == expectedPreparations
   )
   ''
     tests/saves.nix: route preparation order or required evidence differs from
@@ -237,19 +253,42 @@ assert lib.assertMsg (lib.all (path: lib.hasPrefix "${home}/" path && path != ho
   saves.homeCacheExclusions
 ) "tests/saves.nix: home cache exclusions must be strict player-home descendants";
 assert lib.assertMsg
-  (lib.all invalidExclusion [
-    [
-      "${home}/.cache"
-      "${home}/.cache"
+  (
+    lib.all invalidExclusion [
+      [
+        "${home}/.cache"
+        "${home}/.cache"
+      ]
+      [ "${home}/../escape" ]
+      [ home ]
+      [ "${home}/.cache/../saves-alias" ]
+      [ "${home}/.config/retroarch/saves" ]
     ]
-    [ "${home}/../escape" ]
-    [ home ]
-    [ "${home}/.cache/../saves-alias" ]
-    [ "${home}/.config/retroarch/saves" ]
-  ])
+    && lib.all invalidExclusion overlapFixtures
+  )
   ''
-    tests/saves.nix: duplicate, traversal, home-root, alias-shaped, and
-    save-route-overlapping cache exclusions must all fail evaluation.
+    tests/saves.nix: duplicate, traversal, home-root, alias-shaped, exact
+    route, and lexical ancestor/descendant route overlaps must fail evaluation.
+  '';
+assert lib.assertMsg
+  (
+    lib.all (path: !(lib.elem ".." (lib.splitString "/" path))) overlapFixtures
+    && lib.all (path: lib.hasPrefix "${home}/" path) overlapFixtures
+  )
+  ''
+    tests/saves.nix: overlap fixtures must be normalized descendants of home
+    so their rejection exercises save-route overlap, not traversal or escape.
+  '';
+assert lib.assertMsg
+  (
+    lib.elem home saves.backupRoots
+    && !lib.any (
+      excluded: unlistedHomePath == excluded || lib.hasPrefix "${excluded}/" unlistedHomePath
+    ) saves.homeCacheExclusions
+  )
+  ''
+    tests/saves.nix: an arbitrary unlisted path beneath player home must remain
+    in the backed-up home root rather than being excluded by route logic.
   '';
 assert lib.assertMsg
   (

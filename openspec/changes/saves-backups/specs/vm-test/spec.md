@@ -1,35 +1,74 @@
 ## ADDED Requirements
 
 ### Requirement: Save placement and recovery are proven in the VM
-The kiosk VM test, or a sibling VM built from the same modules, SHALL use a
-local restic repository and non-secret test credentials to prove the `saves`
-and `backups` capabilities without contacting Backblaze. It SHALL assert every
-declared save setting and mandatory mount resolves beneath `/data/saves`, write
-known save bytes through each independently configured path that has a
-deterministic headless fixture, reboot and verify persistence, and record an
-explicit reason for any runtime path that cannot be exercised in the VM. It
-SHALL also prove local snapshot creation and retention, backup from one fresh
-snapshot, included and excluded path coverage, restore byte equality, separate
-maintenance failure, persistent result reporting, timer and priority settings,
-and runtime secret permissions.
+The kiosk VM test, or a sibling built from the same modules, SHALL use a local
+restic repository and test credentials to prove save routing and recovery
+without Backblaze. It SHALL assert that the implemented route declaration
+matches every field of the authoritative finite table, including every declared
+setting and mandatory mount,
+including ScummVM; exercise each deterministic route or record a specific
+exemption; verify migration ordering and conflicts; and prove persistence. It
+SHALL also prove native snapshot retention windows, snapshot-consistent backup,
+the finite exclusion list and default inclusion, verified fixture restore,
+failure visibility, transient cleanup, future scheduling, priority settings,
+and runtime secret permissions. It SHALL reject malformed typed roots and home
+exclusions, prove fail-closed idempotent repository initialization and later
+timer retry, preserve timeout inequalities in scaled timing tests, pair health
+markers to exact invocations, and keep local operation available during cloud
+failure.
 
 #### Scenario: Save route survives reboot
 - **WHEN** the VM writes known bytes through a declared emulator save path and reboots
-- **THEN** the bytes remain and the resolved file is beneath that emulator's `/data/saves` directory
+- **THEN** the bytes remain beneath that emulator's `/data/saves` directory
 
 #### Scenario: Runtime save fixture is unavailable
-- **WHEN** an independently configured emulator save path cannot be exercised deterministically without hardware or redistributable game content
-- **THEN** the test still asserts its owned setting or mount and records why runtime write evidence is absent and what would remove the exemption
+- **WHEN** a route, including ScummVM, cannot be exercised deterministically
+- **THEN** the test asserts its setting or mount and records the reason and condition for removing the exemption
 
-#### Scenario: Backup-set regression
-- **WHEN** the VM creates known files in every included area, every excluded area, and an unexpected location beneath the `player` home, then runs a backup
-- **THEN** the restic snapshot contains every included and unexpected-home file and contains none of the explicitly excluded files
+#### Scenario: Upgrade migrates every changed route
+- **WHEN** the VM upgrades with files at setting-directed and bind-mounted legacy paths
+- **THEN** migration precedes activation and a forced conflict blocks activation without overwriting data
 
-#### Scenario: Snapshot-consistent restore
-- **WHEN** the VM starts a backup from a fresh local snapshot, changes the live source, and runs the restore drill
-- **THEN** the restored bytes match the captured snapshot rather than the later live file and the drill records success
+#### Scenario: Backup set honors explicit exclusions
+- **WHEN** the VM backs up fixtures in every exclusion and an arbitrary unlisted player-home path
+- **THEN** each exclusion is absent and the unlisted file is present
 
-#### Scenario: Maintenance failure does not block backup
-- **WHEN** the VM forces the maintenance job to fail
-- **THEN** status records the maintenance failure and a subsequent backup creation succeeds independently
+#### Scenario: Path declarations are invalid
+- **WHEN** roots or home exclusions contain duplicates, traversal, escape, aliases, or save-route overlap
+- **THEN** evaluation fails and no restic inputs are generated
 
+#### Scenario: Snapshot-consistent restore is verified
+- **WHEN** the VM backs up known fixture bytes, changes the live file, and restores with verification
+- **THEN** restored bytes match the source snapshot rather than the later live file
+
+#### Scenario: Failed backup supersedes prior success
+- **WHEN** a successful backup is followed by a forced failure
+- **THEN** current status shows failure, the transient source is removed, and the future timer remains enabled
+
+#### Scenario: Interrupted backup artifact is reconciled
+- **WHEN** the VM presents a transient source artifact at boot or between two backups without reboot
+- **THEN** reconciliation removes it before the next backup creates its source snapshot
+
+#### Scenario: Maintenance overlaps a backup activation
+- **WHEN** bounded weekly maintenance holds its native lock as a backup activation begins
+- **THEN** the backup retry window outlasts maintenance and that backup proceeds after release
+
+#### Scenario: Repository initialization retries safely
+- **WHEN** initialization first sees a non-absence failure and a later timer activation can open the repository
+- **THEN** the first activation fails without initialization and the later activation proceeds without manual intervention
+
+#### Scenario: Scaled timeout model is exercised
+- **WHEN** VM timing constants are scaled down for an overlap test
+- **THEN** maintenance remains shorter than retry-lock and the full post-lock backup budget remains available
+
+#### Scenario: Health marker is not from the latest invocation
+- **WHEN** a successful marker is followed by a failed invocation or a malformed or mismatched marker
+- **THEN** status reports the latest layer unhealthy and does not reuse the older success
+
+#### Scenario: Cloud is unavailable
+- **WHEN** initialization or backup cannot reach its repository
+- **THEN** gameplay, display, save routes, and local snapshot creation still operate
+
+#### Scenario: Cloud backup is rolled back
+- **WHEN** cloud init, backup, and maintenance units are disabled after migration
+- **THEN** all save mappings remain active and a table-routed write survives reboot

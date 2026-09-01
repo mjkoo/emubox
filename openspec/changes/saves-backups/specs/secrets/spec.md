@@ -18,5 +18,4 @@ committed replacement placeholder.
 
 #### Scenario: Backups are disabled
 - **WHEN** off-site backups are disabled by declaration
-- **THEN** unresolved B2 and restic placeholders do not block installation and no runtime backup service consumes them
-
+- **THEN** unresolved B2 and restic placeholders do not block installation, no off-site unit consumes them, and local snapshots and gameplay remain independent

@@ -1,122 +1,181 @@
 ## Purpose
 
-Provides bounded local history and encrypted off-site recovery for family data,
-with routine integrity checks, restore evidence, and actionable operator status.
+Provides bounded local history and conventional encrypted off-site recovery for
+family data, with routine integrity checks and actionable operator status.
 
 ## ADDED Requirements
 
 ### Requirement: Data has bounded read-only local history
-The system SHALL create read-only snapshots of the protected `/data` subvolume
-while the box is running and retain 48 hourly and 14 daily recovery points;
-the nested reconstructible cache subvolume SHALL not be part of those snapshots.
-Snapshot scheduling SHALL be relative to boot and SHALL resume after downtime
-without requiring the box to be powered on at a wall-clock time. Local history
-SHALL remain on the data disk and SHALL be identified as protection from file
-damage, not from disk loss.
+The system SHALL create read-only snapshots of protected `/data` while the box
+is running. It SHALL keep every real snapshot from the most recent 48 hours and
+one representative from each populated daily bucket in the preceding 14 days;
+one snapshot MAY satisfy both buckets. An empty bucket caused by downtime SHALL
+NOT be a retention violation. Retained points SHALL remain read-only. The
+reconstructible cache subvolume SHALL not be captured. Scheduling SHALL resume
+from boot without fabricating points for time powered off.
 
 #### Scenario: Hourly recovery point is created
 - **WHEN** the box remains on through an hourly snapshot interval
 - **THEN** a new read-only snapshot containing the current `/data` state exists
 
-#### Scenario: Snapshot retention runs
-- **WHEN** local history exceeds either declared retention count
-- **THEN** the oldest recovery points beyond that count are removed while 48 hourly and 14 daily points remain available
+#### Scenario: Time-bucket retention runs
+- **WHEN** retention runs with snapshots inside and outside the declared windows
+- **THEN** every point from 48 hours and one representative from each populated daily bucket in the preceding 14 days remain read-only, with overlap permitted
 
-#### Scenario: Box was powered off at the nominal time
-- **WHEN** the box boots after being off through one or more snapshot intervals
-- **THEN** snapshot scheduling resumes from boot without launching one job for every missed interval
+#### Scenario: Box was powered off
+- **WHEN** the box boots after missing snapshot intervals
+- **THEN** scheduling resumes without creating snapshots for missed intervals
 
 ### Requirement: Off-site backups use a fresh consistent snapshot
-Each off-site backup SHALL create a fresh read-only snapshot and read all input
-from that one recovery point. Its encrypted restic repository SHALL be in a
-private Backblaze B2 bucket reached through the S3-compatible endpoint with an
-application key restricted to that bucket. Backup creation SHALL include
-`/data/saves`, the complete `player` home except declared reconstructible
-caches, ES-DE settings, gamelists and collections, and `/data/bios`; it SHALL
-exclude ROMs, scraped media, `/data/cache`, and local snapshot storage.
+Each off-site backup SHALL create and read from one fresh read-only snapshot.
+The transient snapshot SHALL be removed on success, failure, and timeout. Stale
+transient snapshots left by interruption SHALL be reconciled both at boot and
+at the start of every backup, before a new source snapshot is created. The
+encrypted restic repository SHALL use a private B2
+bucket through its S3-compatible endpoint with a bucket-restricted key.
 
 #### Scenario: Live files change during backup
-- **WHEN** a live included file changes after the backup's source snapshot is created
-- **THEN** the backup contains the file version from that source snapshot and no mixture of its earlier and later bytes
+- **WHEN** a live included file changes after the source snapshot is created
+- **THEN** the backup contains the version from the immutable source snapshot
 
-#### Scenario: Included data is backed up
-- **WHEN** the source snapshot contains a file in any included path and backup creation succeeds
-- **THEN** that file is present in the resulting restic snapshot
+#### Scenario: Backup exits unsuccessfully
+- **WHEN** backup fails or exceeds its runtime limit
+- **THEN** the transient source is removed and the failure is visible
 
-#### Scenario: Reconstructible data is excluded
-- **WHEN** the source snapshot contains ROMs, scraped media, cache data, or local snapshots
-- **THEN** none of those files is present in the resulting restic snapshot
+#### Scenario: Power loss leaves a transient artifact
+- **WHEN** boot finds a stale transient snapshot from an interrupted run
+- **THEN** it removes that artifact before permitting the next backup
 
-### Requirement: Backup creation is frequent and independent of maintenance
-Backup creation SHALL run 10 minutes after boot and every 4 hours thereafter,
-including after an interval missed while powered off, at idle CPU and I/O
-priority. Repository retention, prune, and integrity checking SHALL run in a
-separate weekly job, so maintenance failure or duration cannot suppress the
-creation of a new backup.
+#### Scenario: Hard interruption occurs without reboot
+- **WHEN** a prior backup is interrupted and a later backup starts on the same boot
+- **THEN** start-of-run reconciliation removes the stale artifact before creating a new source snapshot
 
-#### Scenario: Backup schedule follows use of the box
-- **WHEN** the box boots and remains on for 10 minutes
-- **THEN** a backup is attempted without waiting for a particular wall-clock time
+### Requirement: Backup inclusion is default-on
+Backup creation SHALL take exactly four typed roots from the source snapshot:
+`/data/saves`; the complete `/data/es-de` directory;
+`/data/bios`; and the complete `/data/home/player` tree. ROMs, scraped media,
+the data-cache subvolume, and local snapshot storage SHALL be outside those
+roots, not exclusions. One finite declarative exclude list SHALL contain only
+strict normalized descendants of `player` home that are known reconstructible
+caches and SHALL generate restic's only exclusion input. It SHALL reject
+duplicates, `..`, symlink escape or aliases, home itself, and equality,
+ancestor, descendant, or alias overlap with any save route. Any unlisted path
+beneath `player` home SHALL be included.
+
+#### Scenario: Unlisted player-home data is backed up
+- **WHEN** the source contains a file at an arbitrary unlisted player-home path
+- **THEN** the resulting restic snapshot contains that file
+
+#### Scenario: Declared reconstructible data is excluded
+- **WHEN** the source contains a file in each explicitly excluded path
+- **THEN** the resulting restic snapshot contains none of those files
+
+#### Scenario: Invalid home exclusion is declared
+- **WHEN** an exclusion is not a strict normalized non-overlapping descendant of player home
+- **THEN** evaluation rejects the declaration before generating restic input
+
+### Requirement: Backup creation and maintenance use native repository locking
+Backup creation SHALL run 10 minutes after boot and every 4 hours thereafter at
+idle CPU and I/O priority. Weekly retention, prune, and checking SHALL be
+staggered from routine backups. Operations SHALL use restic's native locks
+without an external repository lock or custom queue. The complete maintenance
+sequence, including lock wait, SHALL be bounded to `M = 3h`. Backup SHALL allow
+`P = 10m` before restic, use `R = 3h15m` as its retry-lock window, preserve
+`E = 4h` after lock acquisition, and use activation bound `B = 7h25m`,
+validating `M < R` and `B >= P + R + E`. Final cleanup SHALL remain available
+after termination and outside `B`. A timeout caused by another locker SHALL
+fail visibly without disabling future timers. Same-service activations SHALL
+not overlap, and a timer activation missed while backup remains active SHALL
+not be queued. Only local btrfs snapshot creation and removal SHALL use a short
+filesystem lock.
+
+#### Scenario: Maintenance holds the repository lock
+- **WHEN** a backup starts while bounded weekly maintenance holds its native restic lock
+- **THEN** the backup retry window outlasts maintenance and the backup proceeds after the lock is released
+
+#### Scenario: Another lock cause exceeds the retry window
+- **WHEN** a backup cannot acquire a compatible restic lock for a reason other than bounded weekly maintenance
+- **THEN** that attempt fails visibly and the next scheduled activation remains enabled
 
 #### Scenario: Maintenance fails
-- **WHEN** weekly retention, prune, or integrity checking fails
-- **THEN** the failure is recorded and the next scheduled backup creation remains independently runnable
+- **WHEN** weekly retention, prune, or checking fails
+- **THEN** the failure is recorded and future backup scheduling remains enabled
+
+#### Scenario: Backup outlasts its normal cadence
+- **WHEN** one backup remains active across a later four-hour timer activation
+- **THEN** no second backup overlaps or queues and subsequent timer activations remain enabled
+
+### Requirement: Repository initialization is fail-closed and cloud-isolated
+When off-site backup is enabled, an idempotent initialization gate SHALL first
+open the configured repository. It SHALL initialize only for restic's precise
+nonexistent-repository result and SHALL fail for authentication, network,
+corruption, and every other result. Backup and maintenance SHALL depend on this
+gate and retry it on later independent timer activations. Local snapshots,
+gameplay, display, and save preparation SHALL remain independent of network,
+backup secrets, initialization, backup, and maintenance. When off-site backup
+is disabled, its services SHALL not consume backup secrets.
+
+#### Scenario: Existing repository is reachable
+- **WHEN** initialization opens the configured existing repository
+- **THEN** it succeeds without modifying or recreating the repository
+
+#### Scenario: Repository is precisely absent
+- **WHEN** restic reports the configured repository does not exist
+- **THEN** the gate initializes it once and later invocations open it idempotently
+
+#### Scenario: Cloud setup fails
+- **WHEN** credentials, network, or repository integrity prevents initialization
+- **THEN** off-site jobs fail visibly while gameplay and local snapshots remain available
 
 ### Requirement: Off-site history is retained and checked
 Weekly maintenance SHALL retain 14 daily, 8 weekly, and 12 monthly restic
-snapshots, remove unreferenced repository data, and authenticate repository
-metadata plus a rotating 10 percent subset of stored data. The B2 setup
-procedure SHALL require a dedicated private bucket, a bucket-scoped read/write
-application key capable of normal restic maintenance, and provider-side prior
-file-version retention. It SHALL state that credentials on the box do not make
-the repository immutable and SHALL include a tested procedure for recovering a
-prior B2 file version.
+snapshots, prune unreferenced data, and check metadata plus a rotating 10 percent
+subset of stored data. Setup SHALL require a dedicated private bucket, a
+bucket-scoped read/write key, and at least 30 days of prior file versions. It
+SHALL identify prior versions as a last-resort aid and state that host
+credentials do not provide immutability.
 
 #### Scenario: Weekly maintenance succeeds
 - **WHEN** the weekly maintenance job completes
-- **THEN** restic reports the declared snapshot retention applied, unreferenced data pruned, and a 10 percent data-subset check successful
+- **THEN** retention and prune complete and `check --read-data-subset=10%` succeeds
 
 #### Scenario: Admin follows the B2 setup procedure
 - **WHEN** the admin provisions the off-site repository
-- **THEN** it uses a private dedicated bucket, retained prior file versions, and a read/write key restricted to that bucket
-
-#### Scenario: Repository object must be recovered
-- **WHEN** the admin performs the documented B2 version-recovery drill
-- **THEN** an earlier version of a repository object is recovered and restic can read the repaired repository
-
-### Requirement: A restore drill proves recoverability
-At least monthly, and on manual request, the system SHALL restore the newest
-restic snapshot into temporary storage and byte-compare its save tree with the
-manifest captured from the source snapshot used by that backup. It SHALL record
-the compared snapshot, completion time, and success or failure under persistent
-operator state, and SHALL remove the temporary restore after recording the
-result.
-
-#### Scenario: Restored bytes match
-- **WHEN** the monthly drill restores the newest backup and every restored save matches its captured source manifest
-- **THEN** a successful drill result identifying that backup is persisted and the temporary restore is removed
-
-#### Scenario: Restored bytes differ
-- **WHEN** a restored save is missing, additional, or has different bytes from its captured source manifest
-- **THEN** a failed drill result names the difference, remains available after reboot, and the service exits unsuccessfully
+- **THEN** it uses the declared private bucket, prior-version window, and bucket-scoped read/write key
 
 ### Requirement: Operators have one backup status and recovery interface
-The system SHALL provide a status command that reports the newest local
-snapshot, last backup result, last maintenance and integrity-check result, last
-restore-drill result, and latest unexpected-write result. A never-run, failed,
-or stale result SHALL be visibly distinguished from success and name the
-relevant service or journal query. A root-only wrapper SHALL expose repository
-inspection and restore operations using the same declared repository and secret
-inputs as automation.
+The system SHALL provide status for the newest local snapshot, last off-site
+backup, and last weekly maintenance/check. The latest systemd invocation paired
+with its parseable same-invocation journal marker SHALL be authoritative,
+without a parallel job-state database. The local marker SHALL contain canonical
+read-only snapshot path and creation time; the backup marker SHALL contain
+snapshot ID, repository ID, host/tag selector, and timestamp; the maintenance
+marker SHALL contain repository ID, completion time, and newest matching
+protected snapshot ID after operations. Maintenance SHALL fail if no matching
+snapshot exists. Missing, malformed, or mismatched markers SHALL be unhealthy.
+A local snapshot older than 2 hours, backup older than 8 hours, or
+maintenance/check older than 14 days SHALL warn. Never-run and last-failed units
+SHALL warn and identify the relevant unit or journal query. Optional live
+confirmation MAY add a warning but SHALL NOT erase the last known outcome. A root-only wrapper
+SHALL expose inspection and manual `restic restore --verify` using automation's
+repository and secret inputs.
 
 #### Scenario: All layers are current
-- **WHEN** each snapshot, backup, maintenance, drill, and leak check has a recent successful result
-- **THEN** the status command reports each layer successful with its time and recovery point
+- **WHEN** all three layers last succeeded within their freshness thresholds
+- **THEN** status reports them successful with their time and recovery point
 
-#### Scenario: A layer has no successful result
-- **WHEN** a layer has never run, last failed, or is older than its declared stale threshold
-- **THEN** status identifies that condition and tells the operator which service or journal to inspect
+#### Scenario: A layer is unhealthy
+- **WHEN** a layer never ran, last failed, or exceeds its freshness threshold
+- **THEN** status warns and identifies the relevant unit or journal query
 
-#### Scenario: Admin inspects the repository
-- **WHEN** root invokes the repository wrapper to list snapshots or restore data
-- **THEN** it uses the same repository, credentials, password, and exclusions as the automated services without exposing secret values
+#### Scenario: A later backup fails
+- **WHEN** a successful backup is followed by a failed backup
+- **THEN** current status reports the later failure and future scheduling remains enabled
+
+#### Scenario: Latest marker cannot prove its invocation
+- **WHEN** the latest invocation's marker is missing, malformed, or identifies another invocation
+- **THEN** current status reports that layer unhealthy instead of using an older success
+
+#### Scenario: Admin restores data
+- **WHEN** root invokes the wrapper to restore with verification
+- **THEN** it uses the declared repository and secrets without exposing secret values

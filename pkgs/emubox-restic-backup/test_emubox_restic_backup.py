@@ -584,3 +584,18 @@ def test_init_is_idempotent_for_an_existing_repository() -> None:
     erb.initialize(existing)
     erb.initialize(existing)
     assert calls == [["restic", "cat", "config"], ["restic", "cat", "config"]]
+
+
+def test_init_cli_does_not_require_a_backup_source_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def initialize() -> None:
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(erb, "initialize", initialize)
+
+    assert erb.main(["--init"]) == 0
+    assert calls == 1

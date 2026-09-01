@@ -456,13 +456,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if Path(sys.argv[0]).name == "emubox-status":
         args.status = True
-    source_actions = (
-        args.init or args.reconcile or args.emit_backup_marker or args.emit_maintenance_marker
-    )
-    if source_actions and args.source_spec is None:
+    spec_actions = args.emit_backup_marker or args.emit_maintenance_marker
+    if spec_actions and args.source_spec is None:
         parser.error("--source-spec is required for this action")
     if (
-        not source_actions
+        not args.init
+        and not args.reconcile
+        and not spec_actions
         and not args.emit_local_marker
         and not args.status
         and args.source_spec is None

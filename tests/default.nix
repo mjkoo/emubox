@@ -70,6 +70,8 @@ let
   wireplumberDataDirs = lib.splitString ":" config.systemd.user.services.wireplumber.environment.XDG_DATA_DIRS;
   saveRoutes = config.emubox.saves.saveRoutes;
   saveBindMappings = config.emubox.saves.bindMappings;
+  saveRoutesJson = builtins.toJSON saveRoutes;
+  saveBindMappingsJson = builtins.toJSON saveBindMappings;
 in
 {
   # Test secrets (design D7): the committed test host key decrypts
@@ -107,6 +109,8 @@ in
   ];
 
   disko.tests.extraChecks = ''
+    import json
+
     # The harness itself only waits for local-fs.target; every boot phase
     # starts by waiting for multi-user.target and asserts that nothing
     # failed on the way, since several paths here (persist units, secrets,
@@ -127,6 +131,7 @@ in
             "/persist": "@persist",
             "/data": "@data",
             "/data/cache": "@cache",
+            "/data/.snapshots": "@snapshots",
         }.items():
             out = machine.succeed(
                 f"findmnt --noheadings --mountpoint {mountpoint} -o FSTYPE,SOURCE"
@@ -134,6 +139,53 @@ in
             fstype, source = out.split()
             assert fstype == "btrfs", f"{mountpoint}: {out!r}"
             assert source.endswith(f"[/{subvol}]"), f"{mountpoint}: {out!r}"
+
+    with subtest("Local snapshot history is root-only and never recursively captures cache"):
+        snapshot_root = "/data/.snapshots"
+        assert machine.succeed(f"stat -c '%a %U %G' {snapshot_root}").strip() == "700 root root"
+        machine.fail(f"sudo -u player test -r {snapshot_root}")
+        machine.succeed("systemctl stop btrbk-local.timer")
+        machine.succeed("systemctl stop btrbk-local.service")
+        machine.succeed("touch /data/local-snapshot-fixture /data/cache/cache-only-fixture")
+
+        # Give btrbk a complete set of real points around the native windows:
+        # two within the all-points 48-hour window, two in one populated
+        # three-day bucket, and one point outside the 14-day policy.
+        def stamp(relative):
+            return machine.succeed(f"date -d '{relative}' +%Y%m%dT%H%M").strip()
+
+        recent = [stamp("47 hours ago"), stamp("46 hours ago")]
+        daily = [stamp("3 days ago 00:10"), stamp("3 days ago 12:10")]
+        expired = stamp("16 days ago")
+        for timestamp in recent + daily + [expired]:
+            machine.succeed(
+                f"btrfs subvolume snapshot -r /data {snapshot_root}/data.{timestamp}"
+            )
+
+        machine.succeed("systemctl start btrbk-local.service")
+        result = machine.succeed(
+            "systemctl show -p Result --value btrbk-local.service"
+        ).strip()
+        assert result == "success", result
+
+        retained = machine.succeed(
+            f"find {snapshot_root} -mindepth 1 -maxdepth 1 -type d -printf '%f\\n'"
+        ).splitlines()
+        for timestamp in recent:
+            assert f"data.{timestamp}" in retained, retained
+        assert f"data.{expired}" not in retained, retained
+        assert sum(name.startswith(f"data.{daily[0][:8]}") for name in retained) == 1, retained
+
+        # btrbk defines snapshots as read-only. The latest real snapshot has
+        # the current fixture but neither sibling subvolume below @data.
+        latest = sorted(retained)[-1]
+        properties = machine.succeed(
+            f"btrfs property get -ts {snapshot_root}/{latest} ro"
+        ).strip()
+        assert properties == "ro=true", properties
+        machine.succeed(f"test -e {snapshot_root}/{latest}/local-snapshot-fixture")
+        machine.fail(f"test -e {snapshot_root}/{latest}/cache/cache-only-fixture")
+        machine.fail(f"test -e {snapshot_root}/{latest}/.snapshots")
 
     with subtest("Booted through systemd-boot"):
         # Only the "Current Boot Loader" block proves the loader ran; the
@@ -162,17 +214,19 @@ in
             assert (user, group) == (entry["user"], entry["group"]), f"{entry['path']}: {out}"
 
     with subtest("Every declared save route is writable and every bind route is mounted"):
-        for route in ${py saveRoutes}:
+        save_routes = json.loads(${py saveRoutesJson})
+        save_bind_mappings = json.loads(${py saveBindMappingsJson})
+        for route in save_routes:
             destination = route["destination"]
             machine.succeed(f"test -d {destination}")
             machine.succeed(f"sudo -u player touch {destination}/vm-route-write")
-        for mapping in ${py saveBindMappings}:
+        for mapping in save_bind_mappings:
             machine.succeed(f"mountpoint -q {mapping['where']}")
 
     with subtest("Migration accepts equal data and rejects conflicts without overwriting"):
         # A bind target is unmounted only for this isolated migration check;
         # it is immediately restored, before any kiosk path could run.
-        mapping = ${py (builtins.head saveBindMappings)}
+        mapping = save_bind_mappings[0]
         unit = machine.succeed(
             f"systemd-escape --path --suffix=mount {mapping['where']}"
         ).strip()

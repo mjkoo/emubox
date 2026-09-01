@@ -182,7 +182,46 @@ in
 
     systemd.tmpfiles.rules =
       (map (r: "d ${r.destination} 0755 player player -") cfg.saveRoutes)
-      ++ (map (mapping: "d ${mapping.where} 0755 player player -") cfg.bindMappings);
+      ++ (map (mapping: "d ${mapping.where} 0755 player player -") cfg.bindMappings)
+      ++ [ "d /data/.snapshots 0700 root root -" ];
+
+    # btrbk's native retention model keeps every real recovery point in the
+    # short window, then one point per populated daily bucket. `@cache` and
+    # `@snapshots` are sibling subvolumes, so a btrfs snapshot of `@data`
+    # never recursively captures either one. The NixOS module normally runs
+    # btrbk as an unprivileged helper through sudo; this local-only instance
+    # runs as root instead so its root-only snapshot directory is not exposed
+    # to another account.
+    services.btrbk.instances.local = {
+      onCalendar = "hourly";
+      settings = {
+        backend = "btrfs-progs";
+        timestamp_format = "long";
+        snapshot_preserve_min = "48h";
+        snapshot_preserve = "14d";
+        snapshot_dir = "/data/.snapshots";
+        subvolume."/data" = {
+          snapshot_name = "data";
+          snapshot_create = "always";
+        };
+      };
+    };
+
+    systemd.services.btrbk-local = {
+      requires = [
+        "data.mount"
+        "data-.snapshots.mount"
+      ];
+      after = [
+        "data.mount"
+        "data-.snapshots.mount"
+        "systemd-tmpfiles-setup.service"
+      ];
+      serviceConfig = {
+        User = lib.mkForce "root";
+        Group = lib.mkForce "root";
+      };
+    };
 
     environment.etc."emubox/save-routes.json".source = routesJson;
 

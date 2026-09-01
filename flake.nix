@@ -169,6 +169,10 @@
             inherit self;
             pkgs = pkgsFor system;
           };
+          perSystem.snapshots = import ./tests/snapshots.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
 
           # The host configuration extended with the test module: the VM
           # test installs and boots its toplevel, and the closure check greps

@@ -35,51 +35,8 @@ let
     name = "emubox-restic";
     runtimeInputs = [ pkgs.restic ];
     text = ''
-      set -euo pipefail
-      if [ "$(id -u)" -ne 0 ]; then
-        echo "emubox-restic: root only" >&2
-        exit 77
-      fi
-      set -a
-      . ${lib.escapeShellArg config.sops.templates."restic.env".path}
-      set +a
-      operation="''${1:-}"
-      [ -n "$operation" ] || {
-        echo "usage: emubox-restic {snapshots|stats|ls|find|restore --verify SNAPSHOT --target DIR}" >&2
-        exit 64
-      }
-      shift
-      reject_option() {
-        for argument in "$@"; do
-          case "$argument" in
-            -*)
-              echo "emubox-restic: global options are not accepted" >&2
-              exit 64
-              ;;
-          esac
-        done
-      }
-      case "$operation" in
-        snapshots|stats)
-          [ "$#" -eq 0 ] || exit 64
-          exec restic "$operation"
-          ;;
-        ls|find)
-          [ "$#" -gt 0 ] || exit 64
-          reject_option "$@"
-          exec restic "$operation" "$@"
-          ;;
-        restore)
-          [ "$#" -eq 4 ] && [ "$1" = "--verify" ] && [ "$3" = "--target" ] || exit 64
-          case "$2" in -*) exit 64 ;; esac
-          case "$4" in /*) ;; *) exit 64 ;; esac
-          exec restic restore --verify "$2" --target "$4"
-          ;;
-        *)
-          echo "emubox-restic: command is not allowed" >&2
-          exit 64
-          ;;
-      esac
+      export EMUBOX_RESTIC_ENV=${lib.escapeShellArg config.sops.templates."restic.env".path}
+      exec ${pkgs.emubox-restic-backup}/bin/emubox-restic "$@"
     '';
   };
   backupMarkerCommand = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --source-spec ${sourceSpec} --emit-backup-marker";

@@ -3,6 +3,7 @@
   stdenvNoCC,
   python3,
   ruff,
+  shellcheck,
   ty,
 }:
 let
@@ -15,12 +16,14 @@ stdenvNoCC.mkDerivation {
     root = ./.;
     fileset = lib.fileset.unions [
       (lib.fileset.fileFilter (f: f.hasExt "py") ./.)
+      (lib.fileset.fileFilter (f: f.hasExt "sh") ./.)
       (lib.fileset.fileFilter (f: f.hasExt "toml") ./.)
     ];
   };
   buildInputs = [ python ];
   nativeCheckInputs = [
     ruff
+    shellcheck
     ty
     python.pkgs.pytest
   ];
@@ -30,10 +33,16 @@ stdenvNoCC.mkDerivation {
     ruff format --check .
     ty check
     pytest -q
+    shellcheck emubox_restic_wrapper.sh test_emubox_restic_wrapper.sh
   '';
+  doInstallCheck = true;
   installPhase = ''
     install -Dm755 emubox_restic_backup.py $out/bin/emubox-restic-backup
+    install -Dm755 emubox_restic_wrapper.sh $out/bin/emubox-restic
     ln -s emubox-restic-backup $out/bin/emubox-status
+  '';
+  installCheckPhase = ''
+    bash test_emubox_restic_wrapper.sh "$out/bin/emubox-restic"
   '';
   meta = {
     description = "Snapshot-consistent restic backup helper for EmuBox";

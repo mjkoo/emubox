@@ -31,7 +31,7 @@
 - [x] 4.1 Add maintenance tests and implement weekly 14-daily, 8-weekly, 12-monthly retention, prune, and `check --read-data-subset=10%` using native exclusive locks; prove the whole sequence including wait respects `M`, overlap respects `M<R`, and backup retains `E` after lock acquisition.
 - [x] 4.2 Add journal-marker tests and emit parseable same-invocation local path/time, backup snapshot/repository/host-tag/time, and maintenance repository/completion/newest-protected-snapshot markers; make missing protected snapshots and missing or malformed success markers fail their unit.
 - [x] 4.3 Add status output tests and implement latest-systemd-invocation pairing with its exact marker, 2-hour, 8-hour, and 14-day thresholds, never-run and last-failed warnings, and optional non-authoritative live confirmation; prove malformed, mismatched, and older markers cannot mask a later failure.
-- [ ] 4.4 Add the root-only restic wrapper with command-policy tests proving inspection and `restore --verify` reuse automation inputs without accepting arbitrary global-option injection, including a negative non-root invocation test.
+- [x] 4.4 Add the root-only restic wrapper with command-policy tests proving inspection and `restore --verify` reuse automation inputs without accepting arbitrary global-option injection, including a negative non-root invocation test.
 - [ ] 4.5 Extend the VM scenario with successful backup, forced later failure, exact-invocation marker status instead of stale success, cleaned source, enabled future schedule, and verified restore of known fixture bytes.
 - [x] 4.6 Expose project-owned programs through overlay, host, package outputs, and cache roots; leave native tests, `just check-all`, and relevant builds passing.
 

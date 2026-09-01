@@ -402,6 +402,8 @@ in
         machine.succeed("rm /data/home/player/.local/cache && mkdir -p /data/home/player/.local/cache")
 
     with subtest("Maintenance and status use exact-invocation journal markers"):
+        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
+        machine.succeed("systemctl start emubox-restic-backup.service")
         machine.succeed("systemctl start emubox-restic-maintenance.service")
         machine.succeed(
             "journalctl -u emubox-restic-maintenance.service -o cat --no-pager | grep -F 'EMUBOX_MARKER='"

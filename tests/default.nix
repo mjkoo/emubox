@@ -185,7 +185,6 @@ in
   };
 
   systemd.services = {
-    emubox-restic-init.path = [ fakeRestic ];
     emubox-restic-backup.path = [ fakeRestic ];
     emubox-restic-maintenance.path = [ fakeRestic ];
   };
@@ -241,10 +240,8 @@ in
     save_bind_mappings = json.loads(${py saveBindMappingsJson})
     rollback_mapping = save_bind_mappings[0]
 
-    INIT = "emubox-restic-init.service"
     BACKUP = "emubox-restic-backup.service"
     RESTIC_UNITS = [
-        INIT,
         BACKUP,
         "emubox-restic-maintenance.service",
         "emubox-restic-reconcile.service",
@@ -254,13 +251,7 @@ in
         return machine.succeed(f"systemctl show --value --property={name} {unit}").strip()
 
     def reset_restic_units():
-        """Clear failed state, and the start rate limiter, for the whole family.
-
-        Resetting only the backup unit is not enough: every backup start
-        re-runs the `emubox-restic-init` oneshot it `Requires=`, so init is
-        the unit that reaches a start limit first, and its refusal arrives on
-        the backup unit as a dependency failure.
-        """
+        """Clear failed state, and the start rate limiter, for the whole family."""
         machine.succeed("systemctl reset-failed " + " ".join(RESTIC_UNITS))
 
     def start_backup(expect="success"):
@@ -518,24 +509,25 @@ in
             machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
             machine.succeed("systemctl start btrbk-local.service")
 
-    with checked("The repository initialization gate is fail-closed"):
-        # The gate is proven by what did *not* run: init must fail on its own
-        # invocation and the backup must never reach one, which is precisely
-        # what a bare `machine.fail` on the start cannot distinguish.
+    with checked("The repository initialization gate is fail-closed and visible"):
+        # The gate is the backup's own first step, so a repository it cannot
+        # open fails the backup's own invocation and reaches status. While the
+        # gate was a separate required unit this failed by `dependency`: the
+        # backup never reached an invocation, and status kept reporting the
+        # previous success for the whole freshness window.
         #
-        # One case, not a matrix. Which restic errors initialize on and which
-        # it refuses is `initialize()`'s own logic, covered by its unit tests;
-        # what only the VM can show is that a failed gate stops the graph.
+        # One case, not a matrix. Which restic results initialize and which
+        # fail closed is `initialize()`'s own logic, covered by its unit tests;
+        # what only the VM can show is that a failed gate stops the job and
+        # says so.
         with restic_fault("restic-test-init-network-fail"):
-            reset_restic_units()
-            backup_before = unit_property(BACKUP, "InvocationID")
-            init_before = unit_property(INIT, "InvocationID")
-            machine.fail(f"systemctl start {BACKUP}")
-            assert unit_property(INIT, "InvocationID") != init_before, f"{INIT} never ran"
-            assert unit_property(INIT, "Result") == "exit-code", unit_property(INIT, "Result")
-            assert unit_property(BACKUP, "InvocationID") == backup_before, (
-                f"{BACKUP} ran despite a failed init gate"
-            )
+            before = machine.succeed("stat -c %Y /data/cache/emubox-restic-test/backup-ran").strip()
+            start_backup(expect="exit-code")
+            assert machine.succeed(
+                "stat -c %Y /data/cache/emubox-restic-test/backup-ran"
+            ).strip() == before, "restic backed up despite a failed init gate"
+            status = machine.fail("emubox-status")
+            assert "emubox-restic-backup.service: latest invocation failed" in status, status
         start_backup()
 
     with checked("Disabling cloud jobs keeps routed saves active without reverse migration"):
@@ -549,8 +541,14 @@ in
             "emubox-restic-backup.timer",
             "emubox-restic-maintenance.timer",
         ]:
-            machine.succeed(f"systemctl disable --now {timer}")
-            machine.fail(f"systemctl is-enabled {timer}")
+            # Stopped, not disabled. `/etc/systemd/system` is read-only on this
+            # box, so `systemctl disable` cannot work at runtime and rollback is
+            # declarative by construction: `emubox.backups.enable = false` and a
+            # rebuild, which tests/saves.nix evaluates. What is left for the VM
+            # is the runtime half, that taking the cloud jobs away touches
+            # neither the save mounts nor the data under them.
+            machine.succeed(f"systemctl stop {timer}")
+            machine.fail(f"systemctl is-active {timer}")
         machine.succeed(f"mountpoint -q {rollback_mapping['where']}")
         machine.succeed(
             f"printf rollback-routed > {rollback_mapping['where']}/rollback-routed-write"
@@ -564,13 +562,16 @@ in
         start_backup()
         machine.fail("test -e /data/.snapshots/restic/restic-same-boot")
         machine.succeed("btrfs subvolume snapshot -r /data /data/.snapshots/restic/restic-after-power-loss")
-        machine.succeed("systemctl reboot")
-        machine.wait_for_unit("multi-user.target")
+        # `crash` rather than an in-guest `systemctl reboot`: the driver's shell
+        # dies with the guest and does not reconnect on its own, so a reboot
+        # issued from inside leaves every later command raising `Broken pipe`.
+        # It also models what the fixture is named for.
+        machine.crash()
+        machine.start()
+        booted()
         machine.fail("test -e /data/.snapshots/restic/restic-after-power-loss")
-        # `systemctl disable` above wrote to /etc, which lives on the root
-        # subvolume the boot rolls back, so activation restores the declared
-        # enablement. The rollback is the point: a disabled timer is not
-        # supposed to outlive it.
+        # The timers stopped above are running again: their enablement lives in
+        # the declared configuration, not in runtime state the boot preserves.
         machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
 
     with checked("A routed write survives reboot after cloud rollback"):

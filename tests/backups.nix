@@ -24,7 +24,6 @@ let
   backupTimer = enabled.systemd.timers.emubox-restic-backup.timerConfig;
   maintenance = enabled.systemd.services.emubox-restic-maintenance;
   maintenanceTimer = enabled.systemd.timers.emubox-restic-maintenance.timerConfig;
-  init = enabled.systemd.services.emubox-restic-init;
   invalidOption =
     value:
     let
@@ -63,8 +62,7 @@ let
     !(builtins.tryEval candidate.config.system.build.toplevel.drvPath).success;
 in
 assert lib.assertMsg (
-  !(disabled.systemd.services ? emubox-restic-init)
-  && !(disabled.systemd.services ? emubox-restic-backup)
+  !(disabled.systemd.services ? emubox-restic-backup)
   && !(disabled.systemd.services ? emubox-restic-maintenance)
   && !(disabled.systemd.services ? emubox-restic-reconcile)
   && !(disabled.sops.secrets ? b2_key_id)
@@ -108,18 +106,29 @@ assert lib.assertMsg
   "tests/backups.nix: backup timer must not queue missed activations while its oneshot stays active";
 assert lib.assertMsg
   (
-    lib.elem "emubox-restic-init.service" backup.requires
+    # The gate is the first step of each job that needs it, so its failure is
+    # a failure of that job's own invocation and reaches status. A separate
+    # unit would fail the job by `dependency`, leaving the job's invocation,
+    # result and journal describing its previous success.
+    !(enabled.systemd.services ? emubox-restic-init)
+    && lib.hasInfix "--init" backup.serviceConfig.ExecStartPre
+    && lib.hasInfix "--init" maintenance.serviceConfig.ExecStartPre
+    &&
+      lib.all
+        (unit: lib.elem "data.mount" unit.requires && lib.elem "network-online.target" unit.requires)
+        [
+          backup
+          maintenance
+        ]
     && lib.elem "data-.snapshots.mount" backup.requires
-    && lib.elem "data.mount" init.requires
-    && lib.elem "network-online.target" init.requires
     && enabled.sops.useSystemdActivation == false
-    && !(lib.elem "sops-nix.service" init.requires)
-    && init.serviceConfig.Type == "oneshot"
+    && !(lib.elem "sops-nix.service" backup.requires)
+    && backup.serviceConfig.Type == "oneshot"
     && reconcile.wantedBy == [ "multi-user.target" ]
     && lib.elem "data-.snapshots.mount" reconcile.requires
     && lib.elem "emubox-restic-backup.service" reconcile.before
   )
-  "tests/backups.nix: backup must retry the fail-closed init gate after data and network, with secrets installed during activation";
+  "tests/backups.nix: each off-site job must run the fail-closed init gate as its own first step, after data and network, with secrets installed during activation";
 assert lib.assertMsg (
   enabled.sops.secrets.b2_key_id.mode == "0400"
   && enabled.sops.secrets.b2_key_id.owner == null
@@ -129,7 +138,7 @@ assert lib.assertMsg (
   && lib.hasInfix "AWS_ACCESS_KEY_ID=" enabled.sops.templates."restic.env".content
   && lib.hasInfix "AWS_SECRET_ACCESS_KEY=" enabled.sops.templates."restic.env".content
   && !(lib.hasInfix "B2_ACCOUNT_" enabled.sops.templates."restic.env".content)
-  && init.serviceConfig.EnvironmentFile == enabled.sops.templates."restic.env".path
+  && maintenance.serviceConfig.EnvironmentFile == enabled.sops.templates."restic.env".path
   && backup.serviceConfig.EnvironmentFile == enabled.sops.templates."restic.env".path
 ) "tests/backups.nix: enabled restic services must consume only root-only rendered sops inputs";
 assert lib.assertMsg (
@@ -141,7 +150,6 @@ assert lib.assertMsg
   (
     lib.hasInfix "emubox-restic-maintenance" maintenance.serviceConfig.ExecStart
     && lib.hasInfix "--emit-backup-marker" backup.serviceConfig.ExecStartPost
-    && lib.elem "emubox-restic-init.service" maintenance.requires
   )
   "tests/backups.nix: maintenance and backup must emit same-invocation recovery markers after conventional restic operations";
 assert lib.assertMsg

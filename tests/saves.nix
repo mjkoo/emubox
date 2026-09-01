@@ -188,9 +188,9 @@ let
     modules = [ { emubox.backups.enable = lib.mkForce false; } ];
   };
   cloudUnits = [
-    "emubox-restic-init"
     "emubox-restic-backup"
     "emubox-restic-maintenance"
+    "emubox-restic-reconcile"
   ];
 in
 assert lib.assertMsg (saves.backupRoots == expectedRoots) ''

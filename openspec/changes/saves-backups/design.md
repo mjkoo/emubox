@@ -93,7 +93,9 @@ Backup uses restic's native non-exclusive append lock; `forget`, `prune`, and
 queue. Weekly maintenance is staggered from four-hour backups. The timeout
 algebra is explicit: maintenance's entire sequence, including lock wait, has
 maximum `M = 3h`; backup uses `R = 3h15m` for `--retry-lock`, `P = 10m` before
-restic, and `E = 4h` after acquiring the lock, so its activation bound is
+restic's backup call, which also covers the initialization gate's own
+`restic cat config` now that the gate runs inside the job rather than in a unit
+before it, and `E = 4h` after acquiring the lock, so its activation bound is
 `B = P + R + E = 7h25m`. Evaluation validates `M < R` and
 `B >= P + R + E` as module assertions, so a wrong constant fails the build
 rather than a VM run. Restic's own lock waiting is not re-proven in a scaled
@@ -122,13 +124,26 @@ E12 performs one real-B2 backup and `restic restore --verify` rollout check.
 
 Local snapshotting depends only on `/data` being mounted as btrfs. sops-nix's
 default activation mode installs backup secrets before systemd starts services;
-there is no generated sops systemd unit to order against. An idempotent
-`restic-init` oneshot therefore orders after `/data` and `network-online`, then
-opens the configured repository. Only restic's
+there is no generated sops systemd unit to order against. Backup and
+maintenance each order after `/data` and `network-online` and run the
+idempotent initialization gate as their own first step, opening the configured
+repository before anything else. Only restic's
 precise nonexistent-repository result permits initialization; authentication,
-network, corruption, and every other error fail closed. Backup and maintenance
-require and order after init, causing later independent timer activations to
-retry the gate. Their timers are enabled independently from local snapshots.
+network, corruption, and every other error fail closed. Because each job runs
+the gate itself, later independent timer activations retry it. Their timers are
+enabled independently from local snapshots.
+
+The gate is a step, not a unit. As a separate `Requires=` dependency its
+failure reached the job as a `dependency` failure, so the job never entered an
+invocation of its own: its `InvocationID`, `Result` and journal all continued
+to describe the previous success, and `emubox-status` reported the layer
+healthy for the full eight-hour freshness window while the repository was
+unreachable. That defeats "Cloud setup fails -> off-site jobs fail visibly" for
+this project's own status tool. As `ExecStartPre` the same failure is a failure
+of the job's own invocation, which is what status, the journal and
+`systemctl status` already read. A separate unit was rejected for that reason;
+its only advantage, an isolated `journalctl -u`, is not worth a health report
+that can understate a live outage.
 
 Gameplay, display, save preparation and mounts, and local snapshots have no
 dependency on network, backup secrets, init, backup, or maintenance. With

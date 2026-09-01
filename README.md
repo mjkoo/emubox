@@ -335,10 +335,11 @@ because lock cleanup, `forget`, and `prune` remove repository objects.
 Configure B2 lifecycle handling to retain previous file versions for 30 days.
 Those versions are only a last-resort provider aid, not the normal restore path.
 
-At the first eligible activation, `emubox-restic-init.service` opens the
-repository and initializes it only when restic identifies it as absent. An
-authentication, network, or other repository error fails the activation
-without creating or replacing anything. The backup timer starts 10 minutes
+Each backup and maintenance activation begins by opening the repository,
+initializing it only when restic identifies it as absent. An authentication,
+network, or other repository error fails that activation without creating or
+replacing anything, and `emubox-status` reports the layer unhealthy rather than
+its last success. The backup timer starts 10 minutes
 after boot and every four hours thereafter. Weekly maintenance runs restic
 retention, prune, and `check --read-data-subset=10%`; that percentage is a
 random subset chosen by restic for that run, not a rotating coverage guarantee.

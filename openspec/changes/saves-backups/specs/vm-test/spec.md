@@ -67,7 +67,7 @@ the E12 rollout checklist.
 
 #### Scenario: Repository initialization gate is fail-closed
 - **WHEN** initialization cannot open its repository
-- **THEN** initialization fails on its own invocation and the backup never reaches an invocation of its own
+- **THEN** the backup's own activation fails without invoking restic's backup, and status reports that layer unhealthy rather than its previous success
 
 #### Scenario: Health marker is not from the latest invocation
 - **WHEN** a successful backup is followed by an invocation of the same unit that runs and fails
@@ -84,5 +84,11 @@ invocation and that status reads it there.
 - **THEN** gameplay, display, save routes, and local snapshot creation still operate
 
 #### Scenario: Cloud backup is rolled back
-- **WHEN** cloud init, backup, and maintenance units are disabled after migration
+- **WHEN** the cloud backup and maintenance units and timers are stopped after migration
 - **THEN** all save mappings remain active and a table-routed write survives reboot
+
+Rollback itself is declarative: `/etc/systemd/system` is read-only on the box,
+so `systemctl disable` cannot persist a change and turning off-site backup off
+means `emubox.backups.enable = false` and a rebuild, which is evaluated rather
+than run in a VM. What the VM proves is the runtime half, that taking the cloud
+jobs away touches neither the save mounts nor the data beneath them.

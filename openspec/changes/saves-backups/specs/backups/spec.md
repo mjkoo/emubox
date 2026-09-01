@@ -116,8 +116,10 @@ filesystem lock.
 When off-site backup is enabled, an idempotent initialization gate SHALL first
 open the configured repository. It SHALL initialize only for restic's precise
 nonexistent-repository result and SHALL fail for authentication, network,
-corruption, and every other result. Backup and maintenance SHALL depend on this
-gate and retry it on later independent timer activations. Local snapshots,
+corruption, and every other result. Backup and maintenance SHALL each run this
+gate as their own first step, so that a gate failure is a failure of that job's
+own activation rather than of a dependency, and SHALL retry it on later
+independent timer activations. Local snapshots,
 gameplay, display, and save preparation SHALL remain independent of network,
 backup secrets, initialization, backup, and maintenance. When off-site backup
 is disabled, its services SHALL not consume backup secrets.
@@ -132,7 +134,7 @@ is disabled, its services SHALL not consume backup secrets.
 
 #### Scenario: Cloud setup fails
 - **WHEN** credentials, network, or repository integrity prevents initialization
-- **THEN** off-site jobs fail visibly while gameplay and local snapshots remain available
+- **THEN** the job's own activation fails, status reports that layer unhealthy rather than its previous success, and gameplay and local snapshots remain available
 
 ### Requirement: Off-site history is retained and checked
 Weekly maintenance SHALL retain 14 daily, 8 weekly, and 12 monthly restic

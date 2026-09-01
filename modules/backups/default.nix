@@ -39,6 +39,7 @@ let
       exec ${pkgs.emubox-restic-backup}/bin/emubox-restic "$@"
     '';
   };
+  initCommand = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --init";
   backupMarkerCommand = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --source-spec ${sourceSpec} --emit-backup-marker";
   maintenance = pkgs.writeShellScript "emubox-restic-maintenance" ''
     set -euo pipefail
@@ -173,54 +174,39 @@ in
         mode = "0400";
       };
 
-      systemd.services.emubox-restic-init = {
-        description = "Initialize or open the EmuBox restic repository";
-        # Every unit here is a `Type=oneshot` with no `Restart=`, so systemd's
-        # start rate limiter cannot protect against a restart loop. All it can
-        # do is refuse a legitimate activation with `start-limit-hit`, which
-        # this unit reaches first: backup and maintenance both `Requires=` it,
-        # and it re-runs on each of their starts. The refusal then surfaces on
-        # the dependent unit as a `dependency` failure that never runs, which
-        # is indistinguishable from a real failure unless the caller compares
-        # invocation ids. An operator running `emubox-restic` a few times in a
-        # row hits exactly that, and so did the VM test.
-        startLimitIntervalSec = 0;
-        requires = [
-          "data.mount"
-          "network-online.target"
-        ];
-        after = [
-          "data.mount"
-          "network-online.target"
-        ];
-        serviceConfig = {
-          Type = "oneshot";
-          Environment = "EMUBOX_RESTIC=${lib.getExe cfg.package}";
-          EnvironmentFile = config.sops.templates."restic.env".path;
-          ExecStart = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --init";
-          User = "root";
-          Group = "root";
-          NoNewPrivileges = true;
-          PrivateTmp = true;
-        };
-      };
-
+      # The initialization gate is the first step of each job that needs it,
+      # not a unit of its own. As a separate `Requires=` dependency its failure
+      # arrived on backup as a `dependency` failure: the backup unit never
+      # reached an invocation, so its InvocationID, Result and journal all
+      # still described the previous success, and `emubox-status` reported the
+      # layer healthy for the whole eight-hour freshness window while the
+      # repository was in fact unreachable. As `ExecStartPre` the same failure
+      # is a failure of the job's own invocation, which is what the status
+      # tool, the journal and any operator reading `systemctl status` already
+      # look at. The spec's "off-site jobs fail visibly" is then true by
+      # construction rather than by a second mechanism.
       systemd.services.emubox-restic-backup = {
         description = "Create a snapshot-consistent EmuBox restic backup";
-        # See emubox-restic-init.
+        # `Type=oneshot` with no `Restart=`, so systemd's start rate limiter
+        # cannot protect against a restart loop here. All it can do is refuse a
+        # legitimate activation with `start-limit-hit`, which an operator
+        # running `emubox-restic` a few times in a row would hit.
         startLimitIntervalSec = 0;
         requires = [
-          "emubox-restic-init.service"
+          "data.mount"
           "data-.snapshots.mount"
+          "network-online.target"
         ];
         after = [
-          "emubox-restic-init.service"
+          "data.mount"
           "data-.snapshots.mount"
+          "network-online.target"
         ];
         serviceConfig = {
           Type = "oneshot";
           Environment = "EMUBOX_RESTIC=${lib.getExe cfg.package}";
           EnvironmentFile = config.sops.templates."restic.env".path;
+          ExecStartPre = initCommand;
           ExecStart = backupCommand;
           ExecStartPost = backupMarkerCommand;
           ExecStopPost = "${backupCommand} --reconcile";
@@ -236,7 +222,7 @@ in
       };
       systemd.services.emubox-restic-reconcile = {
         description = "Reconcile interrupted EmuBox restic source snapshots";
-        # See emubox-restic-init.
+        # See emubox-restic-backup.
         startLimitIntervalSec = 0;
         wantedBy = [ "multi-user.target" ];
         requires = [ "data-.snapshots.mount" ];
@@ -263,14 +249,23 @@ in
       # with backup. Group 4 adds markers, status and the operator wrapper.
       systemd.services.emubox-restic-maintenance = {
         description = "Maintain EmuBox restic history";
-        # See emubox-restic-init.
+        # See emubox-restic-backup.
         startLimitIntervalSec = 0;
-        requires = [ "emubox-restic-init.service" ];
-        after = [ "emubox-restic-init.service" ];
+        # Ordered here explicitly rather than inherited through the former init
+        # unit, which is what a fold like this is easiest to get wrong on.
+        requires = [
+          "data.mount"
+          "network-online.target"
+        ];
+        after = [
+          "data.mount"
+          "network-online.target"
+        ];
         serviceConfig = {
           Type = "oneshot";
           Environment = "EMUBOX_RESTIC=${lib.getExe cfg.package}";
           EnvironmentFile = config.sops.templates."restic.env".path;
+          ExecStartPre = initCommand;
           ExecStart = maintenance;
           TimeoutStartSec = cfg.lock.maintenance;
           User = "root";

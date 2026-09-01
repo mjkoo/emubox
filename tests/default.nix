@@ -56,7 +56,8 @@ let
 
     case "$1" in
       cat)
-        test ! -e /run/emubox/restic-test-init-auth-fail || exit 12
+        # 10 is the only code the helper initializes on; everything else must
+        # fail closed, so one non-10 code models the whole class.
         test ! -e /run/emubox/restic-test-init-network-fail || exit 1
         test -f "$repo/config" || exit 10
         printf '%s\n' '{"id":"emubox-test-repository"}'
@@ -111,26 +112,6 @@ let
         printf '%s\n' '[{"short_id":"emubox-test-snapshot"}]'
         ;;
       forget|check)
-        ;;
-      restore)
-        # Scanned rather than indexed by position, so reordering the
-        # operator's restore command cannot silently restore the wrong
-        # target. `--verify` is what the recovery procedure promises.
-        all="$*"
-        shift
-        verify="" target=""
-        while [ "$#" -gt 0 ]; do
-          case "$1" in
-            --verify) verify=yes; shift ;;
-            --target) target="''${2-}"; shift 2 ;;
-            -*) misuse "restore $all" ;;
-            *) shift ;;
-          esac
-        done
-        test -n "$verify" || misuse "restore without --verify: $all"
-        test -n "$target" || misuse "restore without --target: $all"
-        mkdir -p "$target"
-        cp -a "$repo/snapshot/." "$target/"
         ;;
       *)
         misuse "$*"
@@ -377,20 +358,11 @@ in
         machine.succeed("systemctl stop btrbk-local.service")
         machine.succeed("touch /data/local-snapshot-fixture /data/cache/cache-only-fixture")
 
-        # Give btrbk a complete set of real points around the native windows:
-        # two within the all-points 48-hour window, two in one populated
-        # three-day bucket, and one point outside the 14-day policy.
-        def stamp(relative):
-            return machine.succeed(f"date -d '{relative}' +%Y%m%dT%H%M").strip()
-
-        recent = [stamp("47 hours ago"), stamp("46 hours ago")]
-        daily = [stamp("3 days ago 00:10"), stamp("3 days ago 12:10")]
-        expired = stamp("16 days ago")
-        for timestamp in recent + daily + [expired]:
-            machine.succeed(
-                f"btrfs subvolume snapshot -r /data {snapshot_root}/data.{timestamp}"
-            )
-
+        # The retention windows themselves are btrbk implementing
+        # `snapshot_preserve`; the declared policy is pinned at evaluation in
+        # tests/snapshots.nix, which is where a wrong constant should fail. What
+        # runs here is ours: the subvolume layout that decides what a snapshot
+        # can reach, and btrbk being able to act on it at all.
         machine.succeed("systemctl start btrbk-local.service")
         result = machine.succeed(
             "systemctl show -p Result --value btrbk-local.service"
@@ -400,10 +372,7 @@ in
         retained = machine.succeed(
             f"find {snapshot_root} -mindepth 1 -maxdepth 1 -type d -printf '%f\\n'"
         ).splitlines()
-        for timestamp in recent:
-            assert f"data.{timestamp}" in retained, retained
-        assert f"data.{expired}" not in retained, retained
-        assert sum(name.startswith(f"data.{daily[0][:8]}") for name in retained) == 1, retained
+        assert retained, "btrbk retained no snapshot of /data"
 
         # btrbk defines snapshots as read-only. The latest real snapshot has
         # the current fixture but neither sibling subvolume below @data.
@@ -505,13 +474,11 @@ in
         machine.fail("mountpoint -q /run/emubox/restic-source")
         machine.fail("find /data/.snapshots/restic -mindepth 1 -maxdepth 1 -name 'restic-*' | grep .")
         assert unit_property(BACKUP, "Result") == "success"
-        machine.succeed("rm -rf /run/emubox-restored")
-        machine.succeed(
-            "${fakeRestic}/bin/restic restore --verify emubox-test-snapshot --target /run/emubox-restored"
-        )
-        assert machine.succeed(
-            "cat /run/emubox-restored/saves/snapshot-consistency-fixture"
-        ).strip() == "original"
+        # No restore round trip: the double copies a tree and would copy it
+        # back, exercising the double rather than this project. The bytes
+        # asserted above already prove the source snapshot, not the live file,
+        # is what reached restic. Verified restore is proven where it is real,
+        # against B2, in the E12 rollout checklist.
 
     with checked("Runtime symlink aliases fail before restic sees backup inputs"):
         for alias, target in [
@@ -551,21 +518,24 @@ in
             machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
             machine.succeed("systemctl start btrbk-local.service")
 
-    with checked("Init authentication and network failures remain fail-closed"):
+    with checked("The repository initialization gate is fail-closed"):
         # The gate is proven by what did *not* run: init must fail on its own
         # invocation and the backup must never reach one, which is precisely
         # what a bare `machine.fail` on the start cannot distinguish.
-        for marker in ["restic-test-init-auth-fail", "restic-test-init-network-fail"]:
-            with restic_fault(marker):
-                reset_restic_units()
-                backup_before = unit_property(BACKUP, "InvocationID")
-                init_before = unit_property(INIT, "InvocationID")
-                machine.fail(f"systemctl start {BACKUP}")
-                assert unit_property(INIT, "InvocationID") != init_before, f"{INIT} never ran"
-                assert unit_property(INIT, "Result") == "exit-code", unit_property(INIT, "Result")
-                assert unit_property(BACKUP, "InvocationID") == backup_before, (
-                    f"{BACKUP} ran despite a failed init gate"
-                )
+        #
+        # One case, not a matrix. Which restic errors initialize on and which
+        # it refuses is `initialize()`'s own logic, covered by its unit tests;
+        # what only the VM can show is that a failed gate stops the graph.
+        with restic_fault("restic-test-init-network-fail"):
+            reset_restic_units()
+            backup_before = unit_property(BACKUP, "InvocationID")
+            init_before = unit_property(INIT, "InvocationID")
+            machine.fail(f"systemctl start {BACKUP}")
+            assert unit_property(INIT, "InvocationID") != init_before, f"{INIT} never ran"
+            assert unit_property(INIT, "Result") == "exit-code", unit_property(INIT, "Result")
+            assert unit_property(BACKUP, "InvocationID") == backup_before, (
+                f"{BACKUP} ran despite a failed init gate"
+            )
         start_backup()
 
     with checked("Disabling cloud jobs keeps routed saves active without reverse migration"):

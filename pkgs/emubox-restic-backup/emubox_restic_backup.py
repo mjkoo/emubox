@@ -29,6 +29,10 @@ Run = Callable[[Sequence[str]], None]
 MARKER_PREFIX = "EMUBOX_MARKER="
 
 
+def _restic() -> str:
+    return os.environ.get("EMUBOX_RESTIC", "restic")
+
+
 def _default_run(command: Sequence[str]) -> None:
     subprocess.run(command, check=True)
 
@@ -109,7 +113,7 @@ def _now() -> str:
 
 
 def _restic_json(command: Sequence[str]) -> Any:
-    output = subprocess.check_output(["restic", *command], text=True)
+    output = subprocess.check_output([_restic(), *command], text=True)
     return json.loads(output)
 
 
@@ -374,10 +378,10 @@ def initialize(run: Run = _default_run) -> None:
     """Open an existing repository or initialize only restic's absent result."""
 
     try:
-        run(["restic", "cat", "config"])
+        run([_restic(), "cat", "config"])
     except subprocess.CalledProcessError as error:
         if error.returncode == 10:
-            run(["restic", "init"])
+            run([_restic(), "init"])
             return
         raise
 
@@ -416,7 +420,7 @@ def backup(
             roots = [str(mountpoint / root.removeprefix("/data/")) for root in spec["roots"]]
             run(
                 [
-                    "restic",
+                    _restic(),
                     "backup",
                     "--retry-lock",
                     spec["retryLock"],

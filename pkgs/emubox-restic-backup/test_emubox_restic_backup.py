@@ -599,3 +599,14 @@ def test_init_cli_does_not_require_a_backup_source_spec(
 
     assert erb.main(["--init"]) == 0
     assert calls == 1
+
+
+def test_init_uses_the_explicit_restic_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setenv("EMUBOX_RESTIC", "/test/bin/restic")
+
+    erb.initialize(lambda command: calls.append(list(command)))
+
+    assert calls == [["/test/bin/restic", "cat", "config"]]

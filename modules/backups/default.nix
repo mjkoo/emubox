@@ -21,7 +21,7 @@ let
   maintenanceProgram = pkgs.writeShellApplication {
     name = "emubox-restic-maintenance";
     runtimeInputs = [
-      pkgs.restic
+      cfg.package
       pkgs.emubox-restic-backup
     ];
     text = ''
@@ -33,7 +33,7 @@ let
   };
   resticWrapper = pkgs.writeShellApplication {
     name = "emubox-restic";
-    runtimeInputs = [ pkgs.restic ];
+    runtimeInputs = [ cfg.package ];
     text = ''
       export EMUBOX_RESTIC_ENV=${lib.escapeShellArg config.sops.templates."restic.env".path}
       exec ${pkgs.emubox-restic-backup}/bin/emubox-restic "$@"
@@ -69,6 +69,12 @@ in
 {
   options.emubox.backups = {
     enable = lib.mkEnableOption "off-site restic backups";
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.restic;
+      defaultText = lib.literalExpression "pkgs.restic";
+      description = "Restic package used by backup services and the operator wrapper.";
+    };
     b2 = {
       endpoint = lib.mkOption {
         type = lib.types.str;
@@ -179,6 +185,7 @@ in
         ];
         serviceConfig = {
           Type = "oneshot";
+          Environment = "EMUBOX_RESTIC=${lib.getExe cfg.package}";
           EnvironmentFile = config.sops.templates."restic.env".path;
           ExecStart = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --init";
           User = "root";
@@ -200,6 +207,7 @@ in
         ];
         serviceConfig = {
           Type = "oneshot";
+          Environment = "EMUBOX_RESTIC=${lib.getExe cfg.package}";
           EnvironmentFile = config.sops.templates."restic.env".path;
           ExecStart = backupCommand;
           ExecStartPost = backupMarkerCommand;
@@ -245,6 +253,7 @@ in
         after = [ "emubox-restic-init.service" ];
         serviceConfig = {
           Type = "oneshot";
+          Environment = "EMUBOX_RESTIC=${lib.getExe cfg.package}";
           EnvironmentFile = config.sops.templates."restic.env".path;
           ExecStart = maintenance;
           TimeoutStartSec = cfg.lock.maintenance;
@@ -267,7 +276,7 @@ in
       };
 
       environment.systemPackages = [
-        pkgs.restic
+        cfg.package
         pkgs.emubox-restic-backup
         resticWrapper
       ];

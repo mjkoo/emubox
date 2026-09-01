@@ -159,6 +159,7 @@ in
 
   emubox.backups = {
     enable = true;
+    package = fakeRestic;
     b2 = {
       endpoint = "https://s3.us-west-004.backblazeb2.com";
       bucket = "emubox-test-backups";
@@ -187,6 +188,10 @@ in
     {
       assertion = dataLayout != [ ];
       message = "tests: no `d /data/...` tmpfiles rules found; the /data layout assertion would be vacuous";
+    }
+    {
+      assertion = lib.getExe config.emubox.backups.package == lib.getExe fakeRestic;
+      message = "tests: off-site backup commands must use the local restic double";
     }
     {
       assertion =

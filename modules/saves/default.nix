@@ -121,6 +121,11 @@ let
   duplicateExclusions =
     lib.length cfg.homeCacheExclusions != lib.length (lib.unique cfg.homeCacheExclusions);
   routesJson = pkgs.writeText "emubox-save-routes.json" (builtins.toJSON cfg.saveRoutes);
+  prepareSaveRoutes = pkgs.writeShellScript "emubox-prepare-save-routes" (
+    lib.concatMapStringsSep "\n" (
+      path: "${pkgs.coreutils}/bin/install -d -m 0755 -o player -g player ${lib.escapeShellArg path}"
+    ) (map (r: r.destination) cfg.saveRoutes ++ map (mapping: mapping.where) cfg.bindMappings)
+  );
 in
 {
   options.emubox.saves = {
@@ -238,12 +243,13 @@ in
         "emubox-save-routes.target"
         "display-manager.service"
       ];
-      after = [ "local-fs.target" ];
+      requires = [ "data.mount" ];
+      after = [ "data.mount" ];
       serviceConfig = {
         Type = "oneshot";
         User = "player";
         Group = "player";
-        ExecStartPre = "+${pkgs.systemd}/bin/systemd-tmpfiles --create --prefix=/data/saves";
+        ExecStartPre = "+${prepareSaveRoutes}";
         ExecStart = "${pkgs.emubox-save-migrate}/bin/emubox-save-migrate ${routesJson}";
       };
     };

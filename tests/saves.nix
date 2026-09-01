@@ -223,7 +223,9 @@ assert lib.assertMsg
     && host.config.systemd.services.display-manager.requires == [ "emubox-save-routes.target" ]
     && host.config.systemd.services.emubox-save-migrate.serviceConfig.User == "player"
     && host.config.systemd.services.emubox-save-migrate.serviceConfig.Group == "player"
-    && lib.hasSuffix "systemd-tmpfiles --create --prefix=/data/saves" host.config.systemd.services.emubox-save-migrate.serviceConfig.ExecStartPre
+    && host.config.systemd.services.emubox-save-migrate.requires == [ "data.mount" ]
+    && host.config.systemd.services.emubox-save-migrate.after == [ "data.mount" ]
+    && lib.hasPrefix "+" host.config.systemd.services.emubox-save-migrate.serviceConfig.ExecStartPre
   )
   ''
     tests/saves.nix: declared save routes must migrate as their owning player,

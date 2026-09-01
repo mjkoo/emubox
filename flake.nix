@@ -154,6 +154,9 @@
           perSystem.emubox-save-migrate =
             (pkgsFor system).callPackage ./pkgs/emubox-save-migrate/package.nix
               { };
+          perSystem.emubox-restic-backup =
+            (pkgsFor system).callPackage ./pkgs/emubox-restic-backup/package.nix
+              { };
 
           # The retroachievements spec's Disabled scenario, asserted at eval
           # time. Per-system like the two above rather than under `hostOnly`,
@@ -170,6 +173,10 @@
             pkgs = pkgsFor system;
           };
           perSystem.snapshots = import ./tests/snapshots.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
+          perSystem.backups = import ./tests/backups.nix {
             inherit self;
             pkgs = pkgsFor system;
           };

@@ -11,6 +11,7 @@
     ./controllers
     ./library
     ./saves
+    ./backups
     ./remote
     ./secrets
   ];

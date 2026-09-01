@@ -1,0 +1,236 @@
+# Conventional restic-to-B2 scheduling. The backup helper owns only the
+# snapshot transaction; systemd remains the source of truth for activations.
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  cfg = config.emubox.backups;
+  saves = config.emubox.saves;
+  sourceSpec = pkgs.writeText "emubox-restic-source.json" (
+    builtins.toJSON {
+      roots = saves.backupRoots;
+      homeCacheExclusions = saves.homeCacheExclusions;
+      retryLock = cfg.lock.retry;
+      host = config.networking.hostName;
+      tag = "emubox-save";
+    }
+  );
+  maintenance = pkgs.writeShellScript "emubox-restic-maintenance" ''
+    set -euo pipefail
+    ${pkgs.restic}/bin/restic forget --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
+    ${pkgs.restic}/bin/restic check --read-data-subset=10%
+  '';
+  backupCommand = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --source-spec ${sourceSpec}";
+  validBucket = builtins.match "[a-z0-9][a-z0-9.-]*[a-z0-9]" cfg.b2.bucket != null;
+  validPrefix =
+    cfg.b2.prefix == ""
+    || (
+      !(lib.hasPrefix "/" cfg.b2.prefix)
+      && !(lib.hasSuffix "/" cfg.b2.prefix)
+      && !(lib.hasInfix ".." cfg.b2.prefix)
+      && !(lib.hasInfix "//" cfg.b2.prefix)
+    );
+  backupTimeoutSeconds = 7 * 60 * 60 + 25 * 60;
+  preResticSeconds = 10 * 60;
+  retryLockSeconds = 3 * 60 * 60 + 15 * 60;
+  postLockSeconds = 4 * 60 * 60;
+  maintenanceSeconds = 3 * 60 * 60;
+  resticRepository =
+    if cfg.b2.prefix == "" then "b2:${cfg.b2.bucket}" else "b2:${cfg.b2.bucket}:${cfg.b2.prefix}";
+in
+{
+  options.emubox.backups = {
+    enable = lib.mkEnableOption "off-site restic backups";
+    b2 = {
+      bucket = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Dedicated private Backblaze B2 bucket.";
+      };
+      prefix = lib.mkOption {
+        type = lib.types.str;
+        default = "emubox";
+        description = "Optional normalized repository prefix within the bucket.";
+      };
+    };
+    lock = {
+      maintenance = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        default = "3h";
+      };
+      retry = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        default = "3h15m";
+      };
+    };
+    timeout = {
+      preRestic = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        default = "10m";
+      };
+      postLock = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        default = "4h";
+      };
+      activation = lib.mkOption {
+        type = lib.types.str;
+        readOnly = true;
+        default = "7h25m";
+      };
+    };
+  };
+
+  config = lib.mkMerge [
+    {
+      assertions = [
+        {
+          assertion = maintenanceSeconds < retryLockSeconds;
+          message = "emubox backups require M < R so bounded maintenance cannot exhaust backup lock retry";
+        }
+        {
+          assertion = backupTimeoutSeconds >= preResticSeconds + retryLockSeconds + postLockSeconds;
+          message = "emubox backups require B >= P + R + E to preserve restic's post-lock budget";
+        }
+      ];
+    }
+    (lib.mkIf cfg.enable {
+      assertions = [
+        {
+          assertion = validBucket;
+          message = "emubox.backups.b2.bucket must be a normalized B2 bucket name";
+        }
+        {
+          assertion = validPrefix;
+          message = "emubox.backups.b2.prefix must be empty or normalized without slash or traversal";
+        }
+      ];
+
+      sops.secrets = {
+        b2_key_id = { };
+        b2_application_key = { };
+        restic_password = { };
+      };
+      sops.templates."restic.env" = {
+        content = ''
+          RESTIC_REPOSITORY=${resticRepository}
+          B2_ACCOUNT_ID=${config.sops.placeholder.b2_key_id}
+          B2_ACCOUNT_KEY=${config.sops.placeholder.b2_application_key}
+          RESTIC_PASSWORD_FILE=${config.sops.secrets.restic_password.path}
+        '';
+        mode = "0400";
+      };
+
+      systemd.services.emubox-restic-init = {
+        description = "Initialize or open the EmuBox restic repository";
+        requires = [
+          "data.mount"
+          "network-online.target"
+          "sops-nix.service"
+        ];
+        after = [
+          "data.mount"
+          "network-online.target"
+          "sops-nix.service"
+        ];
+        serviceConfig = {
+          Type = "oneshot";
+          EnvironmentFile = config.sops.templates."restic.env".path;
+          ExecStart = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --init";
+          User = "root";
+          Group = "root";
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+        };
+      };
+
+      systemd.services.emubox-restic-backup = {
+        description = "Create a snapshot-consistent EmuBox restic backup";
+        requires = [
+          "emubox-restic-init.service"
+          "data-.snapshots.mount"
+        ];
+        after = [
+          "emubox-restic-init.service"
+          "data-.snapshots.mount"
+        ];
+        serviceConfig = {
+          Type = "oneshot";
+          EnvironmentFile = config.sops.templates."restic.env".path;
+          ExecStart = backupCommand;
+          ExecStopPost = "${backupCommand} --reconcile";
+          TimeoutStartSec = cfg.timeout.activation;
+          TimeoutStopSec = "10m";
+          User = "root";
+          Group = "root";
+          Nice = 19;
+          IOSchedulingClass = "idle";
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+        };
+      };
+      systemd.services.emubox-restic-reconcile = {
+        description = "Reconcile interrupted EmuBox restic source snapshots";
+        wantedBy = [ "multi-user.target" ];
+        requires = [ "data-.snapshots.mount" ];
+        after = [ "data-.snapshots.mount" ];
+        before = [ "emubox-restic-backup.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${backupCommand} --reconcile";
+          User = "root";
+          Group = "root";
+        };
+      };
+      systemd.timers.emubox-restic-backup = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = "10min";
+          OnUnitActiveSec = "4h";
+          Persistent = false;
+          Unit = "emubox-restic-backup.service";
+        };
+      };
+
+      # Kept here because the timing algebra and native locking are shared
+      # with backup. Group 4 adds markers, status and the operator wrapper.
+      systemd.services.emubox-restic-maintenance = {
+        description = "Maintain EmuBox restic history";
+        requires = [ "emubox-restic-init.service" ];
+        after = [ "emubox-restic-init.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          EnvironmentFile = config.sops.templates."restic.env".path;
+          ExecStart = maintenance;
+          TimeoutStartSec = cfg.lock.maintenance;
+          User = "root";
+          Group = "root";
+          Nice = 19;
+          IOSchedulingClass = "idle";
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+        };
+      };
+      systemd.timers.emubox-restic-maintenance = {
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnCalendar = "weekly";
+          RandomizedDelaySec = "30min";
+          Persistent = false;
+          Unit = "emubox-restic-maintenance.service";
+        };
+      };
+
+      environment.systemPackages = [
+        pkgs.restic
+        pkgs.emubox-restic-backup
+      ];
+    })
+  ];
+}

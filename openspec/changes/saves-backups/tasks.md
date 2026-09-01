@@ -1,13 +1,13 @@
 ## 1. Path Model, Migration, and Save Placement
 
-- [ ] 1.1 Add evaluation tests and implement separate `saveRoutes`, `bindMappings`, typed backup roots, and finite `homeCacheExclusions`; prove roots are exactly `/data/saves`, the complete `/data/es-de`, `/data/bios`, and `/data/home/player`, and that ROM/media/cache/snapshot storage are outside rather than excluded.
-- [ ] 1.2 Add negative evaluation fixtures proving exclusions reject duplicates, `..`, home itself, and lexical equality/ancestor/descendant overlap with save routes, while arbitrary unlisted player-home paths remain included.
-- [ ] 1.3 Verify the authoritative finite save-route table in the `saves` capability spec against every pinned emulator, including ScummVM, then add evaluation and preparation tests proving the implemented declaration exactly matches every table field and add owned settings for its setting-directed rows.
+- [x] 1.1 Add evaluation tests and implement separate `saveRoutes`, `bindMappings`, typed backup roots, and finite `homeCacheExclusions`; prove roots are exactly `/data/saves`, the complete `/data/es-de`, `/data/bios`, and `/data/home/player`, and that ROM/media/cache/snapshot storage are outside rather than excluded.
+- [x] 1.2 Add negative evaluation fixtures proving exclusions reject duplicates, `..`, home itself, and lexical equality/ancestor/descendant overlap with save routes, while arbitrary unlisted player-home paths remain included.
+- [x] 1.3 Verify the authoritative finite save-route table in the `saves` capability spec against every pinned emulator, including ScummVM, then add evaluation and preparation tests proving the implemented declaration exactly matches every table field and add owned settings for its setting-directed rows.
 - [ ] 1.4 Add module tests and required bind mounts for remaining routes; prove sources resolve beneath `/data/saves` and a forced mount failure prevents kiosk start.
-- [ ] 1.5 Add conflict-safe idempotent migration for every changed setting-directed and bind-mounted route; upgrade tests SHALL prove migration completes before settings or mounts activate, equal data is accepted, and conflicts overwrite neither path.
+- [x] 1.5 Add conflict-safe idempotent migration for every changed setting-directed and bind-mounted route; upgrade tests SHALL prove migration completes before settings or mounts activate, equal data is accepted, and conflicts overwrite neither path.
 - [ ] 1.6 Extend kiosk VM assertions to cover each route including ScummVM, deterministic writes or explicit fixture exemptions, and reboot persistence; leave `just kiosk-test` passing in CI.
 - [ ] 1.7 Add rollback tests proving disabling cloud init, backup, and maintenance keeps all save settings and bind mounts active, performs no reverse migration or deletion, and preserves a subsequent routed write across reboot.
-- [ ] 1.8 Leave `just check-all` and `just session-check` passing as the group evidence.
+- [x] 1.8 Leave `just check-all` and `just session-check` passing as the group evidence.
 
 ## 2. Local Snapshot History
 

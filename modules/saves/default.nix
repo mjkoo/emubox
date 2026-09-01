@@ -20,7 +20,7 @@ let
       ;
     legacyPaths = [ "${playerHome}/${legacy}" ];
     preparation = "create destination, migrate legacy tree, then ${
-      if mechanism == "bind" then "mount" else "write setting"
+      if mechanism == "bind" then "mount" else "write key"
     }";
   };
   routeTable = [
@@ -36,7 +36,7 @@ let
       "mount-source assertion and deterministic card fixture"
     )
     (route "Dolphin Wii data" ".local/share/dolphin-emu/Wii" "/data/saves/dolphin/Wii" "bind" null
-      "mount-source assertion and deterministic Wii fixture or named exemption"
+      "mount-source assertion and deterministic Wii fixture or fixture exemption naming the unavailable title"
     )
     (route "Dolphin states" ".local/share/dolphin-emu/StateSaves" "/data/saves/dolphin/StateSaves"
       "bind"
@@ -71,14 +71,14 @@ let
       "mount-source assertion and deterministic state plus metadata fixture"
     )
     (route "Azahar NAND" ".local/share/azahar-emu/nand" "/data/saves/azahar/nand" "bind" null
-      "mount-source assertion and deterministic NAND fixture or named exemption"
+      "mount-source assertion and deterministic NAND fixture or fixture exemption naming the unavailable title"
     )
     (route "Azahar SD card" ".local/share/azahar-emu/sdmc" "/data/saves/azahar/sdmc" "bind" null
-      "mount-source assertion and deterministic SD fixture or named exemption"
+      "mount-source assertion and deterministic SD fixture or fixture exemption naming the unavailable title"
     )
     (route "ScummVM saves" ".local/share/scummvm/saves" "/data/saves/scummvm/saves" "setting"
       "scummvm.savepath"
-      "parsed owned-key assertion and deterministic save fixture or named exemption"
+      "parsed owned-key assertion and deterministic save fixture or fixture exemption naming the unavailable game engine"
     )
   ];
   backupRoots = [

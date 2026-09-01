@@ -126,6 +126,27 @@ let
     route.mechanism
     route.setting
   ]) routes;
+  expectedEvidence = [
+    "parsed owned-key assertion and deterministic core save write"
+    "parsed owned-key assertion and deterministic state write"
+    "mount-source assertion and deterministic card fixture"
+    "mount-source assertion and deterministic Wii fixture or fixture exemption naming the unavailable title"
+    "mount-source assertion and deterministic state write"
+    "mount-source assertion and deterministic card fixture"
+    "mount-source assertion and deterministic state write"
+    "mount-source assertion and deterministic card fixture"
+    "mount-source assertion and deterministic state write"
+    "mount-source assertion and deterministic savedata fixture"
+    "mount-source assertion and deterministic state plus metadata fixture"
+    "mount-source assertion and deterministic NAND fixture or fixture exemption naming the unavailable title"
+    "mount-source assertion and deterministic SD fixture or fixture exemption naming the unavailable title"
+    "parsed owned-key assertion and deterministic save fixture or fixture exemption naming the unavailable game engine"
+  ];
+  expectedPreparation =
+    route:
+    "create destination, migrate legacy tree, then ${
+      if route.mechanism == "bind" then "mount" else "write key"
+    }";
   invalidExclusion =
     value:
     let
@@ -168,6 +189,15 @@ assert lib.assertMsg (actualRouteFields == expectedRouteFields) ''
   tests/saves.nix: a legacy path, destination, mechanism, or owned-setting
   field differs from the authoritative save-route table.
 '';
+assert lib.assertMsg
+  (
+    map (route: route.evidence) routes == expectedEvidence
+    && lib.all (route: route.preparation == expectedPreparation route) routes
+  )
+  ''
+    tests/saves.nix: route preparation order or required evidence differs from
+    the authoritative save-route table.
+  '';
 assert lib.assertMsg (lib.length saves.bindMappings == lib.length bindRoutes) ''
   tests/saves.nix: every and only bind route must have a mandatory mount.
 '';
@@ -179,6 +209,17 @@ assert lib.assertMsg
   ''
     tests/saves.nix: declared save routes must start before the kiosk, and a
     missing required mount must prevent display-manager startup.
+  '';
+assert lib.assertMsg
+  (lib.all (
+    mapping:
+    lib.any (
+      mount: mount.where == mapping.where && lib.elem "emubox-save-migrate.service" mount.after
+    ) host.config.systemd.mounts
+  ) saves.bindMappings)
+  ''
+    tests/saves.nix: migration must complete before every mandatory save bind
+    mount can activate.
   '';
 assert lib.assertMsg
   (

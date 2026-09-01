@@ -377,6 +377,32 @@ in
         machine.succeed("systemctl start btrbk-local.service")
         machine.succeed("rm /run/emubox/restic-test-fail")
 
+    with subtest("Disabling cloud jobs keeps routed saves active without reverse migration"):
+        # The declarative rollback configuration is evaluated separately in
+        # tests/saves.nix. This runtime half proves that stopping the cloud
+        # activation paths neither tears down save mounts nor moves data back
+        # into the legacy directory that the mount covers.
+        for unit in [
+            "emubox-restic-init.service",
+            "emubox-restic-backup.service",
+            "emubox-restic-maintenance.service",
+        ]:
+            machine.succeed(f"systemctl stop {unit}")
+        for timer in [
+            "emubox-restic-backup.timer",
+            "emubox-restic-maintenance.timer",
+        ]:
+            machine.succeed(f"systemctl disable --now {timer}")
+            machine.fail(f"systemctl is-enabled {timer}")
+        rollback_mapping = save_bind_mappings[0]
+        machine.succeed(f"mountpoint -q {rollback_mapping['where']}")
+        machine.succeed(
+            f"printf rollback-routed > {rollback_mapping['where']}/rollback-routed-write"
+        )
+        assert machine.succeed(
+            f"cat {rollback_mapping['what']}/rollback-routed-write"
+        ).strip() == "rollback-routed"
+
     with subtest("Init authentication and network failures remain fail-closed"):
         for marker in ["restic-test-init-auth-fail", "restic-test-init-network-fail"]:
             machine.succeed(f"touch /run/emubox/{marker}")
@@ -395,6 +421,12 @@ in
         machine.wait_for_unit("multi-user.target")
         machine.fail("test -e /data/.snapshots/restic/restic-after-power-loss")
         machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
+
+    with subtest("A routed write survives reboot after cloud rollback"):
+        assert machine.succeed(
+            f"cat {rollback_mapping['what']}/rollback-routed-write"
+        ).strip() == "rollback-routed"
+        machine.succeed(f"mountpoint -q {rollback_mapping['where']}")
 
     # --- persistence: persisted paths are bound into the root ----------------
 

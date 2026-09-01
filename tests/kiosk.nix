@@ -636,6 +636,8 @@ assert lib.assertMsg
         ;
       inherit (nodes.machine.emubox.retroachievements) apiUrl;
       inherit (nodes.machine.users.users.player) home;
+      saveRoutes = nodes.machine.emubox.saves.saveRoutes;
+      saveBindMappings = nodes.machine.emubox.saves.bindMappings;
       py = builtins.toJSON;
 
       # The store path `modules/kiosk`'s own `customSystemsPath` computes
@@ -894,6 +896,19 @@ assert lib.assertMsg
           # absence: an active `player` session on seat0 is what "autologin
           # happened" actually means.
           retry(lambda _: session_on_seat("player"), timeout_seconds=120)
+
+      with subtest("All declared save routes, including ScummVM, activate before kiosk play"):
+          # The route data comes from the module under test, while the minimum
+          # cardinality and ScummVM name are independent capability promises.
+          assert len(${py saveRoutes}) == 14
+          assert any(route["store"] == "ScummVM saves" for route in ${py saveRoutes})
+          assert machine.succeed("systemctl is-active emubox-save-routes.target").strip() == "active"
+          for route in ${py saveRoutes}:
+              destination = route["destination"]
+              machine.succeed(f"test -d {destination}")
+              machine.succeed(f"su player -s /bin/sh -c 'printf kiosk > {destination}/kiosk-route-fixture'")
+          for mapping in ${py saveBindMappings}:
+              machine.succeed(f"mountpoint -q {mapping['where']}")
 
       with subtest("es-de runs inside the cage compositor"):
           # 120 s is this test's budget, chosen with headroom for ES-DE

@@ -273,7 +273,11 @@ in
         assert properties == "ro=true", properties
         machine.succeed(f"test -e {snapshot_root}/{latest}/local-snapshot-fixture")
         machine.fail(f"test -e {snapshot_root}/{latest}/cache/cache-only-fixture")
-        machine.fail(f"test -e {snapshot_root}/{latest}/.snapshots")
+        # A btrfs snapshot preserves the nested subvolume's empty mountpoint,
+        # but never recursively copies the sibling subvolume or its contents.
+        machine.fail(
+            f"find {snapshot_root}/{latest}/.snapshots -mindepth 1 -print -quit | grep -q ."
+        )
 
     with subtest("Booted through systemd-boot"):
         # Only the "Current Boot Loader" block proves the loader ran; the

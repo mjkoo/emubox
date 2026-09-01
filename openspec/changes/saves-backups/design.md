@@ -95,8 +95,9 @@ algebra is explicit: maintenance's entire sequence, including lock wait, has
 maximum `M = 3h`; backup uses `R = 3h15m` for `--retry-lock`, `P = 10m` before
 restic, and `E = 4h` after acquiring the lock, so its activation bound is
 `B = P + R + E = 7h25m`. Evaluation validates `M < R` and
-`B >= P + R + E`; scaled tests preserve both inequalities and the post-lock
-budget. Cleanup has a separately available `ExecStopPost` or equivalent final
+`B >= P + R + E` as module assertions, so a wrong constant fails the build
+rather than a VM run. Restic's own lock waiting is not re-proven in a scaled
+test. Cleanup has a separately available `ExecStopPost` or equivalent final
 path and is not charged to `B`.
 
 Maintenance therefore cannot by itself exhaust backup's retry window. Other
@@ -159,10 +160,13 @@ rejected because it creates a second authority.
 
 A root-only wrapper permits repository inspection and restore, including
 `restic restore --verify`, with the same repository and secret inputs used by
-automation. VM coverage restores known fixture bytes and verifies them. The
-runbook documents manual restore, and E12 runs one real-provider restore.
-Automated monthly restore-and-compare and embedded manifests are rejected as
-disproportionate custom machinery for nice-to-have save backups.
+automation. The runbook documents manual restore, and E12 runs one real-provider
+restore. Restoring through the VM's local repository double was rejected: the
+double copies a tree and copies it back, so the round trip exercises the double
+rather than this project, and E12's real `restic restore --verify` is the
+stronger evidence for the same claim. Automated monthly restore-and-compare and
+embedded manifests are rejected as disproportionate custom machinery for
+nice-to-have save backups.
 
 ## Risks / Trade-offs
 
@@ -184,8 +188,9 @@ disproportionate custom machinery for nice-to-have save backups.
   layer unhealthy rather than falling back to an older success.
 - [Power loss bypasses in-process cleanup] -> Reconcile named stale transient
   artifacts at boot and at each backup start before creating a new snapshot.
-- [No automated restore drill] -> Exercise verified fixture restore in the VM,
-  document manual restore, and perform one real-B2 rollout restore in E12.
+- [No automated restore drill] -> Prove in the VM that a backup captures the
+  source snapshot rather than the live file, document manual restore, and
+  perform one real-B2 verified restore in E12.
 
 ## Migration Plan
 

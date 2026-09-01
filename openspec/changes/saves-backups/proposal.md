@@ -24,8 +24,9 @@ accidental deletion can permanently lose progress.
   markers for exact recovery points.
 - Add B2 and repository credentials to sops and block installation on enabled
   placeholder credentials.
-- Extend VM coverage for routing, migration, snapshot backup, verified restore,
-  failure reporting, transient cleanup, and scheduling.
+- Extend VM coverage for routing, migration, snapshot backup, failure
+  reporting, transient cleanup, and scheduling, proving this project's seams
+  rather than re-proving restic, btrbk and systemd.
 - Document a private dedicated B2 bucket, 30 days of prior file versions, and a
   bucket-scoped read/write key without claiming immutability.
 

@@ -8,15 +8,21 @@ matches every field of the authoritative finite table, including every declared
 setting and mandatory mount,
 including ScummVM; exercise each deterministic route or record a specific
 exemption; verify migration ordering and conflicts; and prove persistence. It
-SHALL also prove native snapshot retention windows, snapshot-consistent backup,
-the finite exclusion list and default inclusion, verified fixture restore,
+SHALL also prove that retained local snapshots are read-only and do not
+recursively capture the sibling `@cache` and `@snapshots` subvolumes,
+snapshot-consistent backup, the finite exclusion list and default inclusion,
 failure visibility, transient cleanup, future scheduling, priority settings,
 and runtime secret permissions. It SHALL reject lexically malformed typed roots
 and home exclusions at evaluation, reject symlink escape and aliasing against
-the source snapshot before restic runs, prove fail-closed idempotent repository initialization and later
-timer retry, preserve timeout inequalities in scaled timing tests, pair health
-markers to exact invocations, and keep local operation available during cloud
-failure.
+the source snapshot before restic runs, prove the repository initialization
+gate is fail-closed, pair health markers to exact invocations, and keep local
+operation available during cloud failure.
+
+The VM proves the seams this project builds: the route table, the migration,
+the snapshot transaction, and the wiring between them. It SHALL NOT re-prove
+restic, btrbk or systemd themselves. Where the logic is pure it is proven by
+the helper's own unit tests, which run natively on the administrator's Mac and
+report a located failure in seconds rather than one assertion per CI build.
 
 #### Scenario: Save route survives reboot
 - **WHEN** the VM writes known bytes through a declared emulator save path and reboots
@@ -42,9 +48,14 @@ failure.
 - **WHEN** a home exclusion resolves through a symlink ancestor outside player home or onto a save route or another exclusion in the source snapshot
 - **THEN** backup fails before invoking restic and reports the invalid declaration
 
-#### Scenario: Snapshot-consistent restore is verified
-- **WHEN** the VM backs up known fixture bytes, changes the live file, and restores with verification
-- **THEN** restored bytes match the source snapshot rather than the later live file
+#### Scenario: Backup captures the source snapshot, not the live file
+- **WHEN** the VM backs up known fixture bytes and changes the live file while the source snapshot is open
+- **THEN** the backed-up bytes are the source snapshot's rather than the later live file's
+
+Restoring those bytes back through the local double would exercise the double's
+own copy, not this project. Verified restore is proven where it is real: the
+documented manual procedure and the one `restic restore --verify` against B2 in
+the E12 rollout checklist.
 
 #### Scenario: Failed backup supersedes prior success
 - **WHEN** a successful backup is followed by a forced failure
@@ -54,21 +65,19 @@ failure.
 - **WHEN** the VM presents a transient source artifact at boot or between two backups without reboot
 - **THEN** reconciliation removes it before the next backup creates its source snapshot
 
-#### Scenario: Maintenance overlaps a backup activation
-- **WHEN** bounded weekly maintenance holds its native lock as a backup activation begins
-- **THEN** the backup retry window outlasts maintenance and that backup proceeds after release
-
-#### Scenario: Repository initialization retries safely
-- **WHEN** initialization first sees a non-absence failure and a later timer activation can open the repository
-- **THEN** the first activation fails without initialization and the later activation proceeds without manual intervention
-
-#### Scenario: Scaled timeout model is exercised
-- **WHEN** VM timing constants are scaled down for an overlap test
-- **THEN** maintenance remains shorter than retry-lock and the full post-lock backup budget remains available
+#### Scenario: Repository initialization gate is fail-closed
+- **WHEN** initialization cannot open its repository
+- **THEN** initialization fails on its own invocation and the backup never reaches an invocation of its own
 
 #### Scenario: Health marker is not from the latest invocation
-- **WHEN** a successful marker is followed by a failed invocation or a malformed or mismatched marker
-- **THEN** status reports the latest layer unhealthy and does not reuse the older success
+- **WHEN** a successful backup is followed by an invocation of the same unit that runs and fails
+- **THEN** status reports that layer unhealthy and does not reuse the earlier success marker
+
+Malformed, mismatched and never-run markers, the lock timeout inequalities
+`M < R` and `B >= P + R + E`, and the precise-absence initialization result are
+proven by the helper's unit tests and by evaluation-time assertions. The VM
+proves only that a marker reaches the journal under the unit's current
+invocation and that status reads it there.
 
 #### Scenario: Cloud is unavailable
 - **WHEN** initialization or backup cannot reach its repository

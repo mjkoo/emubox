@@ -241,6 +241,8 @@ in
       after = [ "local-fs.target" ];
       serviceConfig = {
         Type = "oneshot";
+        User = "player";
+        Group = "player";
         ExecStart = "${pkgs.emubox-save-migrate}/bin/emubox-save-migrate ${routesJson}";
       };
     };

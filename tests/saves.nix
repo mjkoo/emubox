@@ -221,10 +221,13 @@ assert lib.assertMsg
   (
     host.config.systemd.targets.emubox-save-routes.wantedBy == [ "multi-user.target" ]
     && host.config.systemd.services.display-manager.requires == [ "emubox-save-routes.target" ]
+    && host.config.systemd.services.emubox-save-migrate.serviceConfig.User == "player"
+    && host.config.systemd.services.emubox-save-migrate.serviceConfig.Group == "player"
   )
   ''
-    tests/saves.nix: declared save routes must start before the kiosk, and a
-    missing required mount must prevent display-manager startup.
+    tests/saves.nix: declared save routes must migrate as their owning player,
+    start before the kiosk, and prevent display-manager startup when a required
+    mount is missing.
   '';
 assert lib.assertMsg
   (lib.all (

@@ -106,17 +106,20 @@ assert lib.assertMsg
     && backupTimer.Unit == "emubox-restic-backup.service"
   )
   "tests/backups.nix: backup timer must not queue missed activations while its oneshot stays active";
-assert lib.assertMsg (
-  lib.elem "emubox-restic-init.service" backup.requires
-  && lib.elem "data-.snapshots.mount" backup.requires
-  && lib.elem "data.mount" init.requires
-  && lib.elem "network-online.target" init.requires
-  && lib.elem "sops-nix.service" init.requires
-  && init.serviceConfig.Type == "oneshot"
-  && reconcile.wantedBy == [ "multi-user.target" ]
-  && lib.elem "data-.snapshots.mount" reconcile.requires
-  && lib.elem "emubox-restic-backup.service" reconcile.before
-) "tests/backups.nix: backup must retry the fail-closed init gate after data, secrets, and network";
+assert lib.assertMsg
+  (
+    lib.elem "emubox-restic-init.service" backup.requires
+    && lib.elem "data-.snapshots.mount" backup.requires
+    && lib.elem "data.mount" init.requires
+    && lib.elem "network-online.target" init.requires
+    && enabled.sops.useSystemdActivation == false
+    && !(lib.elem "sops-nix.service" init.requires)
+    && init.serviceConfig.Type == "oneshot"
+    && reconcile.wantedBy == [ "multi-user.target" ]
+    && lib.elem "data-.snapshots.mount" reconcile.requires
+    && lib.elem "emubox-restic-backup.service" reconcile.before
+  )
+  "tests/backups.nix: backup must retry the fail-closed init gate after data and network, with secrets installed during activation";
 assert lib.assertMsg (
   enabled.sops.secrets.b2_key_id.mode == "0400"
   && enabled.sops.secrets.b2_key_id.owner == null

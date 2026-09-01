@@ -119,9 +119,11 @@ E12 performs one real-B2 backup and `restic restore --verify` rollout check.
 
 ### 7. Service dependencies isolate local operation from cloud state
 
-Local snapshotting depends only on `/data` being mounted as btrfs. An
-idempotent `restic-init` oneshot orders after `/data`, backup secrets, and
-`network-online`. It first opens the configured repository. Only restic's
+Local snapshotting depends only on `/data` being mounted as btrfs. sops-nix's
+default activation mode installs backup secrets before systemd starts services;
+there is no generated sops systemd unit to order against. An idempotent
+`restic-init` oneshot therefore orders after `/data` and `network-online`, then
+opens the configured repository. Only restic's
 precise nonexistent-repository result permits initialization; authentication,
 network, corruption, and every other error fail closed. Backup and maintenance
 require and order after init, causing later independent timer activations to

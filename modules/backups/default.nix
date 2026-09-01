@@ -172,12 +172,10 @@ in
         requires = [
           "data.mount"
           "network-online.target"
-          "sops-nix.service"
         ];
         after = [
           "data.mount"
           "network-online.target"
-          "sops-nix.service"
         ];
         serviceConfig = {
           Type = "oneshot";

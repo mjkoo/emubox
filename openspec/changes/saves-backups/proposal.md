@@ -43,6 +43,8 @@ accidental deletion can permanently lose progress.
 - `secrets`: Add B2 and restic credentials and their install placeholder guard.
 - `vm-test`: Prove save routing, migration, and local backup/restore without
   real cloud credentials.
+- `install`: Make disk-swap recovery match the four protected backup roots and
+  reconstruct excluded ROM, media, cache, and local-history data separately.
 
 ## Impact
 

@@ -3,6 +3,7 @@
   stdenvNoCC,
   python3,
   ruff,
+  runtimeShell,
   shellcheck,
   ty,
 }:
@@ -28,6 +29,13 @@ stdenvNoCC.mkDerivation {
     python.pkgs.pytest
   ];
   doCheck = true;
+  # The wrapper install check creates fake `id` and `restic` executables. Its
+  # fixture shebangs must work in the Nix sandbox, where `/usr/bin/env` is not
+  # available.
+  postPatch = ''
+    substituteInPlace test_emubox_restic_wrapper.sh \
+      --replace-fail "/usr/bin/env bash" "${runtimeShell}"
+  '';
   checkPhase = ''
     ruff check .
     ruff format --check .

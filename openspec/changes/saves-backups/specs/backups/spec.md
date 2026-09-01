@@ -136,8 +136,9 @@ is disabled, its services SHALL not consume backup secrets.
 
 ### Requirement: Off-site history is retained and checked
 Weekly maintenance SHALL retain 14 daily, 8 weekly, and 12 monthly restic
-snapshots, prune unreferenced data, and check metadata plus a rotating 10 percent
-subset of stored data. Setup SHALL require a dedicated private bucket, a
+snapshots, prune unreferenced data, and run `check --read-data-subset=10%`.
+The percentage form selects a random subset on each invocation; it does not
+promise a rotation or eventual full coverage. Setup SHALL require a dedicated private bucket, a
 bucket-scoped read/write key, and at least 30 days of prior file versions. It
 SHALL identify prior versions as a last-resort aid and state that host
 credentials do not provide immutability.

@@ -37,8 +37,8 @@
 
 ## 5. Operations and Full Evidence
 
-- [ ] 5.1 Update install and recovery docs with the private dedicated B2 bucket, 30-day prior versions as last-resort aid, scoped read/write key, repository initialization, manual `restic restore --verify`, native lock retry behavior, and explicit non-immutability boundary.
-- [ ] 5.2 Add the E12 account-side acceptance checklist and durable evidence fields for one normal real-B2 backup and verified restore, without any corruption or historical-object recovery drill.
-- [ ] 5.3 Update README documentation for save routes, migration, local retention, schedules, status, wrapper use, and VM coverage; verify no committed document cites `.scratch/`.
-- [ ] 5.4 Leave `just check-all`, all new package builds, `just session-check`, and `just closure-check` passing, with KVM-only checks explicitly awaiting CI.
+- [x] 5.1 Update install and recovery docs with the private dedicated B2 bucket, 30-day prior versions as last-resort aid, scoped read/write key, repository initialization, manual `restic restore --verify`, native lock retry behavior, and explicit non-immutability boundary.
+- [x] 5.2 Add the E12 account-side acceptance checklist and durable evidence fields for one normal real-B2 backup and verified restore, without any corruption or historical-object recovery drill.
+- [x] 5.3 Update README documentation for save routes, migration, local retention, schedules, status, wrapper use, and VM coverage; verify no committed document cites `.scratch/`.
+- [x] 5.4 Leave `just check-all`, all new package builds, `just session-check`, and `just closure-check` passing, with KVM-only checks explicitly awaiting CI.
 - [ ] 5.5 Leave `just vm-test` and `just kiosk-test` passing in CI with evidence for migration, ScummVM, retention windows, snapshot-consistent backup, exclusions, native-lock failure behavior, cleanup, status, verified fixture restore, and secret modes.

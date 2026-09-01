@@ -359,17 +359,18 @@ or snapshot subvolumes.
 
 Use `sudo emubox-status` first. It reports the authoritative outcome of the
 latest local snapshot, backup, and maintenance invocation, with a journal
-query when one needs attention. `sudo emubox-restic snapshots`, `stats`, `ls`,
-and `find` are the supported inspection commands. The wrapper intentionally
-accepts no arbitrary restic global options and loads the same root-only secret
-environment as automation.
+query when one needs attention. `sudo restic-emubox` is restic itself with the
+same repository and root-only credentials automation uses, so `snapshots`,
+`stats`, `ls` and `find` all work as documented upstream. It is restricted to
+root by the permissions on the credentials file it reads, not by a command
+allowlist.
 
 For a normal recovery, restore to a new directory and verify while restoring:
 
 ```
 sudo install -d -m 0700 /data/recovery/restic-restore
-sudo emubox-restic snapshots
-sudo emubox-restic restore --verify <snapshot-id> --target /data/recovery/restic-restore
+sudo restic-emubox snapshots
+sudo restic-emubox restore --verify <snapshot-id> --target /data/recovery/restic-restore
 ```
 
 Inspect the recovered data before replacing anything live. The restored tree
@@ -507,6 +508,6 @@ key, restic password, or fixture contents.
 | `emubox-status` after the run | `TODO(E12)` |
 
 The acceptance succeeds only when the normal scheduled or manually started
-backup reaches B2, `emubox-restic restore --verify` succeeds into a fresh
+backup reaches B2, `restic-emubox restore --verify` succeeds into a fresh
 directory, and the recovered fixture bytes match. Do not delete, corrupt, or
 recover historical B2 objects for this check.

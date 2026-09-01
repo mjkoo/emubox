@@ -135,11 +135,6 @@ let
       map (r: r.destination) cfg.saveRoutes ++ map (mapping: mapping.where) cfg.bindMappings
     )
   );
-  prepareSaveRoutes = pkgs.writeShellScript "emubox-prepare-save-routes" (
-    lib.concatMapStringsSep "\n" (
-      path: "${pkgs.coreutils}/bin/install -d -m 0755 -o player -g player ${lib.escapeShellArg path}"
-    ) routeDirectories
-  );
 in
 {
   options.emubox.saves = {
@@ -201,10 +196,14 @@ in
       }
     ];
 
-    systemd.tmpfiles.rules =
-      (map (r: "d ${r.destination} 0755 player player -") cfg.saveRoutes)
-      ++ (map (mapping: "d ${mapping.where} 0755 player player -") cfg.bindMappings)
-      ++ [ "d /data/.snapshots 0700 root root -" ];
+    # Every route directory and every ancestor below `/data/saves` or the
+    # player's home, so the migration and the bind mounts both find their
+    # endpoints already owned. This was duplicated as a generated `install -d`
+    # script run from the migration's ExecStartPre; tmpfiles is the declarative
+    # form of the same thing, and ordering the migration after it is enough.
+    systemd.tmpfiles.rules = (map (path: "d ${path} 0755 player player -") routeDirectories) ++ [
+      "d /data/.snapshots 0700 root root -"
+    ];
 
     # btrbk's native retention model keeps every real recovery point in the
     # short window, then one point per populated daily bucket. `@cache` and
@@ -254,6 +253,11 @@ in
       description = "Migrate declared emulator saves before route activation";
       wantedBy = [ "emubox-save-routes.target" ];
       unitConfig.DefaultDependencies = false;
+      # The route directories come from tmpfiles now, so this has to follow it
+      # explicitly: DefaultDependencies=false means none of that ordering is
+      # implied.
+      requires = [ "systemd-tmpfiles-setup.service" ];
+      after = [ "systemd-tmpfiles-setup.service" ];
       before = map mountUnit cfg.bindMappings ++ [
         "emubox-save-routes.target"
         "display-manager.service"
@@ -262,7 +266,6 @@ in
         Type = "oneshot";
         User = "player";
         Group = "player";
-        ExecStartPre = "+${prepareSaveRoutes}";
         ExecStart = "${pkgs.emubox-save-migrate}/bin/emubox-save-migrate ${routesJson}";
       };
     };

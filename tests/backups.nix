@@ -19,11 +19,13 @@ let
         }
       ];
     }).config;
-  backup = enabled.systemd.services.emubox-restic-backup;
+  backup = enabled.systemd.services."restic-backups-emubox";
+  backupSettings = enabled.services.restic.backups.emubox;
   reconcile = enabled.systemd.services.emubox-restic-reconcile;
-  backupTimer = enabled.systemd.timers.emubox-restic-backup.timerConfig;
-  maintenance = enabled.systemd.services.emubox-restic-maintenance;
-  maintenanceTimer = enabled.systemd.timers.emubox-restic-maintenance.timerConfig;
+  backupTimer = enabled.systemd.timers."restic-backups-emubox".timerConfig;
+  maintenance = enabled.systemd.services."restic-backups-emubox-maintenance";
+  maintenanceSettings = enabled.services.restic.backups.emubox-maintenance;
+  maintenanceTimer = enabled.systemd.timers."restic-backups-emubox-maintenance".timerConfig;
   invalidOption =
     value:
     let
@@ -62,8 +64,8 @@ let
     !(builtins.tryEval candidate.config.system.build.toplevel.drvPath).success;
 in
 assert lib.assertMsg (
-  !(disabled.systemd.services ? emubox-restic-backup)
-  && !(disabled.systemd.services ? emubox-restic-maintenance)
+  !(disabled.services.restic.backups ? emubox)
+  && !(disabled.services.restic.backups ? emubox-maintenance)
   && !(disabled.systemd.services ? emubox-restic-reconcile)
   && !(disabled.sops.secrets ? b2_key_id)
 ) "tests/backups.nix: disabled off-site backups must consume no B2 or restic secrets";
@@ -92,16 +94,35 @@ assert lib.assertMsg (
 assert lib.assertMsg (
   backup.serviceConfig.TimeoutStartSec == "7h25m"
   && backup.serviceConfig.TimeoutStopSec == "10m"
-  && lib.hasInfix "--reconcile" backup.serviceConfig.ExecStopPost
+  # `services.restic` runs backupCleanupCommand from postStop, so cleanup is
+  # reached on success, failure and timeout alike and is not charged to B.
+  && lib.hasInfix "--cleanup" backupSettings.backupCleanupCommand
+  && lib.hasInfix "backupCleanupCommand" backup.postStop
   && backup.serviceConfig.Nice == 19
   && backup.serviceConfig.IOSchedulingClass == "idle"
 ) "tests/backups.nix: backup needs a bounded activation and cleanup outside that bound";
 assert lib.assertMsg
   (
+    # The restic command line is the module's, not a string this project
+    # assembles. These are the arguments the capability actually requires.
+    lib.any (lib.hasInfix "--retry-lock=3h15m") backup.serviceConfig.ExecStart
+    && lib.any (lib.hasInfix "--tag=emubox-save") backup.serviceConfig.ExecStart
+    && lib.any (lib.hasInfix "--exclude-file=/run/emubox/restic-excludes") backup.serviceConfig.ExecStart
+    &&
+      backupSettings.paths == [
+        "/run/emubox/restic-source/saves"
+        "/run/emubox/restic-source/es-de"
+        "/run/emubox/restic-source/bios"
+        "/run/emubox/restic-source/home/player"
+      ]
+    && backupSettings.createWrapper
+  )
+  "tests/backups.nix: restic must read the typed roots through the transient read-only source, with native lock retry";
+assert lib.assertMsg
+  (
     backupTimer.OnBootSec == "10min"
     && backupTimer.OnUnitActiveSec == "4h"
     && backupTimer.Persistent == false
-    && backupTimer.Unit == "emubox-restic-backup.service"
   )
   "tests/backups.nix: backup timer must not queue missed activations while its oneshot stays active";
 assert lib.assertMsg
@@ -111,22 +132,28 @@ assert lib.assertMsg
     # unit would fail the job by `dependency`, leaving the job's invocation,
     # result and journal describing its previous success.
     !(enabled.systemd.services ? emubox-restic-init)
-    && lib.hasInfix "--init" backup.serviceConfig.ExecStartPre
-    && lib.hasInfix "--init" maintenance.serviceConfig.ExecStartPre
-    &&
-      lib.all
-        (unit: lib.elem "data.mount" unit.requires && lib.elem "network-online.target" unit.requires)
-        [
-          backup
-          maintenance
-        ]
+    # The module's own `initialize` runs `init` whenever `cat config` fails at
+    # all. This project needs the precise-absence gate instead, so it declines
+    # upstream's and supplies its own as each job's prepare step.
+    && backupSettings.initialize == false
+    && maintenanceSettings.initialize == false
+    && lib.hasInfix "--prepare" backupSettings.backupPrepareCommand
+    && lib.hasInfix "--init" maintenanceSettings.backupPrepareCommand
+    && lib.all (unit: lib.elem "data.mount" unit.requires) [
+      backup
+      maintenance
+    ]
+    && lib.all (unit: lib.elem "network-online.target" unit.wants) [
+      backup
+      maintenance
+    ]
     && lib.elem "data-.snapshots.mount" backup.requires
     && enabled.sops.useSystemdActivation == false
     && !(lib.elem "sops-nix.service" backup.requires)
     && backup.serviceConfig.Type == "oneshot"
     && reconcile.wantedBy == [ "multi-user.target" ]
     && lib.elem "data-.snapshots.mount" reconcile.requires
-    && lib.elem "emubox-restic-backup.service" reconcile.before
+    && lib.elem "restic-backups-emubox.service" reconcile.before
   )
   "tests/backups.nix: each off-site job must run the fail-closed init gate as its own first step, after data and network, with secrets installed during activation";
 assert lib.assertMsg (
@@ -145,10 +172,21 @@ assert lib.assertMsg (
   maintenance.serviceConfig.TimeoutStartSec == "3h"
   && maintenanceTimer.OnCalendar == "weekly"
   && maintenanceTimer.Persistent == false
+  &&
+    maintenanceSettings.pruneOpts == [
+      "--keep-daily 14"
+      "--keep-weekly 8"
+      "--keep-monthly 12"
+    ]
+  && maintenanceSettings.checkOpts == [ "--read-data-subset=10%" ]
+  # No paths, so the module emits only forget/prune and check here.
+  && maintenanceSettings.paths == [ ]
+  && lib.any (lib.hasInfix "forget --prune") maintenance.serviceConfig.ExecStart
+  && lib.any (lib.hasInfix "check --read-data-subset=10%") maintenance.serviceConfig.ExecStart
 ) "tests/backups.nix: bounded native-lock maintenance must retain and check restic history";
 assert lib.assertMsg
   (
-    lib.hasInfix "emubox-restic-maintenance" maintenance.serviceConfig.ExecStart
+    lib.hasInfix "--emit-maintenance-marker" maintenance.serviceConfig.ExecStartPost
     && lib.hasInfix "--emit-backup-marker" backup.serviceConfig.ExecStartPost
   )
   "tests/backups.nix: maintenance and backup must emit same-invocation recovery markers after conventional restic operations";

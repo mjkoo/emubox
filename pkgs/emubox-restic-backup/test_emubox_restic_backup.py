@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import subprocess
-from typing import Sequence
+from typing import Callable, Sequence
 
 import pytest
 
@@ -345,7 +345,63 @@ def test_exclusions_alias_each_other_fails(tmp_path: Path) -> None:
         erb.validate_exclusions(bad_spec, source)
 
 
-def test_backup_finally_removes_mount_snapshot_and_exclude_file(
+def _transaction_run(
+    calls: list[list[str]], mount_state: dict[str, bool] | None = None
+) -> Callable[[Sequence[str]], None]:
+    """A `run` double that keeps the on-disk effects the transaction relies on."""
+
+    def run(command: Sequence[str]) -> None:
+        command = list(command)
+        calls.append(command)
+        if command[:4] == ["btrfs", "subvolume", "snapshot", "-r"]:
+            Path(command[-1]).mkdir()
+        elif command[:3] == ["btrfs", "subvolume", "delete"]:
+            Path(command[-1]).rmdir()
+        elif command[:2] == ["mount", "--bind"] and mount_state is not None:
+            mount_state["mounted"] = True
+        elif command[0] == "umount" and mount_state is not None:
+            mount_state["mounted"] = False
+
+    return run
+
+
+def test_prepare_opens_the_repository_before_taking_a_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreachable repository must cost no snapshot.
+
+    The gate is the first thing `--prepare` does, so a repository that cannot
+    be opened fails the backup's activation before any filesystem state exists
+    to clean up.
+    """
+
+    data = tmp_path / "data"
+    data.mkdir()
+    snapshots = tmp_path / "snapshots"
+    calls: list[list[str]] = []
+    monkeypatch.setattr(Path, "is_mount", lambda _: False)
+
+    def run(command: Sequence[str]) -> None:
+        command = list(command)
+        calls.append(command)
+        if command[1:3] == ["cat", "config"]:
+            raise subprocess.CalledProcessError(12, command)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        erb.prepare(
+            spec(),
+            data=data,
+            snapshot_dir=snapshots,
+            mountpoint=tmp_path / "run/source",
+            exclusion_file=tmp_path / "run/excludes",
+            run=run,
+        )
+
+    assert calls == [["restic", "cat", "config"]]
+    assert not snapshots.exists()
+
+
+def test_prepare_exposes_a_read_only_source_and_resolved_exclusions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data = tmp_path / "data"
@@ -354,70 +410,30 @@ def test_backup_finally_removes_mount_snapshot_and_exclude_file(
     mountpoint = tmp_path / "run/source"
     excludes = tmp_path / "run/excludes"
     calls: list[list[str]] = []
-
     monkeypatch.setattr(Path, "is_mount", lambda _: False)
 
-    def run(command: Sequence[str]) -> None:
-        command = list(command)
-        calls.append(command)
-        if command[:4] == ["btrfs", "subvolume", "snapshot", "-r"]:
-            Path(command[-1]).mkdir()
-        if command[:3] == ["btrfs", "subvolume", "delete"]:
-            Path(command[-1]).rmdir()
-        if command[0] == "restic":
-            raise RuntimeError("injected restic failure")
+    erb.prepare(
+        spec(),
+        data=data,
+        snapshot_dir=snapshots,
+        mountpoint=mountpoint,
+        exclusion_file=excludes,
+        run=_transaction_run(calls),
+    )
 
-    with pytest.raises(RuntimeError, match="injected"):
-        erb.backup(
-            spec(),
-            data=data,
-            snapshot_dir=snapshots,
-            mountpoint=mountpoint,
-            exclusion_file=excludes,
-            run=run,
-        )
-
-    assert not (snapshots / "restic-current").exists()
-    assert not excludes.exists()
-    assert ["restic", "backup"] == calls[-2][:2]
-    assert calls[-1][:3] == ["btrfs", "subvolume", "delete"]
+    assert ["mount", "-o", "remount,bind,ro", "--", str(mountpoint)] in calls
+    assert (snapshots / "restic-current").exists()
+    # restic reads these; the module passes the file with --exclude-file.
+    assert excludes.read_text(encoding="utf-8").splitlines() == [
+        str(mountpoint / "home/player/.cache"),
+        str(mountpoint / "home/player/.local/cache"),
+    ]
+    # The restic command line itself is the Nix module's, asserted in
+    # tests/backups.nix; nothing here shells out to restic but the gate.
+    assert [command for command in calls if command[:2] == ["restic", "backup"]] == []
 
 
-def test_timeout_uses_the_same_final_cleanup_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data = tmp_path / "data"
-    data.mkdir()
-    snapshots = tmp_path / "snapshots"
-    mountpoint = tmp_path / "run/source"
-    excludes = tmp_path / "run/excludes"
-
-    monkeypatch.setattr(Path, "is_mount", lambda _: False)
-
-    def run(command: Sequence[str]) -> None:
-        command = list(command)
-        if command[:4] == ["btrfs", "subvolume", "snapshot", "-r"]:
-            Path(command[-1]).mkdir()
-        if command[:3] == ["btrfs", "subvolume", "delete"]:
-            Path(command[-1]).rmdir()
-        if command[0] == "restic":
-            raise subprocess.TimeoutExpired(command, timeout=1)
-
-    with pytest.raises(subprocess.TimeoutExpired):
-        erb.backup(
-            spec(),
-            data=data,
-            snapshot_dir=snapshots,
-            mountpoint=mountpoint,
-            exclusion_file=excludes,
-            run=run,
-        )
-
-    assert not (snapshots / "restic-current").exists()
-    assert not excludes.exists()
-
-
-def test_read_only_remount_failure_unmounts_the_just_created_bind(
+def test_prepare_unwinds_its_own_mount_and_snapshot_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data = tmp_path / "data"
@@ -427,25 +443,16 @@ def test_read_only_remount_failure_unmounts_the_just_created_bind(
     excludes = tmp_path / "run/excludes"
     calls: list[list[str]] = []
     mount_state = {"mounted": False}
-
     monkeypatch.setattr(Path, "is_mount", lambda _: mount_state["mounted"])
+    inner = _transaction_run(calls, mount_state)
 
     def run(command: Sequence[str]) -> None:
-        command = list(command)
-        calls.append(command)
-        if command[:4] == ["btrfs", "subvolume", "snapshot", "-r"]:
-            Path(command[-1]).mkdir()
-        elif command[:3] == ["btrfs", "subvolume", "delete"]:
-            Path(command[-1]).rmdir()
-        elif command[:2] == ["mount", "--bind"]:
-            mount_state["mounted"] = True
-        elif command[:3] == ["mount", "-o", "remount,bind,ro"]:
+        inner(command)
+        if list(command)[:3] == ["mount", "-o", "remount,bind,ro"]:
             raise RuntimeError("injected read-only remount failure")
-        elif command[0] == "umount":
-            mount_state["mounted"] = False
 
     with pytest.raises(RuntimeError, match="read-only remount"):
-        erb.backup(
+        erb.prepare(
             spec(),
             data=data,
             snapshot_dir=snapshots,
@@ -456,40 +463,50 @@ def test_read_only_remount_failure_unmounts_the_just_created_bind(
 
     assert ["umount", "--", str(mountpoint)] in calls
     assert not (snapshots / "restic-current").exists()
+    assert not excludes.exists()
 
 
-def test_backup_uses_read_only_source_and_native_lock_retry(
+def test_cleanup_removes_the_transient_source_whatever_restic_did(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """`backupCleanupCommand` runs from ExecStopPost on success and failure."""
+
     data = tmp_path / "data"
     data.mkdir()
     snapshots = tmp_path / "snapshots"
     mountpoint = tmp_path / "run/source"
     excludes = tmp_path / "run/excludes"
     calls: list[list[str]] = []
-
     monkeypatch.setattr(Path, "is_mount", lambda _: False)
 
-    def run(command: Sequence[str]) -> None:
-        command = list(command)
-        calls.append(command)
-        if command[:4] == ["btrfs", "subvolume", "snapshot", "-r"]:
-            Path(command[-1]).mkdir()
-        if command[:3] == ["btrfs", "subvolume", "delete"]:
-            Path(command[-1]).rmdir()
-
-    erb.backup(
+    erb.prepare(
         spec(),
         data=data,
         snapshot_dir=snapshots,
         mountpoint=mountpoint,
         exclusion_file=excludes,
-        run=run,
+        run=_transaction_run(calls),
+    )
+    assert (snapshots / "restic-current").exists()
+
+    erb.cleanup(
+        snapshot_dir=snapshots,
+        mountpoint=mountpoint,
+        exclusion_file=excludes,
+        run=_transaction_run(calls),
     )
 
-    assert ["mount", "-o", "remount,bind,ro", "--", str(mountpoint)] in calls
-    command = next(command for command in calls if command[:2] == ["restic", "backup"])
-    assert command[2:4] == ["--retry-lock", "3h15m"]
+    assert not (snapshots / "restic-current").exists()
+    assert not excludes.exists()
+
+    # Idempotent: a signal that bypassed ExecStopPost leaves the boot
+    # reconciler to run the very same path over an already-clean tree.
+    erb.cleanup(
+        snapshot_dir=snapshots,
+        mountpoint=mountpoint,
+        exclusion_file=excludes,
+        run=_transaction_run(calls),
+    )
 
 
 def test_reconciliation_removes_an_interrupted_source_before_next_snapshot(
@@ -502,25 +519,16 @@ def test_reconciliation_removes_an_interrupted_source_before_next_snapshot(
     interrupted = snapshots / "restic-interrupted"
     interrupted.mkdir()
     mountpoint = tmp_path / "run/source"
-    excludes = tmp_path / "run/excludes"
     calls: list[list[str]] = []
     monkeypatch.setattr(Path, "is_mount", lambda _: False)
 
-    def run(command: Sequence[str]) -> None:
-        command = list(command)
-        calls.append(command)
-        if command[:3] == ["btrfs", "subvolume", "delete"]:
-            Path(command[-1]).rmdir()
-        if command[:4] == ["btrfs", "subvolume", "snapshot", "-r"]:
-            Path(command[-1]).mkdir()
-
-    erb.backup(
+    erb.prepare(
         spec(),
         data=data,
         snapshot_dir=snapshots,
         mountpoint=mountpoint,
-        exclusion_file=excludes,
-        run=run,
+        exclusion_file=tmp_path / "run/excludes",
+        run=_transaction_run(calls),
     )
 
     delete = ["btrfs", "subvolume", "delete", "--", str(interrupted)]
@@ -534,23 +542,6 @@ def test_reconciliation_removes_an_interrupted_source_before_next_snapshot(
         str(snapshots / "restic-current"),
     ]
     assert calls.index(delete) < calls.index(create)
-
-
-def test_scaled_timeout_budget_preserves_post_lock_work() -> None:
-    assert erb.timeout_budget_is_valid(3 * 60, 3 * 60 + 15, 10, 4 * 60, 7 * 60 + 25)
-    assert not erb.timeout_budget_is_valid(3 * 60, 3 * 60, 10, 4 * 60, 7 * 60 + 25)
-    assert not erb.timeout_budget_is_valid(3 * 60, 3 * 60 + 15, 10, 4 * 60, 7 * 60 + 24)
-
-
-def test_missed_timer_activation_is_not_queued_and_future_activation_runs() -> None:
-    # At a scaled four-minute cadence, a seven-minute activation consumes the
-    # middle tick but the following one starts normally.
-    assert erb.timer_starts(
-        cadence_seconds=4 * 60, activation_seconds=7 * 60 + 25, until_seconds=12 * 60
-    ) == [
-        0,
-        8 * 60,
-    ]
 
 
 def test_init_only_creates_a_precisely_absent_repository() -> None:

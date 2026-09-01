@@ -77,29 +77,33 @@ let
         fi
         rm -rf -- "$repo/snapshot"
         mkdir -p "$repo/snapshot"
-        excludes=""
+        # `services.restic` passes every option in `--name=value` form and the
+        # paths through `--files-from`, so there are no positional paths left.
+        excludes="" includes=""
         shift
         while [ "$#" -gt 0 ]; do
-          if [ "$1" = "--exclude-file" ]; then
-            excludes="$2"
-            shift 2
-          elif [ "$1" = "--retry-lock" ] || [ "$1" = "--host" ] || [ "$1" = "--tag" ]; then
-            shift 2
-          else
-            case "$1" in
-              /run/emubox/restic-source/*)
-                relative="''${1#/run/emubox/restic-source/}"
-                mkdir -p "$repo/snapshot/$relative"
-                cp -a "$1/." "$repo/snapshot/$relative/"
-                ;;
-              # An option the double does not model would otherwise be
-              # skipped here, along with the value of any option that takes
-              # one, silently changing what gets backed up.
-              -*) misuse "backup $*" ;;
-            esac
-            shift
-          fi
+          case "$1" in
+            --exclude-file=*) excludes="''${1#--exclude-file=}" ;;
+            --files-from=*) includes="''${1#--files-from=}" ;;
+            --retry-lock=*|--host=*|--tag=*) ;;
+            *) misuse "backup $*" ;;
+          esac
+          shift
         done
+        test -n "$includes" || misuse "backup without --files-from"
+        while IFS= read -r path; do
+          case "$path" in
+            "") ;;
+            /run/emubox/restic-source/*)
+              relative="''${path#/run/emubox/restic-source/}"
+              mkdir -p "$repo/snapshot/$relative"
+              cp -a "$path/." "$repo/snapshot/$relative/"
+              ;;
+            # Anything outside the transient source would mean restic was
+            # pointed at the live tree.
+            *) misuse "backup path outside the source: $path" ;;
+          esac
+        done < "$includes"
         if [ -n "$excludes" ]; then
           while IFS= read -r path; do
             relative="''${path#/run/emubox/restic-source/}"
@@ -111,7 +115,7 @@ let
       snapshots)
         printf '%s\n' '[{"short_id":"emubox-test-snapshot"}]'
         ;;
-      forget|check)
+      forget|check|unlock)
         ;;
       *)
         misuse "$*"
@@ -185,8 +189,8 @@ in
   };
 
   systemd.services = {
-    emubox-restic-backup.path = [ fakeRestic ];
-    emubox-restic-maintenance.path = [ fakeRestic ];
+    "restic-backups-emubox".path = [ fakeRestic ];
+    "restic-backups-emubox-maintenance".path = [ fakeRestic ];
   };
 
   # No host key is injected in the VM, so /etc/ssh/ssh_host_ed25519_key is
@@ -240,10 +244,10 @@ in
     save_bind_mappings = json.loads(${py saveBindMappingsJson})
     rollback_mapping = save_bind_mappings[0]
 
-    BACKUP = "emubox-restic-backup.service"
+    BACKUP = "restic-backups-emubox.service"
     RESTIC_UNITS = [
         BACKUP,
-        "emubox-restic-maintenance.service",
+        "restic-backups-emubox-maintenance.service",
         "emubox-restic-reconcile.service",
     ]
 
@@ -436,7 +440,7 @@ in
     # --- off-site backups: local fake repository, real service transaction --
 
     with checked("Restic uses one read-only source and backs up only typed roots"):
-        machine.succeed("systemctl stop emubox-restic-backup.timer")
+        machine.succeed("systemctl stop restic-backups-emubox.timer")
         machine.succeed("mkdir -p /data/es-de /data/bios /data/home/player/.cache /data/home/player/.local/cache")
         machine.succeed("printf original > /data/saves/snapshot-consistency-fixture")
         machine.succeed("printf esde > /data/es-de/esde-fixture")
@@ -489,9 +493,9 @@ in
 
     with checked("Maintenance and status use exact-invocation journal markers"):
         start_backup()
-        machine.succeed("systemctl start emubox-restic-maintenance.service")
+        machine.succeed("systemctl start restic-backups-emubox-maintenance.service")
         machine.succeed(
-            "journalctl -u emubox-restic-maintenance.service -o cat --no-pager | grep -F 'EMUBOX_MARKER='"
+            "journalctl -u restic-backups-emubox-maintenance.service -o cat --no-pager | grep -F 'EMUBOX_MARKER='"
         )
         machine.succeed("emubox-status")
         # `start_backup` asserts the backup actually ran and failed. Status
@@ -500,13 +504,13 @@ in
         with restic_fault("restic-test-fail"):
             start_backup(expect="exit-code")
             status = machine.fail("emubox-status")
-            assert "emubox-restic-backup.service: latest invocation failed" in status, status
+            assert "restic-backups-emubox.service: latest invocation failed" in status, status
 
     with checked("Cloud failures do not disable local gameplay or future backup scheduling"):
         with restic_fault("restic-test-fail"):
             start_backup(expect="exit-code")
             machine.succeed("mountpoint -q " + save_bind_mappings[0]["where"])
-            machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
+            machine.succeed("systemctl is-enabled restic-backups-emubox.timer")
             machine.succeed("systemctl start btrbk-local.service")
 
     with checked("The repository initialization gate is fail-closed and visible"):
@@ -527,7 +531,7 @@ in
                 "stat -c %Y /data/cache/emubox-restic-test/backup-ran"
             ).strip() == before, "restic backed up despite a failed init gate"
             status = machine.fail("emubox-status")
-            assert "emubox-restic-backup.service: latest invocation failed" in status, status
+            assert "restic-backups-emubox.service: latest invocation failed" in status, status
         start_backup()
 
     with checked("Disabling cloud jobs keeps routed saves active without reverse migration"):
@@ -538,8 +542,8 @@ in
         for unit in RESTIC_UNITS:
             machine.succeed(f"systemctl stop {unit}")
         for timer in [
-            "emubox-restic-backup.timer",
-            "emubox-restic-maintenance.timer",
+            "restic-backups-emubox.timer",
+            "restic-backups-emubox-maintenance.timer",
         ]:
             # Stopped, not disabled. `/etc/systemd/system` is read-only on this
             # box, so `systemctl disable` cannot work at runtime and rollback is
@@ -572,7 +576,7 @@ in
         machine.fail("test -e /data/.snapshots/restic/restic-after-power-loss")
         # The timers stopped above are running again: their enablement lives in
         # the declared configuration, not in runtime state the boot preserves.
-        machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
+        machine.succeed("systemctl is-enabled restic-backups-emubox.timer")
 
     with checked("A routed write survives reboot after cloud rollback"):
         assert machine.succeed(

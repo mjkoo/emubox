@@ -6,8 +6,6 @@
   python3,
   restic,
   ruff,
-  runtimeShell,
-  shellcheck,
   ty,
   util-linux,
 }:
@@ -26,7 +24,6 @@ stdenvNoCC.mkDerivation {
     root = ./.;
     fileset = lib.fileset.unions [
       (lib.fileset.fileFilter (f: f.hasExt "py") ./.)
-      (lib.fileset.fileFilter (f: f.hasExt "sh") ./.)
       (lib.fileset.fileFilter (f: f.hasExt "toml") ./.)
     ];
   };
@@ -34,39 +31,26 @@ stdenvNoCC.mkDerivation {
   nativeBuildInputs = [ makeWrapper ];
   nativeCheckInputs = [
     ruff
-    shellcheck
     ty
     python.pkgs.pytest
   ];
   doCheck = true;
-  # The wrapper install check creates fake `id` and `restic` executables. Its
-  # fixture shebangs must work in the Nix sandbox, where `/usr/bin/env` is not
-  # available.
-  postPatch = ''
-    substituteInPlace test_emubox_restic_wrapper.sh \
-      --replace-fail "/usr/bin/env bash" "${runtimeShell}"
-  '';
   checkPhase = ''
     ruff check .
     ruff format --check .
     ty check
     pytest -q
-    shellcheck emubox_restic_wrapper.sh test_emubox_restic_wrapper.sh
   '';
-  doInstallCheck = true;
   installPhase = ''
     install -Dm755 emubox_restic_backup.py $out/bin/emubox-restic-backup
-    install -Dm755 emubox_restic_wrapper.sh $out/bin/emubox-restic
     ${lib.optionalString stdenvNoCC.hostPlatform.isLinux ''
       wrapProgram $out/bin/emubox-restic-backup --prefix PATH : ${runtimePath}
     ''}
+    # The operator's restic entry point is `restic-emubox`, which
+    # `services.restic`'s `createWrapper` installs with this repository's
+    # environment already set.
     makeWrapper $out/bin/emubox-restic-backup $out/bin/emubox-status \
       --add-flags --status
-  '';
-  installCheckPhase = ''
-    bash test_emubox_restic_wrapper.sh \
-      "$out/bin/emubox-restic" \
-      "$out/bin/emubox-status"
   '';
   meta = {
     description = "Snapshot-consistent restic backup helper for EmuBox";

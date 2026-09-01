@@ -166,9 +166,12 @@ snapshot exists. Missing, malformed, or mismatched markers SHALL be unhealthy.
 A local snapshot older than 2 hours, backup older than 8 hours, or
 maintenance/check older than 14 days SHALL warn. Never-run and last-failed units
 SHALL warn and identify the relevant unit or journal query. Optional live
-confirmation MAY add a warning but SHALL NOT erase the last known outcome. A root-only wrapper
+confirmation MAY add a warning but SHALL NOT erase the last known outcome. A wrapper
 SHALL expose inspection and manual `restic restore --verify` using automation's
-repository and secret inputs.
+repository and secret inputs. It SHALL be restricted to root by the permissions
+on the credentials it reads. It SHALL NOT claim to restrict which restic
+commands root may run: root can read those credentials directly, so a command
+allowlist would constrain nobody who can reach the wrapper.
 
 #### Scenario: All layers are current
 - **WHEN** all three layers last succeeded within their freshness thresholds

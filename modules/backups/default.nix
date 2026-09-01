@@ -1,5 +1,8 @@
-# Conventional restic-to-B2 scheduling. The backup helper owns only the
-# snapshot transaction; systemd remains the source of truth for activations.
+# Conventional restic-to-B2 scheduling on `services.restic`, which owns the
+# units, timers, secrets plumbing and the restic command line. What is left
+# here is what upstream has no opinion about: the read-only btrfs snapshot each
+# backup runs against, a stricter initialization gate, and the journal markers
+# `emubox-status` reads.
 {
   config,
   lib,
@@ -9,6 +12,19 @@
 let
   cfg = config.emubox.backups;
   saves = config.emubox.saves;
+  helper = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup";
+
+  # The transient read-only copy of `/data` that restic actually reads.
+  mountpoint = "/run/emubox/restic-source";
+  snapshotDir = "/data/.snapshots/restic";
+  exclusionFile = "/run/emubox/restic-excludes";
+  inSource = path: "${mountpoint}/${lib.removePrefix "/data/" path}";
+
+  backupName = "emubox";
+  maintenanceName = "emubox-maintenance";
+  backupUnit = "restic-backups-${backupName}.service";
+  maintenanceUnit = "restic-backups-${maintenanceName}.service";
+
   sourceSpec = pkgs.writeText "emubox-restic-source.json" (
     builtins.toJSON {
       roots = saves.backupRoots;
@@ -18,34 +34,20 @@ let
       tag = "emubox-save";
     }
   );
-  maintenanceProgram = pkgs.writeShellApplication {
-    name = "emubox-restic-maintenance";
-    runtimeInputs = [
-      cfg.package
-      pkgs.emubox-restic-backup
-    ];
-    text = ''
-      set -euo pipefail
-      restic forget --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
-      restic check --read-data-subset=10%
-      emubox-restic-backup --source-spec ${sourceSpec} --emit-maintenance-marker
-    '';
-  };
-  resticWrapper = pkgs.writeShellApplication {
-    name = "emubox-restic";
-    runtimeInputs = [ cfg.package ];
-    text = ''
-      export EMUBOX_RESTIC_ENV=${lib.escapeShellArg config.sops.templates."restic.env".path}
-      exec ${pkgs.emubox-restic-backup}/bin/emubox-restic "$@"
-    '';
-  };
-  initCommand = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --init";
-  backupMarkerCommand = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --source-spec ${sourceSpec} --emit-backup-marker";
-  maintenance = pkgs.writeShellScript "emubox-restic-maintenance" ''
-    set -euo pipefail
-    exec ${maintenanceProgram}/bin/emubox-restic-maintenance
-  '';
-  backupCommand = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --source-spec ${sourceSpec}";
+  helperPaths = "--snapshot-dir ${snapshotDir} --mountpoint ${mountpoint} --exclusion-file ${exclusionFile}";
+  initCommand = "${helper} --init";
+  reconcileCommand = "${helper} --reconcile ${helperPaths}";
+  backupMarkerCommand = "${helper} --source-spec ${sourceSpec} --emit-backup-marker";
+  maintenanceMarkerCommand = "${helper} --source-spec ${sourceSpec} --emit-maintenance-marker";
+
+  # `services.restic` runs backupPrepareCommand at the head of its preStart,
+  # before the includes file, so the source exists by the time restic runs. The
+  # gate is first inside `--prepare`, so an unreachable repository costs no
+  # snapshot. `maintenanceUnit` is the name `emubox-status` reads; the helper
+  # carries the same pair as its argparse defaults.
+  prepareCommand = "${helper} --prepare --source-spec ${sourceSpec} --data /data ${helperPaths}";
+  cleanupCommand = "${helper} --cleanup ${helperPaths}";
+
   validBucket = builtins.match "[a-z0-9][a-z0-9.-]*[a-z0-9]" cfg.b2.bucket != null;
   validEndpoint = builtins.match "https://[a-zA-Z0-9.-]+(:[0-9]+)?" cfg.b2.endpoint != null;
   validPrefix =
@@ -164,132 +166,147 @@ in
         b2_application_key = { };
         restic_password = { };
       };
+      # Only the bucket credentials need rendering. The repository URL is not a
+      # secret and the restic password is already a secret file, so both go to
+      # `services.restic` as options rather than through a template.
       sops.templates."restic.env" = {
         content = ''
-          RESTIC_REPOSITORY=${resticRepository}
           AWS_ACCESS_KEY_ID=${config.sops.placeholder.b2_key_id}
           AWS_SECRET_ACCESS_KEY=${config.sops.placeholder.b2_application_key}
-          RESTIC_PASSWORD_FILE=${config.sops.secrets.restic_password.path}
         '';
         mode = "0400";
       };
 
-      # The initialization gate is the first step of each job that needs it,
-      # not a unit of its own. As a separate `Requires=` dependency its failure
-      # arrived on backup as a `dependency` failure: the backup unit never
-      # reached an invocation, so its InvocationID, Result and journal all
-      # still described the previous success, and `emubox-status` reported the
-      # layer healthy for the whole eight-hour freshness window while the
-      # repository was in fact unreachable. As `ExecStartPre` the same failure
-      # is a failure of the job's own invocation, which is what the status
-      # tool, the journal and any operator reading `systemctl status` already
-      # look at. The spec's "off-site jobs fail visibly" is then true by
-      # construction rather than by a second mechanism.
-      systemd.services.emubox-restic-backup = {
-        description = "Create a snapshot-consistent EmuBox restic backup";
-        # `Type=oneshot` with no `Restart=`, so systemd's start rate limiter
-        # cannot protect against a restart loop here. All it can do is refuse a
-        # legitimate activation with `start-limit-hit`, which an operator
-        # running `emubox-restic` a few times in a row would hit.
-        startLimitIntervalSec = 0;
-        requires = [
-          "data.mount"
-          "data-.snapshots.mount"
-          "network-online.target"
-        ];
-        after = [
-          "data.mount"
-          "data-.snapshots.mount"
-          "network-online.target"
-        ];
-        serviceConfig = {
-          Type = "oneshot";
-          Environment = "EMUBOX_RESTIC=${lib.getExe cfg.package}";
-          EnvironmentFile = config.sops.templates."restic.env".path;
-          ExecStartPre = initCommand;
-          ExecStart = backupCommand;
-          ExecStartPost = backupMarkerCommand;
-          ExecStopPost = "${backupCommand} --reconcile";
-          TimeoutStartSec = cfg.timeout.activation;
-          TimeoutStopSec = "10m";
-          User = "root";
-          Group = "root";
-          Nice = 19;
-          IOSchedulingClass = "idle";
-          NoNewPrivileges = true;
-          PrivateTmp = true;
+      # Shared by both jobs: the same repository, credentials and restic
+      # binary, and the hardening the units had before this moved onto
+      # `services.restic`.
+      services.restic.backups =
+        let
+          common = {
+            inherit (cfg) package;
+            repository = resticRepository;
+            passwordFile = config.sops.secrets.restic_password.path;
+            environmentFile = config.sops.templates."restic.env".path;
+            user = "root";
+            # `initialize` here would run `init` whenever `cat config` fails at
+            # all, including on an authentication or network error. The gate in
+            # `--prepare` and `--init` initializes only on restic's precise
+            # nonexistent-repository result and fails closed otherwise, which
+            # is what the backups capability requires.
+            initialize = false;
+          };
+        in
+        {
+          ${backupName} = common // {
+            paths = map inSource saves.backupRoots;
+            # The exclusion list is resolved against the live snapshot rather
+            # than declared statically, because a declared cache path that
+            # resolves through a symlink onto a save route has to be rejected
+            # before restic reads it. `--prepare` writes this file.
+            extraBackupArgs = [
+              "--retry-lock=${cfg.lock.retry}"
+              "--host=${config.networking.hostName}"
+              "--tag=emubox-save"
+              "--exclude-file=${exclusionFile}"
+            ];
+            backupPrepareCommand = prepareCommand;
+            backupCleanupCommand = cleanupCommand;
+            timerConfig = {
+              OnBootSec = "10min";
+              OnUnitActiveSec = "4h";
+              Persistent = false;
+            };
+            createWrapper = true;
+          };
+
+          # No paths, so the module emits only forget/prune and check. Weekly,
+          # staggered from the four-hour backups, under restic's own exclusive
+          # locks.
+          ${maintenanceName} = common // {
+            paths = [ ];
+            pruneOpts = [
+              "--keep-daily 14"
+              "--keep-weekly 8"
+              "--keep-monthly 12"
+            ];
+            checkOpts = [ "--read-data-subset=10%" ];
+            backupPrepareCommand = initCommand;
+            timerConfig = {
+              OnCalendar = "weekly";
+              RandomizedDelaySec = "30min";
+              Persistent = false;
+            };
+            createWrapper = false;
+          };
         };
-      };
-      systemd.services.emubox-restic-reconcile = {
-        description = "Reconcile interrupted EmuBox restic source snapshots";
-        # See emubox-restic-backup.
-        startLimitIntervalSec = 0;
-        wantedBy = [ "multi-user.target" ];
-        requires = [ "data-.snapshots.mount" ];
-        after = [ "data-.snapshots.mount" ];
-        before = [ "emubox-restic-backup.service" ];
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = "${backupCommand} --reconcile";
-          User = "root";
-          Group = "root";
+
+      systemd.services = {
+        "restic-backups-${backupName}" = {
+          # `Type=oneshot` with no `Restart=`, so systemd's start rate limiter
+          # cannot protect against a restart loop. All it can do is refuse a
+          # legitimate activation with `start-limit-hit`, which an operator
+          # running the job by hand a few times would hit.
+          startLimitIntervalSec = 0;
+          requires = [
+            "data.mount"
+            "data-.snapshots.mount"
+          ];
+          after = [
+            "data.mount"
+            "data-.snapshots.mount"
+          ];
+          environment.EMUBOX_RESTIC = lib.getExe cfg.package;
+          serviceConfig = {
+            ExecStartPost = backupMarkerCommand;
+            TimeoutStartSec = cfg.timeout.activation;
+            TimeoutStopSec = "10m";
+            Nice = 19;
+            IOSchedulingClass = "idle";
+            NoNewPrivileges = true;
+          };
         };
-      };
-      systemd.timers.emubox-restic-backup = {
-        wantedBy = [ "timers.target" ];
-        timerConfig = {
-          OnBootSec = "10min";
-          OnUnitActiveSec = "4h";
-          Persistent = false;
-          Unit = "emubox-restic-backup.service";
+
+        "restic-backups-${maintenanceName}" = {
+          startLimitIntervalSec = 0;
+          requires = [ "data.mount" ];
+          after = [ "data.mount" ];
+          environment.EMUBOX_RESTIC = lib.getExe cfg.package;
+          serviceConfig = {
+            ExecStartPost = maintenanceMarkerCommand;
+            TimeoutStartSec = cfg.lock.maintenance;
+            Nice = 19;
+            IOSchedulingClass = "idle";
+            NoNewPrivileges = true;
+          };
+        };
+
+        # Not something `services.restic` has an opinion about: a backup killed
+        # by power loss leaves a read-only subvolume behind, and nothing else
+        # would ever remove it.
+        emubox-restic-reconcile = {
+          description = "Reconcile interrupted EmuBox restic source snapshots";
+          startLimitIntervalSec = 0;
+          wantedBy = [ "multi-user.target" ];
+          requires = [ "data-.snapshots.mount" ];
+          after = [ "data-.snapshots.mount" ];
+          before = [ backupUnit ];
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = reconcileCommand;
+            User = "root";
+            Group = "root";
+          };
         };
       };
 
-      # Kept here because the timing algebra and native locking are shared
-      # with backup. Group 4 adds markers, status and the operator wrapper.
-      systemd.services.emubox-restic-maintenance = {
-        description = "Maintain EmuBox restic history";
-        # See emubox-restic-backup.
-        startLimitIntervalSec = 0;
-        # Ordered here explicitly rather than inherited through the former init
-        # unit, which is what a fold like this is easiest to get wrong on.
-        requires = [
-          "data.mount"
-          "network-online.target"
-        ];
-        after = [
-          "data.mount"
-          "network-online.target"
-        ];
-        serviceConfig = {
-          Type = "oneshot";
-          Environment = "EMUBOX_RESTIC=${lib.getExe cfg.package}";
-          EnvironmentFile = config.sops.templates."restic.env".path;
-          ExecStartPre = initCommand;
-          ExecStart = maintenance;
-          TimeoutStartSec = cfg.lock.maintenance;
-          User = "root";
-          Group = "root";
-          Nice = 19;
-          IOSchedulingClass = "idle";
-          NoNewPrivileges = true;
-          PrivateTmp = true;
-        };
-      };
-      systemd.timers.emubox-restic-maintenance = {
-        wantedBy = [ "timers.target" ];
-        timerConfig = {
-          OnCalendar = "weekly";
-          RandomizedDelaySec = "30min";
-          Persistent = false;
-          Unit = "emubox-restic-maintenance.service";
-        };
-      };
-
+      # `createWrapper` on the backup above installs `restic-emubox`, which is
+      # restic with this repository's environment already set. It is readable
+      # only by root because the credentials file it sources is, which is the
+      # real boundary; the command allowlist this replaced enforced nothing
+      # against the one account that could reach it.
       environment.systemPackages = [
         cfg.package
         pkgs.emubox-restic-backup
-        resticWrapper
       ];
       emubox.backups.repository = resticRepository;
     })

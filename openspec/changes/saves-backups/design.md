@@ -122,6 +122,23 @@ E12 performs one real-B2 backup and `restic restore --verify` rollout check.
 
 ### 7. Service dependencies isolate local operation from cloud state
 
+The units, timers, credentials plumbing and restic command line are
+`services.restic.backups`, the distribution's own restic module, under two
+entries: a four-hourly backup and a weekly maintenance entry with no paths, so
+it emits only `forget --prune` and `check`. Hand-rolling this was a mistake
+worth naming: the module already provides the schedule, the environment file,
+the exclude file, the operator wrapper, and `backupPrepareCommand` /
+`backupCleanupCommand`, which exist precisely so a backup can run against a
+filesystem snapshot. It also implements `initialize` as a `preStart` step,
+which is the shape this project arrived at independently and expensively.
+
+What upstream does not cover stays local: the read-only btrfs source, the boot
+reconciler for a source a power cut left behind, the journal markers, and the
+initialization gate. The gate is declined at the module level
+(`initialize = false`) because upstream runs `init` whenever `cat config` fails
+at all, including on an authentication or network error, where this capability
+requires initializing only on restic's precise nonexistent-repository result.
+
 Local snapshotting depends only on `/data` being mounted as btrfs. sops-nix's
 default activation mode installs backup secrets before systemd starts services;
 there is no generated sops systemd unit to order against. Backup and
@@ -173,10 +190,13 @@ rejected because it creates a second authority.
 
 ### 9. Restore remains a conventional operator operation
 
-A root-only wrapper permits repository inspection and restore, including
-`restic restore --verify`, with the same repository and secret inputs used by
-automation. The runbook documents manual restore, and E12 runs one real-provider
-restore. Restoring through the VM's local repository double was rejected: the
+`services.restic`'s `createWrapper` installs `restic-emubox`: restic itself with
+the same repository and secret inputs automation uses. It is root-only because
+the credentials file it sources is, which is the real boundary. An earlier
+version wrapped restic in a hand-written command allowlist; that was dropped as
+security theatre, since root can read the same credentials and run restic
+directly, so the allowlist constrained nobody who could reach it. The runbook
+documents manual restore, and E12 runs one real-provider restore. Restoring through the VM's local repository double was rejected: the
 double copies a tree and copies it back, so the round trip exercises the double
 rather than this project, and E12's real `restic restore --verify` is the
 stronger evidence for the same claim. Automated monthly restore-and-compare and

@@ -45,33 +45,6 @@ def _inside(path: Path, parent: Path) -> bool:
     return True
 
 
-def timeout_budget_is_valid(
-    maintenance_seconds: int,
-    retry_lock_seconds: int,
-    pre_restic_seconds: int,
-    post_lock_seconds: int,
-    activation_seconds: int,
-) -> bool:
-    """Return whether the declared native-lock timing inequalities hold."""
-
-    return (
-        maintenance_seconds < retry_lock_seconds
-        and activation_seconds >= pre_restic_seconds + retry_lock_seconds + post_lock_seconds
-    )
-
-
-def timer_starts(cadence_seconds: int, activation_seconds: int, until_seconds: int) -> list[int]:
-    """Model systemd's no-overlap handling for a non-persistent oneshot timer."""
-
-    starts: list[int] = []
-    active_until = -1
-    for elapsed in range(0, until_seconds + 1, cadence_seconds):
-        if elapsed >= active_until:
-            starts.append(elapsed)
-            active_until = elapsed + activation_seconds
-    return starts
-
-
 def marker_line(kind: str, payload: dict[str, str], invocation_id: str | None = None) -> str:
     """Create the one parseable journal record used as success evidence.
 
@@ -302,19 +275,24 @@ def status_layer(
     return True, f"{unit}: success at {timestamp}; recovery point {recovery}"
 
 
-def print_status() -> int:
-    """Print one authoritative status line for local, backup and maintenance."""
+def print_status(backup_unit: str, maintenance_unit: str) -> int:
+    """Print one authoritative status line for local, backup and maintenance.
+
+    The unit names are passed in rather than written here: `services.restic`
+    derives them from the backup's name, so hardcoding them would couple this
+    program to a string the Nix module owns.
+    """
 
     layers = [
         ("btrbk-local.service", "local", ["path", "timestamp"], 2 * 60 * 60),
         (
-            "emubox-restic-backup.service",
+            backup_unit,
             "backup",
             ["snapshotId", "repositoryId", "host", "tag", "timestamp"],
             8 * 60 * 60,
         ),
         (
-            "emubox-restic-maintenance.service",
+            maintenance_unit,
             "maintenance",
             ["repositoryId", "newestProtectedSnapshotId", "timestamp"],
             14 * 24 * 60 * 60,
@@ -386,7 +364,7 @@ def initialize(run: Run = _default_run) -> None:
         raise
 
 
-def backup(
+def prepare(
     spec: dict[str, Any],
     *,
     data: Path,
@@ -395,8 +373,21 @@ def backup(
     exclusion_file: Path,
     run: Run = _default_run,
 ) -> None:
-    """Back up one read-only btrfs snapshot, always attempting cleanup."""
+    """Open the repository, then expose one read-only snapshot for restic.
 
+    Runs as the backup unit's ``backupPrepareCommand``. `services.restic` owns
+    the restic invocation, the schedule and the secrets; what is left here is
+    the filesystem transaction that cannot be expressed declaratively, plus the
+    initialization gate, which is stricter than the module's own
+    ``initialize``: that one runs ``init`` whenever ``cat config`` fails at
+    all, including on an authentication or network error.
+
+    The gate runs first, so an unreachable repository costs no snapshot. On any
+    later failure this unwinds what it created; ``cleanup`` is the backstop for
+    a signal that bypasses the unwind.
+    """
+
+    initialize(run)
     snapshot_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     mountpoint.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock_path = mountpoint.parent / "restic-source.lock"
@@ -417,31 +408,33 @@ def backup(
             exclusions = validate_exclusions(spec, mountpoint)
             exclusion_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             exclusion_file.write_text("".join(f"{path}\n" for path in exclusions), encoding="utf-8")
-            roots = [str(mountpoint / root.removeprefix("/data/")) for root in spec["roots"]]
-            run(
-                [
-                    _restic(),
-                    "backup",
-                    "--retry-lock",
-                    spec["retryLock"],
-                    "--host",
-                    spec["host"],
-                    "--tag",
-                    spec["tag"],
-                    "--exclude-file",
-                    str(exclusion_file),
-                    *roots,
-                ]
-            )
-        finally:
-            # Cleanup deliberately has no relation to systemd's backup
-            # activation timeout. ExecStopPost invokes --reconcile too if a
-            # SIGKILL bypasses this finally block.
+        except BaseException:
             if mounted and mountpoint.is_mount():
                 run(["umount", "--", str(mountpoint)])
             if snapshot.exists():
                 run(["btrfs", "subvolume", "delete", "--", str(snapshot)])
             exclusion_file.unlink(missing_ok=True)
+            raise
+
+
+def cleanup(
+    *,
+    snapshot_dir: Path,
+    mountpoint: Path,
+    exclusion_file: Path,
+    run: Run = _default_run,
+) -> None:
+    """Remove the transient source, whatever happened to restic.
+
+    Runs as the backup unit's ``backupCleanupCommand``, which systemd invokes
+    from ``ExecStopPost`` on success, failure and timeout alike, so this has no
+    relation to the activation timeout. It is the same idempotent reconciler
+    the boot unit runs, so a signal that killed the backup outright is repaired
+    here or at the next boot.
+    """
+
+    reconcile(snapshot_dir, mountpoint, run)
+    exclusion_file.unlink(missing_ok=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -453,25 +446,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--exclusion-file", type=Path, default=Path("/run/emubox/restic-excludes"))
     parser.add_argument("--reconcile", action="store_true")
     parser.add_argument("--init", action="store_true")
+    parser.add_argument("--prepare", action="store_true")
+    parser.add_argument("--cleanup", action="store_true")
     parser.add_argument("--emit-backup-marker", action="store_true")
     parser.add_argument("--emit-maintenance-marker", action="store_true")
     parser.add_argument("--emit-local-marker", action="store_true")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--backup-unit", default="restic-backups-emubox.service")
+    parser.add_argument("--maintenance-unit", default="restic-backups-emubox-maintenance.service")
     args = parser.parse_args(argv)
     if Path(sys.argv[0]).name == "emubox-status":
         args.status = True
-    spec_actions = args.emit_backup_marker or args.emit_maintenance_marker
+    spec_actions = args.emit_backup_marker or args.emit_maintenance_marker or args.prepare
     if spec_actions and args.source_spec is None:
         parser.error("--source-spec is required for this action")
-    if (
-        not args.init
-        and not args.reconcile
-        and not spec_actions
-        and not args.emit_local_marker
-        and not args.status
-        and args.source_spec is None
+    if not (
+        args.init
+        or args.prepare
+        or args.cleanup
+        or args.reconcile
+        or spec_actions
+        or args.emit_local_marker
+        or args.status
     ):
-        parser.error("--source-spec is required for backup")
+        parser.error(
+            "one of --init, --prepare, --cleanup, --reconcile, --status"
+            " or an --emit-* action is required"
+        )
     spec = (
         json.loads(args.source_spec.read_text(encoding="utf-8"))
         if args.source_spec is not None
@@ -479,6 +480,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if args.init:
         initialize()
+    elif args.prepare:
+        assert spec is not None
+        prepare(
+            spec,
+            data=args.data,
+            snapshot_dir=args.snapshot_dir,
+            mountpoint=args.mountpoint,
+            exclusion_file=args.exclusion_file,
+        )
+    elif args.cleanup:
+        cleanup(
+            snapshot_dir=args.snapshot_dir,
+            mountpoint=args.mountpoint,
+            exclusion_file=args.exclusion_file,
+        )
     elif args.reconcile:
         reconcile(args.snapshot_dir, args.mountpoint)
     elif args.emit_backup_marker:
@@ -489,17 +505,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         emit_maintenance_marker(spec)
     elif args.emit_local_marker:
         emit_local_marker(args.snapshot_dir)
-    elif args.status:
-        return print_status()
     else:
-        assert spec is not None
-        backup(
-            spec,
-            data=args.data,
-            snapshot_dir=args.snapshot_dir,
-            mountpoint=args.mountpoint,
-            exclusion_file=args.exclusion_file,
-        )
+        return print_status(args.backup_unit, args.maintenance_unit)
     return 0
 
 

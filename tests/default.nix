@@ -326,11 +326,11 @@ in
         machine.succeed(f"mkdir -p {mapping['where']} {mapping['what']}")
         machine.succeed(f"printf equal > {mapping['where']}/equal.sav")
         machine.succeed(f"printf equal > {mapping['what']}/equal.sav")
-        machine.succeed("emubox-save-migrate /etc/emubox/save-routes.json")
+        machine.succeed("${pkgs.emubox-save-migrate}/bin/emubox-save-migrate /etc/emubox/save-routes.json")
         machine.succeed(f"test -f {mapping['what']}/equal.sav")
         machine.succeed(f"printf old > {mapping['where']}/conflict.sav")
         machine.succeed(f"printf new > {mapping['what']}/conflict.sav")
-        machine.fail("emubox-save-migrate /etc/emubox/save-routes.json")
+        machine.fail("${pkgs.emubox-save-migrate}/bin/emubox-save-migrate /etc/emubox/save-routes.json")
         assert machine.succeed(f"cat {mapping['where']}/conflict.sav").strip() == "old"
         assert machine.succeed(f"cat {mapping['what']}/conflict.sav").strip() == "new"
         machine.succeed(f"rm {mapping['where']}/conflict.sav")

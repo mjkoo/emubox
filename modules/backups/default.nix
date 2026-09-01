@@ -25,6 +25,7 @@ let
   '';
   backupCommand = "${pkgs.emubox-restic-backup}/bin/emubox-restic-backup --source-spec ${sourceSpec}";
   validBucket = builtins.match "[a-z0-9][a-z0-9.-]*[a-z0-9]" cfg.b2.bucket != null;
+  validEndpoint = builtins.match "https://[a-zA-Z0-9.-]+(:[0-9]+)?" cfg.b2.endpoint != null;
   validPrefix =
     cfg.b2.prefix == ""
     || (
@@ -39,12 +40,21 @@ let
   postLockSeconds = 4 * 60 * 60;
   maintenanceSeconds = 3 * 60 * 60;
   resticRepository =
-    if cfg.b2.prefix == "" then "b2:${cfg.b2.bucket}" else "b2:${cfg.b2.bucket}:${cfg.b2.prefix}";
+    if cfg.b2.prefix == "" then
+      "s3:${cfg.b2.endpoint}/${cfg.b2.bucket}"
+    else
+      "s3:${cfg.b2.endpoint}/${cfg.b2.bucket}/${cfg.b2.prefix}";
 in
 {
   options.emubox.backups = {
     enable = lib.mkEnableOption "off-site restic backups";
     b2 = {
+      endpoint = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        example = "https://s3.us-west-004.backblazeb2.com";
+        description = "The bucket region's Backblaze B2 S3-compatible HTTPS endpoint.";
+      };
       bucket = lib.mkOption {
         type = lib.types.str;
         default = "";
@@ -55,6 +65,11 @@ in
         default = "emubox";
         description = "Optional normalized repository prefix within the bucket.";
       };
+    };
+    repository = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      description = "Derived restic S3 repository URL, without credentials.";
     };
     lock = {
       maintenance = lib.mkOption {
@@ -107,6 +122,10 @@ in
           message = "emubox.backups.b2.bucket must be a normalized B2 bucket name";
         }
         {
+          assertion = validEndpoint;
+          message = "emubox.backups.b2.endpoint must be an HTTPS S3-compatible endpoint without a path";
+        }
+        {
           assertion = validPrefix;
           message = "emubox.backups.b2.prefix must be empty or normalized without slash or traversal";
         }
@@ -120,8 +139,8 @@ in
       sops.templates."restic.env" = {
         content = ''
           RESTIC_REPOSITORY=${resticRepository}
-          B2_ACCOUNT_ID=${config.sops.placeholder.b2_key_id}
-          B2_ACCOUNT_KEY=${config.sops.placeholder.b2_application_key}
+          AWS_ACCESS_KEY_ID=${config.sops.placeholder.b2_key_id}
+          AWS_SECRET_ACCESS_KEY=${config.sops.placeholder.b2_application_key}
           RESTIC_PASSWORD_FILE=${config.sops.secrets.restic_password.path}
         '';
         mode = "0400";
@@ -231,6 +250,7 @@ in
         pkgs.restic
         pkgs.emubox-restic-backup
       ];
+      emubox.backups.repository = resticRepository;
     })
   ];
 }

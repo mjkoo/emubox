@@ -143,8 +143,11 @@ def backup(
             run(["btrfs", "subvolume", "snapshot", "-r", "--", str(data), str(snapshot)])
             mountpoint.mkdir(mode=0o700)
             run(["mount", "--bind", "--", str(snapshot), str(mountpoint)])
-            run(["mount", "-o", "remount,bind,ro", "--", str(mountpoint)])
+            # A bind mount exists before the read-only remount. Record it
+            # immediately so a remount failure cannot strand the writable
+            # bind or its transient snapshot.
             mounted = True
+            run(["mount", "-o", "remount,bind,ro", "--", str(mountpoint)])
             exclusions = validate_exclusions(spec, mountpoint)
             exclusion_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             exclusion_file.write_text("".join(f"{path}\n" for path in exclusions), encoding="utf-8")

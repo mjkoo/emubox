@@ -130,6 +130,47 @@ def test_timeout_uses_the_same_final_cleanup_path(
     assert not excludes.exists()
 
 
+def test_read_only_remount_failure_unmounts_the_just_created_bind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    snapshots = tmp_path / "snapshots"
+    mountpoint = tmp_path / "run/source"
+    excludes = tmp_path / "run/excludes"
+    calls: list[list[str]] = []
+    mount_state = {"mounted": False}
+
+    monkeypatch.setattr(Path, "is_mount", lambda _: mount_state["mounted"])
+
+    def run(command: Sequence[str]) -> None:
+        command = list(command)
+        calls.append(command)
+        if command[:4] == ["btrfs", "subvolume", "snapshot", "-r"]:
+            Path(command[-1]).mkdir()
+        elif command[:3] == ["btrfs", "subvolume", "delete"]:
+            Path(command[-1]).rmdir()
+        elif command[:2] == ["mount", "--bind"]:
+            mount_state["mounted"] = True
+        elif command[:3] == ["mount", "-o", "remount,bind,ro"]:
+            raise RuntimeError("injected read-only remount failure")
+        elif command[0] == "umount":
+            mount_state["mounted"] = False
+
+    with pytest.raises(RuntimeError, match="read-only remount"):
+        erb.backup(
+            spec(),
+            data=data,
+            snapshot_dir=snapshots,
+            mountpoint=mountpoint,
+            exclusion_file=excludes,
+            run=run,
+        )
+
+    assert ["umount", "--", str(mountpoint)] in calls
+    assert not (snapshots / "restic-current").exists()
+
+
 def test_backup_uses_read_only_source_and_native_lock_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

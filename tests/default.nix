@@ -150,6 +150,7 @@ in
   emubox.backups = {
     enable = true;
     b2 = {
+      endpoint = "https://s3.us-west-004.backblazeb2.com";
       bucket = "emubox-test-backups";
       prefix = "emubox";
     };

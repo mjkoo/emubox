@@ -11,6 +11,7 @@ let
           emubox.backups = {
             enable = true;
             b2 = {
+              endpoint = "https://s3.us-west-004.backblazeb2.com";
               bucket = "emubox-test-backups";
               prefix = "emubox";
             };
@@ -32,7 +33,28 @@ let
           {
             emubox.backups = {
               enable = true;
-              b2.bucket = value;
+              b2 = {
+                endpoint = "https://s3.us-west-004.backblazeb2.com";
+                bucket = value;
+              };
+            };
+          }
+        ];
+      };
+    in
+    !(builtins.tryEval candidate.config.system.build.toplevel.drvPath).success;
+  invalidEndpoint =
+    value:
+    let
+      candidate = host.extendModules {
+        modules = [
+          {
+            emubox.backups = {
+              enable = true;
+              b2 = {
+                endpoint = value;
+                bucket = "emubox-test-backups";
+              };
             };
           }
         ];
@@ -53,6 +75,15 @@ assert lib.assertMsg (lib.all invalidOption [
   "has/slash"
   "-leading"
 ]) "tests/backups.nix: B2 settings must reject malformed bucket names before deployment";
+assert lib.assertMsg (lib.all invalidEndpoint [
+  ""
+  "http://not-tls.example"
+  "https://has/path"
+]) "tests/backups.nix: B2 S3 endpoint must be a bare HTTPS endpoint";
+assert lib.assertMsg (
+  enabled.emubox.backups.repository
+  == "s3:https://s3.us-west-004.backblazeb2.com/emubox-test-backups/emubox"
+) "tests/backups.nix: B2 must use the configured S3-compatible endpoint and repository path";
 assert lib.assertMsg (
   enabled.emubox.backups.lock.maintenance == "3h"
   && enabled.emubox.backups.lock.retry == "3h15m"
@@ -92,6 +123,9 @@ assert lib.assertMsg (
   && enabled.sops.secrets.b2_application_key.mode == "0400"
   && enabled.sops.secrets.restic_password.mode == "0400"
   && enabled.sops.templates."restic.env".mode == "0400"
+  && lib.hasInfix "AWS_ACCESS_KEY_ID=" enabled.sops.templates."restic.env".content
+  && lib.hasInfix "AWS_SECRET_ACCESS_KEY=" enabled.sops.templates."restic.env".content
+  && !(lib.hasInfix "B2_ACCOUNT_" enabled.sops.templates."restic.env".content)
   && init.serviceConfig.EnvironmentFile == enabled.sops.templates."restic.env".path
   && backup.serviceConfig.EnvironmentFile == enabled.sops.templates."restic.env".path
 ) "tests/backups.nix: enabled restic services must consume only root-only rendered sops inputs";

@@ -139,7 +139,10 @@ let
       {
         emubox.backups = {
           enable = true;
-          b2.bucket = "emubox-test-backups";
+          b2 = {
+            endpoint = "https://s3.us-west-004.backblazeb2.com";
+            bucket = "emubox-test-backups";
+          };
         };
       }
     ];

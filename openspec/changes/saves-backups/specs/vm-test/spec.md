@@ -1,3 +1,23 @@
+## MODIFIED Requirements
+
+### Requirement: Persistence is proven across a reboot
+The test SHALL boot the node, record `/etc/machine-id`, write a marker under `/root` and a marker under `/data`, reboot, and assert the `/root` marker is gone, the `/data` marker remains, the machine-id is unchanged and the reboot adds a boot the journal still lists, whose predecessor is readable. It SHALL then cut the node's power without a clean shutdown and assert the node boots again with the root wiped.
+
+The boot count is asserted across the reboot rather than against a literal
+total. How many times the test restarts the node is a property of the test, not
+of the system: the reconciliation coverage this change adds restarts it too, so
+a fixed total of two would have to be revised every time the test gains or
+loses a restart. The persistence capability asks only that the machine has
+booted at least twice and that the previous boot's entries can be read.
+
+#### Scenario: Two-boot assertion
+- **WHEN** the test reboots the node after writing the markers
+- **THEN** all four assertions hold
+
+#### Scenario: Power cut
+- **WHEN** a marker is written under `/root` and the node is stopped without a clean shutdown, then started
+- **THEN** the node reaches multi-user with no filesystem repair prompt and the marker is gone
+
 ## ADDED Requirements
 
 ### Requirement: Save placement and recovery are proven in the VM

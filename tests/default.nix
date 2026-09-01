@@ -604,8 +604,18 @@ in
 
     # --- persistence: proven across a clean reboot ---------------------------
 
+    def listed_boots():
+        out = machine.succeed("journalctl --list-boots --no-pager")
+        return [l for l in out.splitlines() if l.split() and l.split()[0].lstrip("-").isdigit()]
+
     machine_id = machine.succeed("cat /etc/machine-id").strip()
     assert len(machine_id) == 32, f"machine-id not initialised: {machine_id!r}"
+    # Counted across this reboot rather than against a literal total: how many
+    # times the whole test restarts the machine is a property of the test, and
+    # it changed the moment the reconciler subtest began completing its own
+    # restart. What the persistence spec asks is that a restart adds a boot the
+    # journal still lists, and that the previous one can be read.
+    boots_before = len(listed_boots())
     # A Persistent=true timer touches its stamp when first activated, so the
     # stamp's mtime is boot 1's; it must survive unchanged.
     machine.wait_for_file("/var/lib/systemd/timers/stamp-fstrim.timer", timeout=60)
@@ -637,10 +647,9 @@ in
     with subtest("Persistent timer stamp survived the reboot"):
         assert machine.succeed("stat -c %Y /var/lib/systemd/timers/stamp-fstrim.timer").strip() == stamp_mtime
 
-    with subtest("Journal lists both boots and the previous one is readable"):
-        out = machine.succeed("journalctl --list-boots --no-pager")
-        boots = [l for l in out.splitlines() if l.split() and l.split()[0].lstrip("-").isdigit()]
-        assert len(boots) == 2, out
+    with subtest("The reboot adds a listed boot and the previous one is readable"):
+        boots = listed_boots()
+        assert len(boots) == boots_before + 1, (boots_before, boots)
         # No pipe: the driver runs commands under pipefail, and a grep -q
         # that closes the pipe early would fail journalctl with SIGPIPE.
         assert machine.succeed("journalctl -b -1 --no-pager -q -n 5").strip(), "previous boot's journal is empty"

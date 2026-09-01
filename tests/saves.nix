@@ -224,14 +224,14 @@ assert lib.assertMsg
     && host.config.systemd.services.emubox-save-migrate.serviceConfig.User == "player"
     && host.config.systemd.services.emubox-save-migrate.serviceConfig.Group == "player"
     && !host.config.systemd.services.emubox-save-migrate.unitConfig.DefaultDependencies
-    # The route directories are tmpfiles rules, so the migration has to follow
-    # tmpfiles explicitly: DefaultDependencies=false implies none of it. It no
-    # longer needs a privileged ExecStartPre to make them itself.
-    && !(host.config.systemd.services.emubox-save-migrate.serviceConfig ? ExecStartPre)
-    && lib.elem "systemd-tmpfiles-setup.service" host.config.systemd.services.emubox-save-migrate.after
-    && lib.all (
-      route: lib.elem "d ${route.destination} 0755 player player -" host.config.systemd.tmpfiles.rules
-    ) host.config.emubox.saves.saveRoutes
+    # The migration creates the route directories itself, in a privileged
+    # ExecStartPre, and must not be ordered after
+    # `systemd-tmpfiles-setup.service`: that runs after `local-fs.target`, the
+    # bind mounts are members of it, and the migration has to precede them, so
+    # ordering after tmpfiles closes a cycle that systemd breaks by deleting
+    # the migration job. The display manager then never starts.
+    && lib.hasPrefix "+" host.config.systemd.services.emubox-save-migrate.serviceConfig.ExecStartPre
+    && !(lib.elem "systemd-tmpfiles-setup.service" host.config.systemd.services.emubox-save-migrate.after)
   )
   ''
     tests/saves.nix: declared save routes must migrate as their owning player,

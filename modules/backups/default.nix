@@ -175,6 +175,16 @@ in
 
       systemd.services.emubox-restic-init = {
         description = "Initialize or open the EmuBox restic repository";
+        # Every unit here is a `Type=oneshot` with no `Restart=`, so systemd's
+        # start rate limiter cannot protect against a restart loop. All it can
+        # do is refuse a legitimate activation with `start-limit-hit`, which
+        # this unit reaches first: backup and maintenance both `Requires=` it,
+        # and it re-runs on each of their starts. The refusal then surfaces on
+        # the dependent unit as a `dependency` failure that never runs, which
+        # is indistinguishable from a real failure unless the caller compares
+        # invocation ids. An operator running `emubox-restic` a few times in a
+        # row hits exactly that, and so did the VM test.
+        startLimitIntervalSec = 0;
         requires = [
           "data.mount"
           "network-online.target"
@@ -197,6 +207,8 @@ in
 
       systemd.services.emubox-restic-backup = {
         description = "Create a snapshot-consistent EmuBox restic backup";
+        # See emubox-restic-init.
+        startLimitIntervalSec = 0;
         requires = [
           "emubox-restic-init.service"
           "data-.snapshots.mount"
@@ -224,6 +236,8 @@ in
       };
       systemd.services.emubox-restic-reconcile = {
         description = "Reconcile interrupted EmuBox restic source snapshots";
+        # See emubox-restic-init.
+        startLimitIntervalSec = 0;
         wantedBy = [ "multi-user.target" ];
         requires = [ "data-.snapshots.mount" ];
         after = [ "data-.snapshots.mount" ];
@@ -249,6 +263,8 @@ in
       # with backup. Group 4 adds markers, status and the operator wrapper.
       systemd.services.emubox-restic-maintenance = {
         description = "Maintain EmuBox restic history";
+        # See emubox-restic-init.
+        startLimitIntervalSec = 0;
         requires = [ "emubox-restic-init.service" ];
         after = [ "emubox-restic-init.service" ];
         serviceConfig = {

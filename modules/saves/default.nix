@@ -243,8 +243,6 @@ in
         "emubox-save-routes.target"
         "display-manager.service"
       ];
-      requires = [ "data.mount" ];
-      after = [ "data.mount" ];
       serviceConfig = {
         Type = "oneshot";
         User = "player";

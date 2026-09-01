@@ -223,8 +223,6 @@ assert lib.assertMsg
     && host.config.systemd.services.display-manager.requires == [ "emubox-save-routes.target" ]
     && host.config.systemd.services.emubox-save-migrate.serviceConfig.User == "player"
     && host.config.systemd.services.emubox-save-migrate.serviceConfig.Group == "player"
-    && host.config.systemd.services.emubox-save-migrate.requires == [ "data.mount" ]
-    && host.config.systemd.services.emubox-save-migrate.after == [ "data.mount" ]
     && lib.hasPrefix "+" host.config.systemd.services.emubox-save-migrate.serviceConfig.ExecStartPre
   )
   ''

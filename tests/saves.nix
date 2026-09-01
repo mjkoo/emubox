@@ -134,6 +134,24 @@ let
       };
     in
     !(builtins.tryEval candidate.config.system.build.toplevel.drvPath).success;
+  cloudEnabled = host.extendModules {
+    modules = [
+      {
+        emubox.backups = {
+          enable = true;
+          b2.bucket = "emubox-test-backups";
+        };
+      }
+    ];
+  };
+  rollback = cloudEnabled.extendModules {
+    modules = [ { emubox.backups.enable = lib.mkForce false; } ];
+  };
+  cloudUnits = [
+    "emubox-restic-init"
+    "emubox-restic-backup"
+    "emubox-restic-maintenance"
+  ];
 in
 assert lib.assertMsg (saves.backupRoots == expectedRoots) ''
   tests/saves.nix: backup roots must be exactly saves, complete ES-DE, BIOS,
@@ -188,6 +206,17 @@ assert lib.assertMsg
   ''
     tests/saves.nix: duplicate, traversal, home-root, alias-shaped, and
     save-route-overlapping cache exclusions must all fail evaluation.
+  '';
+assert lib.assertMsg
+  (
+    lib.all (name: !(builtins.hasAttr name rollback.config.systemd.services)) cloudUnits
+    && rollback.config.emubox.saves.saveRoutes == routes
+    && rollback.config.emubox.saves.bindMappings == saves.bindMappings
+    && rollback.config.emubox.kiosk.ownedFiles == owned
+  )
+  ''
+    tests/saves.nix: disabling off-site services must preserve every save
+    setting and bind route without reverse migration or deletion.
   '';
 pkgs.runCommand "emubox-saves" { } ''
   touch "$out"

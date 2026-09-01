@@ -17,6 +17,9 @@ let
   patterns = pkgs.writeText "emubox-test-secret-patterns" ''
     ${values.psk}
     ${values.hash}
+    ${values.b2KeyId}
+    ${values.b2ApplicationKey}
+    ${values.resticPassword}
   '';
   closure = pkgs.closureInfo { rootPaths = [ toplevel ]; };
 in

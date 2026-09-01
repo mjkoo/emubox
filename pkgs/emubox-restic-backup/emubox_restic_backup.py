@@ -37,6 +37,33 @@ def _inside(path: Path, parent: Path) -> bool:
     return True
 
 
+def timeout_budget_is_valid(
+    maintenance_seconds: int,
+    retry_lock_seconds: int,
+    pre_restic_seconds: int,
+    post_lock_seconds: int,
+    activation_seconds: int,
+) -> bool:
+    """Return whether the declared native-lock timing inequalities hold."""
+
+    return (
+        maintenance_seconds < retry_lock_seconds
+        and activation_seconds >= pre_restic_seconds + retry_lock_seconds + post_lock_seconds
+    )
+
+
+def timer_starts(cadence_seconds: int, activation_seconds: int, until_seconds: int) -> list[int]:
+    """Model systemd's no-overlap handling for a non-persistent oneshot timer."""
+
+    starts: list[int] = []
+    active_until = -1
+    for elapsed in range(0, until_seconds + 1, cadence_seconds):
+        if elapsed >= active_until:
+            starts.append(elapsed)
+            active_until = elapsed + activation_seconds
+    return starts
+
+
 def validate_exclusions(spec: dict[str, Any], source: Path) -> list[Path]:
     """Resolve exclusions in *source* and reject escapes and protected aliases.
 

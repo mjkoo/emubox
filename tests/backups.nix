@@ -24,6 +24,21 @@ let
   maintenance = enabled.systemd.services.emubox-restic-maintenance;
   maintenanceTimer = enabled.systemd.timers.emubox-restic-maintenance.timerConfig;
   init = enabled.systemd.services.emubox-restic-init;
+  invalidOption =
+    value:
+    let
+      candidate = host.extendModules {
+        modules = [
+          {
+            emubox.backups = {
+              enable = true;
+              b2.bucket = value;
+            };
+          }
+        ];
+      };
+    in
+    !(builtins.tryEval candidate.config.system.build.toplevel.drvPath).success;
 in
 assert lib.assertMsg (
   !(disabled.systemd.services ? emubox-restic-init)
@@ -32,6 +47,12 @@ assert lib.assertMsg (
   && !(disabled.systemd.services ? emubox-restic-reconcile)
   && !(disabled.sops.secrets ? b2_key_id)
 ) "tests/backups.nix: disabled off-site backups must consume no B2 or restic secrets";
+assert lib.assertMsg (lib.all invalidOption [
+  ""
+  "UPPERCASE"
+  "has/slash"
+  "-leading"
+]) "tests/backups.nix: B2 settings must reject malformed bucket names before deployment";
 assert lib.assertMsg (
   enabled.emubox.backups.lock.maintenance == "3h"
   && enabled.emubox.backups.lock.retry == "3h15m"
@@ -65,6 +86,15 @@ assert lib.assertMsg (
   && lib.elem "data-.snapshots.mount" reconcile.requires
   && lib.elem "emubox-restic-backup.service" reconcile.before
 ) "tests/backups.nix: backup must retry the fail-closed init gate after data, secrets, and network";
+assert lib.assertMsg (
+  enabled.sops.secrets.b2_key_id.mode == "0400"
+  && enabled.sops.secrets.b2_key_id.owner == null
+  && enabled.sops.secrets.b2_application_key.mode == "0400"
+  && enabled.sops.secrets.restic_password.mode == "0400"
+  && enabled.sops.templates."restic.env".mode == "0400"
+  && init.serviceConfig.EnvironmentFile == enabled.sops.templates."restic.env".path
+  && backup.serviceConfig.EnvironmentFile == enabled.sops.templates."restic.env".path
+) "tests/backups.nix: enabled restic services must consume only root-only rendered sops inputs";
 assert lib.assertMsg (
   maintenance.serviceConfig.TimeoutStartSec == "3h"
   && maintenanceTimer.OnCalendar == "weekly"

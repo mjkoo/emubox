@@ -164,6 +164,67 @@ def test_backup_uses_read_only_source_and_native_lock_retry(
     assert command[2:4] == ["--retry-lock", "3h15m"]
 
 
+def test_reconciliation_removes_an_interrupted_source_before_next_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    interrupted = snapshots / "restic-interrupted"
+    interrupted.mkdir()
+    mountpoint = tmp_path / "run/source"
+    excludes = tmp_path / "run/excludes"
+    calls: list[list[str]] = []
+    monkeypatch.setattr(Path, "is_mount", lambda _: False)
+
+    def run(command: Sequence[str]) -> None:
+        command = list(command)
+        calls.append(command)
+        if command[:3] == ["btrfs", "subvolume", "delete"]:
+            Path(command[-1]).rmdir()
+        if command[:4] == ["btrfs", "subvolume", "snapshot", "-r"]:
+            Path(command[-1]).mkdir()
+
+    erb.backup(
+        spec(),
+        data=data,
+        snapshot_dir=snapshots,
+        mountpoint=mountpoint,
+        exclusion_file=excludes,
+        run=run,
+    )
+
+    delete = ["btrfs", "subvolume", "delete", "--", str(interrupted)]
+    create = [
+        "btrfs",
+        "subvolume",
+        "snapshot",
+        "-r",
+        "--",
+        str(data),
+        str(snapshots / "restic-current"),
+    ]
+    assert calls.index(delete) < calls.index(create)
+
+
+def test_scaled_timeout_budget_preserves_post_lock_work() -> None:
+    assert erb.timeout_budget_is_valid(3 * 60, 3 * 60 + 15, 10, 4 * 60, 7 * 60 + 25)
+    assert not erb.timeout_budget_is_valid(3 * 60, 3 * 60, 10, 4 * 60, 7 * 60 + 25)
+    assert not erb.timeout_budget_is_valid(3 * 60, 3 * 60 + 15, 10, 4 * 60, 7 * 60 + 24)
+
+
+def test_missed_timer_activation_is_not_queued_and_future_activation_runs() -> None:
+    # At a scaled four-minute cadence, a seven-minute activation consumes the
+    # middle tick but the following one starts normally.
+    assert erb.timer_starts(
+        cadence_seconds=4 * 60, activation_seconds=7 * 60 + 25, until_seconds=12 * 60
+    ) == [
+        0,
+        8 * 60,
+    ]
+
+
 def test_init_only_creates_a_precisely_absent_repository() -> None:
     calls: list[list[str]] = []
 

@@ -25,9 +25,72 @@
 # paths are unaffected. The graphical session is proven by tests/kiosk.nix,
 # which boots the same modules as a plain node with a memory knob and a
 # virtual GPU; what needs a screen and a person stays a bring-up item.
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   values = import ./values.nix;
+  # A deliberately minimal repository double. It sees only runtime sops
+  # environment variables, records no credentials, and copies the source the
+  # backup helper mounted. This lets the install VM prove the service graph
+  # and source transaction without contacting B2.
+  fakeRestic = pkgs.writeShellScriptBin "restic" ''
+    set -euo pipefail
+    repo=/data/cache/emubox-restic-test
+    mkdir -p "$repo"
+    case "$1" in
+      cat)
+        test ! -e /run/emubox/restic-test-init-auth-fail || exit 12
+        test ! -e /run/emubox/restic-test-init-network-fail || exit 1
+        test -f "$repo/config" || exit 10
+        ;;
+      init)
+        : > "$repo/config"
+        ;;
+      backup)
+        test ! -e /run/emubox/restic-test-fail || exit 1
+        if test -e /run/emubox/restic-test-pause; then
+          : > /run/emubox/restic-test-ready
+          while test -e /run/emubox/restic-test-pause; do sleep 1; done
+        fi
+        excludes=""
+        shift
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = "--exclude-file" ]; then
+            excludes="$2"
+            shift 2
+          elif [ "$1" = "--retry-lock" ] || [ "$1" = "--host" ] || [ "$1" = "--tag" ]; then
+            shift 2
+          else
+            case "$1" in
+              /run/emubox/restic-source/*)
+                relative="''${1#/run/emubox/restic-source/}"
+                mkdir -p "$repo/snapshot/$relative"
+                cp -a "$1/." "$repo/snapshot/$relative/"
+                ;;
+            esac
+            shift
+          fi
+        done
+        if [ -n "$excludes" ]; then
+          while IFS= read -r path; do
+            relative="''${path#/run/emubox/restic-source/}"
+            rm -rf -- "$repo/snapshot/$relative"
+          done < "$excludes"
+        fi
+        : > "$repo/backup-ran"
+        ;;
+      forget|check)
+        ;;
+      *)
+        echo "unexpected fake restic command: $*" >&2
+        exit 2
+        ;;
+    esac
+  '';
 
   # The /data layout as `modules/library` declares it, so the test asserts
   # what the configuration says rather than a second copy of it.
@@ -82,6 +145,20 @@ in
   sops = {
     defaultSopsFile = lib.mkForce ../secrets/test.yaml;
     age.sshKeyPaths = lib.mkForce [ ./test_host_ed25519_key ];
+  };
+
+  emubox.backups = {
+    enable = true;
+    b2 = {
+      bucket = "emubox-test-backups";
+      prefix = "emubox";
+    };
+  };
+
+  systemd.services = {
+    emubox-restic-init.path = [ fakeRestic ];
+    emubox-restic-backup.path = [ fakeRestic ];
+    emubox-restic-maintenance.path = [ fakeRestic ];
   };
 
   # No host key is injected in the VM, so /etc/ssh/ssh_host_ed25519_key is
@@ -245,6 +322,79 @@ in
         machine.succeed(f"systemctl start {unit}")
         machine.succeed(f"mountpoint -q {mapping['where']}")
 
+    # --- off-site backups: local fake repository, real service transaction --
+
+    with subtest("Restic uses one read-only source and backs up only typed roots"):
+        machine.succeed("systemctl stop emubox-restic-backup.timer")
+        machine.succeed("mkdir -p /data/es-de /data/bios /data/home/player/.cache /data/home/player/.local/cache")
+        machine.succeed("printf original > /data/saves/snapshot-consistency-fixture")
+        machine.succeed("printf esde > /data/es-de/esde-fixture")
+        machine.succeed("printf bios > /data/bios/bios-fixture")
+        machine.succeed("printf excluded > /data/home/player/.cache/cache-fixture")
+        machine.succeed("printf excluded > /data/home/player/.local/cache/cache-fixture")
+        machine.succeed("printf include-me > /data/home/player/unlisted-home-fixture")
+        machine.succeed("touch /run/emubox/restic-test-pause")
+        machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
+        machine.succeed("systemctl start emubox-restic-backup.service &")
+        machine.wait_until_succeeds("test -e /run/emubox/restic-test-ready")
+        machine.succeed("test -r /run/emubox/restic-source/saves/snapshot-consistency-fixture")
+        machine.succeed("mountpoint -q /run/emubox/restic-source")
+        machine.succeed("printf changed-after-snapshot > /data/saves/snapshot-consistency-fixture")
+        machine.succeed("rm /run/emubox/restic-test-pause")
+        machine.wait_until_succeeds("test -e /data/cache/emubox-restic-test/backup-ran")
+        assert machine.succeed("cat /data/cache/emubox-restic-test/snapshot/saves/snapshot-consistency-fixture").strip() == "original"
+        machine.succeed("test -e /data/cache/emubox-restic-test/snapshot/es-de/esde-fixture")
+        machine.succeed("test -e /data/cache/emubox-restic-test/snapshot/bios/bios-fixture")
+        machine.succeed("test -e /data/cache/emubox-restic-test/snapshot/home/player/unlisted-home-fixture")
+        machine.fail("test -e /data/cache/emubox-restic-test/snapshot/home/player/.cache/cache-fixture")
+        machine.fail("test -e /data/cache/emubox-restic-test/snapshot/home/player/.local/cache/cache-fixture")
+        machine.fail("mountpoint -q /run/emubox/restic-source")
+        machine.fail("find /data/.snapshots/restic -mindepth 1 -maxdepth 1 -name 'restic-*' | grep .")
+        assert machine.succeed("systemctl show -p Result --value emubox-restic-backup.service").strip() == "success"
+
+    with subtest("Runtime symlink aliases fail before restic sees backup inputs"):
+        before = machine.succeed("stat -c %Y /data/cache/emubox-restic-test/backup-ran").strip()
+        machine.succeed("rm -rf /data/home/player/.cache")
+        machine.succeed("ln -s /data/saves /data/home/player/.cache")
+        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
+        machine.fail("systemctl start emubox-restic-backup.service")
+        assert machine.succeed("stat -c %Y /data/cache/emubox-restic-test/backup-ran").strip() == before
+        machine.succeed("rm /data/home/player/.cache && mkdir -p /data/home/player/.cache")
+        machine.succeed("rm -rf /data/home/player/.local/cache")
+        machine.succeed("ln -s ../.cache /data/home/player/.local/cache")
+        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
+        machine.fail("systemctl start emubox-restic-backup.service")
+        machine.succeed("rm /data/home/player/.local/cache && mkdir -p /data/home/player/.local/cache")
+
+    with subtest("Cloud failures do not disable local gameplay or future backup scheduling"):
+        machine.succeed("touch /run/emubox/restic-test-fail")
+        machine.succeed("systemctl reset-failed emubox-restic-backup.service")
+        machine.fail("systemctl start emubox-restic-backup.service")
+        assert machine.succeed("systemctl show -p Result --value emubox-restic-backup.service").strip() == "exit-code"
+        machine.succeed("mountpoint -q " + save_bind_mappings[0]["where"])
+        machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
+        machine.succeed("systemctl start btrbk-local.service")
+        machine.succeed("rm /run/emubox/restic-test-fail")
+
+    with subtest("Init authentication and network failures remain fail-closed"):
+        for marker in ["restic-test-init-auth-fail", "restic-test-init-network-fail"]:
+            machine.succeed(f"touch /run/emubox/{marker}")
+            machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
+            machine.fail("systemctl start emubox-restic-backup.service")
+            machine.succeed(f"rm /run/emubox/{marker}")
+        machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
+        machine.succeed("systemctl start emubox-restic-backup.service")
+
+    with subtest("Reconciler removes interrupted sources both before backup and on boot"):
+        machine.succeed("btrfs subvolume snapshot -r /data /data/.snapshots/restic/restic-same-boot")
+        machine.succeed("systemctl start emubox-restic-backup.service")
+        machine.fail("test -e /data/.snapshots/restic/restic-same-boot")
+        machine.succeed("btrfs subvolume snapshot -r /data /data/.snapshots/restic/restic-after-power-loss")
+        machine.succeed("systemctl reboot")
+        machine.wait_for_unit("multi-user.target")
+        machine.fail("test -e /data/.snapshots/restic/restic-after-power-loss")
+        machine.succeed("systemctl is-enabled emubox-restic-backup.timer")
+
     # --- persistence: persisted paths are bound into the root ----------------
 
     with subtest("Every persisted directory resolves to storage under /persist"):
@@ -335,6 +485,9 @@ in
             (${py (secretFacts "admin_password_hash")}, ${py values.hash}),
             (${py (secretFacts "wifi_ssid")}, ${py values.ssid}),
             (${py (secretFacts "wifi_psk")}, ${py values.psk}),
+            (${py (secretFacts "b2_key_id")}, ${py values.b2KeyId}),
+            (${py (secretFacts "b2_application_key")}, ${py values.b2ApplicationKey}),
+            (${py (secretFacts "restic_password")}, ${py values.resticPassword}),
         ]:
             path = secret["path"]
             assert path.startswith("/run/secrets"), f"secret off the runtime path: {path}"

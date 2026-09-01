@@ -94,6 +94,7 @@ let
       forget|check)
         ;;
       restore)
+        shift
         test "$1" = "--verify"
         test "$3" = "--target"
         mkdir -p "$4"

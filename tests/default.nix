@@ -355,7 +355,7 @@ in
         machine.succeed("printf include-me > /data/home/player/unlisted-home-fixture")
         machine.succeed("mkdir -p /run/emubox && touch /run/emubox/restic-test-pause")
         machine.succeed("systemctl reset-failed emubox-restic-backup.service emubox-restic-init.service")
-        machine.succeed("systemctl start emubox-restic-backup.service &")
+        machine.succeed("systemctl start --no-block emubox-restic-backup.service")
         machine.wait_until_succeeds("test -e /run/emubox/restic-test-ready")
         machine.succeed("test -r /run/emubox/restic-source/saves/snapshot-consistency-fixture")
         machine.succeed("mountpoint -q /run/emubox/restic-source")

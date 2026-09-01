@@ -1,0 +1,194 @@
+# Evaluation-only guard for the closed save table and backup path model.
+{ self, pkgs }:
+let
+  inherit (pkgs) lib;
+  host = self.nixosConfigurations.emubox;
+  saves = host.config.emubox.saves;
+  home = host.config.users.users.player.home;
+  owned = host.config.emubox.kiosk.ownedFiles;
+  routes = saves.saveRoutes;
+  names = map (r: r.store) routes;
+  expectedNames = [
+    "RetroArch saves"
+    "RetroArch states"
+    "Dolphin memory cards"
+    "Dolphin Wii data"
+    "Dolphin states"
+    "DuckStation memory cards"
+    "DuckStation states"
+    "PCSX2 memory cards"
+    "PCSX2 states"
+    "PPSSPP savedata"
+    "PPSSPP states and metadata"
+    "Azahar NAND"
+    "Azahar SD card"
+    "ScummVM saves"
+  ];
+  bindRoutes = lib.filter (r: r.mechanism == "bind") routes;
+  expectedRoots = [
+    "/data/saves"
+    "/data/es-de"
+    "/data/bios"
+    home
+  ];
+  # Copied from the capability spec rather than derived from the module: this
+  # catches an emulator route changing while its implementation remains
+  # internally self-consistent.
+  expectedRouteFields = [
+    [
+      ".config/retroarch/saves"
+      "/data/saves/retroarch/saves"
+      "setting"
+      "savefile_directory"
+    ]
+    [
+      ".config/retroarch/states"
+      "/data/saves/retroarch/states"
+      "setting"
+      "savestate_directory"
+    ]
+    [
+      ".local/share/dolphin-emu/GC"
+      "/data/saves/dolphin/GC"
+      "bind"
+      null
+    ]
+    [
+      ".local/share/dolphin-emu/Wii"
+      "/data/saves/dolphin/Wii"
+      "bind"
+      null
+    ]
+    [
+      ".local/share/dolphin-emu/StateSaves"
+      "/data/saves/dolphin/StateSaves"
+      "bind"
+      null
+    ]
+    [
+      ".local/share/duckstation/memcards"
+      "/data/saves/duckstation/memcards"
+      "bind"
+      null
+    ]
+    [
+      ".local/share/duckstation/savestates"
+      "/data/saves/duckstation/savestates"
+      "bind"
+      null
+    ]
+    [
+      ".config/PCSX2/memcards"
+      "/data/saves/pcsx2/memcards"
+      "bind"
+      null
+    ]
+    [
+      ".config/PCSX2/sstates"
+      "/data/saves/pcsx2/sstates"
+      "bind"
+      null
+    ]
+    [
+      ".config/ppsspp/PSP/SAVEDATA"
+      "/data/saves/ppsspp/SAVEDATA"
+      "bind"
+      null
+    ]
+    [
+      ".config/ppsspp/PSP/PPSSPP_STATE"
+      "/data/saves/ppsspp/PPSSPP_STATE"
+      "bind"
+      null
+    ]
+    [
+      ".local/share/azahar-emu/nand"
+      "/data/saves/azahar/nand"
+      "bind"
+      null
+    ]
+    [
+      ".local/share/azahar-emu/sdmc"
+      "/data/saves/azahar/sdmc"
+      "bind"
+      null
+    ]
+    [
+      ".local/share/scummvm/saves"
+      "/data/saves/scummvm/saves"
+      "setting"
+      "scummvm.savepath"
+    ]
+  ];
+  actualRouteFields = map (route: [
+    (lib.removePrefix "${home}/" (builtins.head route.legacyPaths))
+    route.destination
+    route.mechanism
+    route.setting
+  ]) routes;
+  invalidExclusion =
+    value:
+    let
+      candidate = host.extendModules {
+        modules = [ { emubox.saves.homeCacheExclusions = lib.mkForce value; } ];
+      };
+    in
+    !(builtins.tryEval candidate.config.system.build.toplevel.drvPath).success;
+in
+assert lib.assertMsg (saves.backupRoots == expectedRoots) ''
+  tests/saves.nix: backup roots must be exactly saves, complete ES-DE, BIOS,
+  and player home. ROMs, media, cache, and snapshots are outside these roots.
+'';
+assert lib.assertMsg (names == expectedNames) ''
+  tests/saves.nix: saveRoutes differs from the authoritative fourteen-row
+  table, including ScummVM.
+'';
+assert lib.assertMsg (actualRouteFields == expectedRouteFields) ''
+  tests/saves.nix: a legacy path, destination, mechanism, or owned-setting
+  field differs from the authoritative save-route table.
+'';
+assert lib.assertMsg (lib.length saves.bindMappings == lib.length bindRoutes) ''
+  tests/saves.nix: every and only bind route must have a mandatory mount.
+'';
+assert lib.assertMsg
+  (
+    host.config.systemd.targets.emubox-save-routes.wantedBy == [ "multi-user.target" ]
+    && host.config.systemd.services.display-manager.requires == [ "emubox-save-routes.target" ]
+  )
+  ''
+    tests/saves.nix: declared save routes must start before the kiosk, and a
+    missing required mount must prevent display-manager startup.
+  '';
+assert lib.assertMsg
+  (
+    owned."${home}/.config/retroarch/retroarch.cfg".keys.savefile_directory
+    == "/data/saves/retroarch/saves"
+    &&
+      owned."${home}/.config/retroarch/retroarch.cfg".keys.savestate_directory
+      == "/data/saves/retroarch/states"
+    && owned."${home}/.config/scummvm/scummvm.ini".keys.scummvm.savepath == "/data/saves/scummvm/saves"
+  )
+  ''
+    tests/saves.nix: every setting-directed route must have its owned setting.
+  '';
+assert lib.assertMsg (lib.all (path: lib.hasPrefix "${home}/" path && path != home)
+  saves.homeCacheExclusions
+) "tests/saves.nix: home cache exclusions must be strict player-home descendants";
+assert lib.assertMsg
+  (lib.all invalidExclusion [
+    [
+      "${home}/.cache"
+      "${home}/.cache"
+    ]
+    [ "${home}/../escape" ]
+    [ home ]
+    [ "${home}/.cache/../saves-alias" ]
+    [ "${home}/.config/retroarch/saves" ]
+  ])
+  ''
+    tests/saves.nix: duplicate, traversal, home-root, alias-shaped, and
+    save-route-overlapping cache exclusions must all fail evaluation.
+  '';
+pkgs.runCommand "emubox-saves" { } ''
+  touch "$out"
+''

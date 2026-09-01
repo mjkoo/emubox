@@ -991,6 +991,10 @@ in
           # gets cleared back to empty (configuration.c:4346-4347) - never
           # spell the BIOS directory that way.
           system_directory = biosDirectory;
+          # The save-route declaration owns these destinations. Migration is
+          # ordered before emubox-prepare writes this file at kiosk startup.
+          savefile_directory = "/data/saves/retroarch/saves";
+          savestate_directory = "/data/saves/retroarch/states";
           autosave_interval = "30";
           menu_driver = "ozone";
           # Both entries a family could otherwise use to pull unvetted
@@ -1310,6 +1314,7 @@ in
         keys = {
           scummvm = {
             fullscreen = "true";
+            savepath = "/data/saves/scummvm/saves";
             # No first-run key here, and it was checked rather than
             # skipped. ScummVM 2026.1.0 (the locked `pkgs.scummvm.version`)
             # has exactly one startup-time modal that fires on a config

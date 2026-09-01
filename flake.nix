@@ -151,6 +151,9 @@
           # by importing ./pkgs, whose other entries are Linux-only.
           perSystem.emubox-prepare = (pkgsFor system).callPackage ./pkgs/emubox-prepare/package.nix { };
           perSystem.emubox-check-bios = (pkgsFor system).callPackage ./pkgs/emubox-check-bios/package.nix { };
+          perSystem.emubox-save-migrate =
+            (pkgsFor system).callPackage ./pkgs/emubox-save-migrate/package.nix
+              { };
 
           # The retroachievements spec's Disabled scenario, asserted at eval
           # time. Per-system like the two above rather than under `hostOnly`,
@@ -159,6 +162,10 @@
           # without waiting for CI. What it guards is the one code path in
           # the repository that nothing else touches - see the file's header.
           perSystem.retroachievements-disabled = import ./tests/retroachievements-disabled.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
+          perSystem.saves = import ./tests/saves.nix {
             inherit self;
             pkgs = pkgsFor system;
           };

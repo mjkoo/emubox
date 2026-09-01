@@ -11,4 +11,5 @@
   duckstation = pkgs.callPackage ./duckstation/package.nix { };
   emubox-prepare = pkgs.callPackage ./emubox-prepare/package.nix { };
   emubox-check-bios = pkgs.callPackage ./emubox-check-bios/package.nix { };
+  emubox-save-migrate = pkgs.callPackage ./emubox-save-migrate/package.nix { };
 }

@@ -68,6 +68,8 @@ let
   # The search path WirePlumber's user service reads its config from; the
   # nixpkgs module passes config packages through XDG_DATA_DIRS.
   wireplumberDataDirs = lib.splitString ":" config.systemd.user.services.wireplumber.environment.XDG_DATA_DIRS;
+  saveRoutes = config.emubox.saves.saveRoutes;
+  saveBindMappings = config.emubox.saves.bindMappings;
 in
 {
   # Test secrets (design D7): the committed test host key decrypts
@@ -158,6 +160,36 @@ in
             mode, user, group = out.split()
             assert int(mode, 8) == int(entry["mode"], 8), f"{entry['path']}: {out}"
             assert (user, group) == (entry["user"], entry["group"]), f"{entry['path']}: {out}"
+
+    with subtest("Every declared save route is writable and every bind route is mounted"):
+        for route in ${py saveRoutes}:
+            destination = route["destination"]
+            machine.succeed(f"test -d {destination}")
+            machine.succeed(f"sudo -u player touch {destination}/vm-route-write")
+        for mapping in ${py saveBindMappings}:
+            machine.succeed(f"mountpoint -q {mapping['where']}")
+
+    with subtest("Migration accepts equal data and rejects conflicts without overwriting"):
+        # A bind target is unmounted only for this isolated migration check;
+        # it is immediately restored, before any kiosk path could run.
+        mapping = ${py (builtins.head saveBindMappings)}
+        unit = machine.succeed(
+            f"systemd-escape --path --suffix=mount {mapping['where']}"
+        ).strip()
+        machine.succeed(f"systemctl stop {unit}")
+        machine.succeed(f"mkdir -p {mapping['where']} {mapping['what']}")
+        machine.succeed(f"printf equal > {mapping['where']}/equal.sav")
+        machine.succeed(f"printf equal > {mapping['what']}/equal.sav")
+        machine.succeed("emubox-save-migrate /etc/emubox/save-routes.json")
+        machine.succeed(f"test -f {mapping['what']}/equal.sav")
+        machine.succeed(f"printf old > {mapping['where']}/conflict.sav")
+        machine.succeed(f"printf new > {mapping['what']}/conflict.sav")
+        machine.fail("emubox-save-migrate /etc/emubox/save-routes.json")
+        assert machine.succeed(f"cat {mapping['where']}/conflict.sav").strip() == "old"
+        assert machine.succeed(f"cat {mapping['what']}/conflict.sav").strip() == "new"
+        machine.succeed(f"rm {mapping['where']}/conflict.sav")
+        machine.succeed(f"systemctl start {unit}")
+        machine.succeed(f"mountpoint -q {mapping['where']}")
 
     # --- persistence: persisted paths are bound into the root ----------------
 

@@ -1,14 +1,23 @@
 {
   lib,
   stdenvNoCC,
+  btrfs-progs,
+  makeWrapper,
   python3,
+  restic,
   ruff,
   runtimeShell,
   shellcheck,
   ty,
+  util-linux,
 }:
 let
   python = python3.withPackages (ps: [ ps.pytest ]);
+  runtimePath = lib.makeBinPath [
+    btrfs-progs
+    restic
+    util-linux
+  ];
 in
 stdenvNoCC.mkDerivation {
   pname = "emubox-restic-backup";
@@ -22,6 +31,7 @@ stdenvNoCC.mkDerivation {
     ];
   };
   buildInputs = [ python ];
+  nativeBuildInputs = [ makeWrapper ];
   nativeCheckInputs = [
     ruff
     shellcheck
@@ -48,6 +58,9 @@ stdenvNoCC.mkDerivation {
     install -Dm755 emubox_restic_backup.py $out/bin/emubox-restic-backup
     install -Dm755 emubox_restic_wrapper.sh $out/bin/emubox-restic
     ln -s emubox-restic-backup $out/bin/emubox-status
+    ${lib.optionalString stdenvNoCC.hostPlatform.isLinux ''
+      wrapProgram $out/bin/emubox-restic-backup --prefix PATH : ${runtimePath}
+    ''}
   '';
   installCheckPhase = ''
     bash test_emubox_restic_wrapper.sh "$out/bin/emubox-restic"

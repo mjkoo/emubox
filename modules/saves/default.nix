@@ -243,6 +243,7 @@ in
         Type = "oneshot";
         User = "player";
         Group = "player";
+        ExecStartPre = "+${pkgs.systemd}/bin/systemd-tmpfiles --create --prefix=/data/saves";
         ExecStart = "${pkgs.emubox-save-migrate}/bin/emubox-save-migrate ${routesJson}";
       };
     };

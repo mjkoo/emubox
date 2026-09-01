@@ -239,6 +239,7 @@ in
     systemd.services.emubox-save-migrate = {
       description = "Migrate declared emulator saves before route activation";
       wantedBy = [ "emubox-save-routes.target" ];
+      unitConfig.DefaultDependencies = false;
       before = map mountUnit cfg.bindMappings ++ [
         "emubox-save-routes.target"
         "display-manager.service"

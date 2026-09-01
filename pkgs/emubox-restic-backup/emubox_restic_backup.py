@@ -346,7 +346,8 @@ def reconcile(snapshot_dir: Path, mountpoint: Path, run: Run = _default_run) -> 
 
     if mountpoint.is_mount():
         run(["umount", "--", str(mountpoint)])
-    mountpoint.rmdir() if mountpoint.exists() and not any(mountpoint.iterdir()) else None
+    if mountpoint.exists() and not any(mountpoint.iterdir()):
+        mountpoint.rmdir()
     if snapshot_dir.exists():
         for candidate in snapshot_dir.glob("restic-*"):
             run(["btrfs", "subvolume", "delete", "--", str(candidate)])

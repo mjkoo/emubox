@@ -601,3 +601,43 @@ def test_init_uses_the_explicit_restic_executable(
     erb.initialize(lambda command: calls.append(list(command)))
 
     assert calls == [["/test/bin/restic", "cat", "config"]]
+
+
+def test_status_reads_the_unit_names_it_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`services.restic` derives the unit names, so the module passes them in.
+
+    Hardcoding them here would couple this program to a string the Nix module
+    owns, and a rename would report on a unit that does not exist rather than
+    failing.
+    """
+
+    queried: list[str] = []
+
+    def status_layer(*, unit: str, **_: object) -> tuple[bool, str]:
+        queried.append(unit)
+        return True, f"{unit}: success"
+
+    monkeypatch.setattr(erb, "status_layer", status_layer)
+
+    assert erb.print_status("backup.service", "maintenance.service") == 0
+    assert queried == ["btrbk-local.service", "backup.service", "maintenance.service"]
+
+
+def test_status_cli_defaults_to_the_units_the_module_generates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The defaults must stay in step with `services.restic`'s unit names."""
+
+    queried: list[str] = []
+
+    def status_layer(*, unit: str, **_: object) -> tuple[bool, str]:
+        queried.append(unit)
+        return True, f"{unit}: success"
+
+    monkeypatch.setattr(erb, "status_layer", status_layer)
+
+    assert erb.main(["--status"]) == 0
+    assert queried[1:] == [
+        "restic-backups-emubox.service",
+        "restic-backups-emubox-maintenance.service",
+    ]

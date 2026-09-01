@@ -466,6 +466,9 @@ in
         machine.succeed("test -e /data/cache/emubox-restic-test/snapshot/home/player/unlisted-home-fixture")
         machine.fail("test -e /data/cache/emubox-restic-test/snapshot/home/player/.cache/cache-fixture")
         machine.fail("test -e /data/cache/emubox-restic-test/snapshot/home/player/.local/cache/cache-fixture")
+        # The source now lives in the host mount namespace, so this proves the
+        # cleanup step actually unmounted it. While the unit had PrivateTmp the
+        # mount was never visible here at all and this passed either way.
         machine.fail("mountpoint -q /run/emubox/restic-source")
         machine.fail("find /data/.snapshots/restic -mindepth 1 -maxdepth 1 -name 'restic-*' | grep .")
         assert unit_property(BACKUP, "Result") == "success"

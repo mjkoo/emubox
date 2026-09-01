@@ -100,6 +100,11 @@ assert lib.assertMsg (
   && lib.hasInfix "backupCleanupCommand" backup.postStop
   && backup.serviceConfig.Nice == 19
   && backup.serviceConfig.IOSchedulingClass == "idle"
+  # Not hygiene left off by accident, and the module's default is the
+  # opposite. Any namespacing option gives every Exec* process its own mount
+  # namespace, so the prepare step's read-only bind would be gone before
+  # restic ran and the cleanup step could not unmount it.
+  && backup.serviceConfig.PrivateTmp == false
 ) "tests/backups.nix: backup needs a bounded activation and cleanup outside that bound";
 assert lib.assertMsg
   (

@@ -23,7 +23,6 @@ let
   backupName = "emubox";
   maintenanceName = "emubox-maintenance";
   backupUnit = "restic-backups-${backupName}.service";
-  maintenanceUnit = "restic-backups-${maintenanceName}.service";
 
   sourceSpec = pkgs.writeText "emubox-restic-source.json" (
     builtins.toJSON {
@@ -43,8 +42,10 @@ let
   # `services.restic` runs backupPrepareCommand at the head of its preStart,
   # before the includes file, so the source exists by the time restic runs. The
   # gate is first inside `--prepare`, so an unreachable repository costs no
-  # snapshot. `maintenanceUnit` is the name `emubox-status` reads; the helper
-  # carries the same pair as its argparse defaults.
+  # snapshot. `emubox-status` reads both unit names; the helper carries the
+  # same pair as its argparse defaults, and the VM test runs it against these
+  # units, so a rename that misses one side fails there rather than silently
+  # reporting a unit that does not exist.
   prepareCommand = "${helper} --prepare --source-spec ${sourceSpec} --data /data ${helperPaths}";
   cleanupCommand = "${helper} --cleanup ${helperPaths}";
 
@@ -263,6 +264,16 @@ in
             Nice = 19;
             IOSchedulingClass = "idle";
             NoNewPrivileges = true;
+            # Load-bearing, and the module's default is the opposite. Any
+            # namespacing option makes systemd build a fresh mount namespace
+            # for *each* Exec* process, so the read-only bind that
+            # `backupPrepareCommand` creates would not exist by the time restic
+            # runs, and `backupCleanupCommand` could not unmount it. The source
+            # therefore lives in the host namespace, root-only at mode 0700,
+            # and the cleanup path is what removes it. `mkForce` because the
+            # module sets the opposite, and this is a correctness requirement
+            # of the prepare/backup/cleanup split rather than a preference.
+            PrivateTmp = lib.mkForce false;
           };
         };
 

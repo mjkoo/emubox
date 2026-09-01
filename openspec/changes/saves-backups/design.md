@@ -90,7 +90,9 @@ reading live paths was rejected because it is not transactionally consistent.
 
 Backup uses restic's native non-exclusive append lock; `forget`, `prune`, and
 `check` use native exclusive locks. There is no external repository mutex or
-queue. Weekly maintenance is staggered from four-hour backups. The timeout
+queue. The module prefixes its prune sequence with `restic unlock`, which
+removes only locks restic considers stale; a backup still running refreshes its
+own, so a concurrent backup cannot be unlocked out from under maintenance. Weekly maintenance is staggered from four-hour backups. The timeout
 algebra is explicit: maintenance's entire sequence, including lock wait, has
 maximum `M = 3h`; backup uses `R = 3h15m` for `--retry-lock`, `P = 10m` before
 restic's backup call, which also covers the initialization gate's own

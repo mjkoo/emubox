@@ -121,10 +121,24 @@ let
   duplicateExclusions =
     lib.length cfg.homeCacheExclusions != lib.length (lib.unique cfg.homeCacheExclusions);
   routesJson = pkgs.writeText "emubox-save-routes.json" (builtins.toJSON cfg.saveRoutes);
+  routeAncestors =
+    path:
+    let
+      base = if lib.hasPrefix "/data/saves/" path then "/data/saves" else playerHome;
+      parts = lib.splitString "/" (lib.removePrefix "${base}/" path);
+    in
+    map (segments: "${base}/${lib.concatStringsSep "/" segments}") (
+      lib.genList (index: lib.take (index + 1) parts) (lib.length parts)
+    );
+  routeDirectories = lib.unique (
+    lib.concatMap routeAncestors (
+      map (r: r.destination) cfg.saveRoutes ++ map (mapping: mapping.where) cfg.bindMappings
+    )
+  );
   prepareSaveRoutes = pkgs.writeShellScript "emubox-prepare-save-routes" (
     lib.concatMapStringsSep "\n" (
       path: "${pkgs.coreutils}/bin/install -d -m 0755 -o player -g player ${lib.escapeShellArg path}"
-    ) (map (r: r.destination) cfg.saveRoutes ++ map (mapping: mapping.where) cfg.bindMappings)
+    ) routeDirectories
   );
 in
 {

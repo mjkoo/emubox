@@ -13,7 +13,7 @@
 
 - [x] 2.1 Add disk-layout assertions and the root-only sibling `@snapshots` subvolume; prove `@cache` and `@snapshots` are separate from the `@data` source.
 - [x] 2.2 Add timer and retention tests and btrbk configuration for hourly snapshots, all real points for 48 hours, one representative from each populated daily bucket in the preceding 14 days with overlap, no violation for empty downtime buckets, no fabricated points, and read-only retained points.
-- [x] 2.3 Extend the disk VM test to prove time-window retention and non-recursive cache/snapshot capture; leave `just vm-test` passing in CI.
+- [ ] 2.3 Extend the disk VM test to prove time-window retention and non-recursive cache/snapshot capture; leave `just vm-test` passing in CI.
 - [x] 2.4 Leave `just check-all` passing as the group evidence.
 
 ## 3. Snapshot-Consistent Restic Backup

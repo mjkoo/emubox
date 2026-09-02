@@ -107,10 +107,11 @@ fall beneath, or alias any declared save route.
 - **THEN** the file persists and is included in the next backup unless explicitly excluded
 
 ### Requirement: Backup rollback preserves save placement
-Disabling or rolling back off-site backup SHALL disable only cloud init, backup,
-and maintenance services. It SHALL keep every authoritative save bind mount and
-owned path setting active, SHALL NOT reverse-migrate or delete save data, and
-SHALL preserve local snapshots independently.
+Disabling or rolling back off-site backup SHALL disable only the off-site
+backup, maintenance, and source-reconciliation services. It SHALL keep every
+authoritative save bind mount and owned path setting active, SHALL NOT
+reverse-migrate or delete save data, and SHALL preserve local snapshots
+independently.
 
 #### Scenario: Off-site backup is rolled back
 - **WHEN** the operator disables the cloud backup services after save migration

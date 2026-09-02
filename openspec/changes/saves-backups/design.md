@@ -67,8 +67,11 @@ A sibling `@snapshots` subvolume is mounted root-only at `/data/.snapshots`.
 btrbk creates hourly read-only snapshots of `@data`, keeping every real point
 within the most recent 48 hours plus one representative from each populated
 daily bucket in the preceding 14 days. Empty buckets caused by downtime contain
-no point and are not violations; one point may satisfy both buckets. A
-boot-relative timer resumes normally but does not fabricate missed snapshots.
+no point and are not violations; one point may satisfy both buckets. The timer
+is hourly `OnCalendar` with `Persistent = true`, so downtime is followed by a
+single catch-up run rather than one run per missed interval: scheduling resumes
+without fabricating points for time powered off. (The backup timer, by
+contrast, is the boot-relative one - see Decision 8.)
 `@cache` and `@snapshots` are separate nested subvolumes and are not recursively
 captured. Exact-count retention is rejected because it conflicts with btrbk's
 time-bucket model.
@@ -240,11 +243,13 @@ nice-to-have save backups.
    placeholders block installation.
 4. When off-site backup is enabled, provision the private bucket, retain prior
    versions for 30 days, create the scoped read/write key, and enable the
-   independent init, backup, and maintenance timers. Init first opens an
-   existing repository and creates one only on the precise absent result.
+   independent backup and maintenance timers. Each job's own first step opens
+   an existing repository and creates one only on restic's precise absent
+   result; there is no separate initialization unit or timer (Decision 7).
 5. During E12, run one real-B2 backup and `restic restore --verify` of known data.
 
-Rollback disables the cloud init, backup, and maintenance timers and services.
+Rollback removes the cloud backup and maintenance timers and services together
+with the source reconciler, which exists only to clean up after them.
 It keeps every save bind mount, owned path setting, and migrated file active so
 the stable `/data/saves` layout remains usable. No rollback step reverse-migrates
 or deletes save data. Rollback evidence SHALL prove cloud units are disabled

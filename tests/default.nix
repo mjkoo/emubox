@@ -188,8 +188,14 @@ in
     };
   };
 
+  # `util-linux` for the double's own `findmnt`. Restic used to be a child of
+  # the backup helper, whose wrapper puts util-linux on PATH; `services.restic`
+  # invokes it directly, so the double now gets only the unit's PATH.
   systemd.services = {
-    "restic-backups-emubox".path = [ fakeRestic ];
+    "restic-backups-emubox".path = [
+      fakeRestic
+      pkgs.util-linux
+    ];
     "restic-backups-emubox-maintenance".path = [ fakeRestic ];
   };
 
@@ -278,6 +284,25 @@ in
         )
         result = unit_property(BACKUP, "Result")
         assert result == expect, f"{BACKUP}: Result={result!r}, expected {expect!r}"
+
+    def wait_for_paused_backup(timeout=120):
+        """Wait for the double's pause point, giving up as soon as the unit dies.
+
+        `wait_until_succeeds` on the ready file alone waits out its whole
+        timeout when the backup fails before it ever reaches the double, so a
+        located failure costs fifteen minutes of polling and reports as a
+        timeout rather than as the thing that broke.
+        """
+        for _ in range(timeout):
+            if machine.execute("test -e /run/emubox/restic-test-ready")[0] == 0:
+                return
+            if unit_property(BACKUP, "ActiveState") == "failed":
+                raise AssertionError(
+                    f"{BACKUP} failed before reaching the double's pause point:\n"
+                    + machine.execute(f"systemctl status --no-pager --full {BACKUP}")[1]
+                )
+            machine.sleep(1)
+        raise AssertionError(f"{BACKUP} never reached the double's pause point")
 
     @contextlib.contextmanager
     def restic_fault(marker):
@@ -454,7 +479,7 @@ in
         with restic_fault("restic-test-pause"):
             reset_restic_units()
             machine.succeed(f"systemctl start --no-block {BACKUP}")
-            machine.wait_until_succeeds("test -e /run/emubox/restic-test-ready")
+            wait_for_paused_backup()
             machine.succeed("printf changed-after-snapshot > /data/saves/snapshot-consistency-fixture")
         machine.wait_until_succeeds("test -e /data/cache/emubox-restic-test/backup-ran")
         machine.wait_until_succeeds(

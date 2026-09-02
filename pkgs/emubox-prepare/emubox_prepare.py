@@ -368,7 +368,15 @@ def _parse_esde(path: Path) -> list[ET.Element] | None:
         note(f"{path} is empty; recreating it")
         return None
     try:
-        root = ET.fromstring(f"<{_WRAPPER}>{body}</{_WRAPPER}>")
+        # S314 wants defusedxml here. Declined, with a reason rather than a
+        # shrug: the classic attacks it defends against are entity
+        # expansion, and stdlib ElementTree does not expand custom entities
+        # at all - it raises `ParseError: undefined entity`, which the
+        # handler below already turns into a recreation. External entities
+        # and DTD retrieval are likewise off by default. What is left is a
+        # dependency in the appliance's closure buying nothing, against an
+        # input the frontend itself writes as `player` on a single-user box.
+        root = ET.fromstring(f"<{_WRAPPER}>{body}</{_WRAPPER}>")  # noqa: S314
     except ET.ParseError as error:
         note(f"{path} does not parse ({error}); recreating it")
         return None
@@ -394,8 +402,27 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
     if elements is None:
         elements = []
 
-    by_name = {e.attrib.get("name"): e for e in elements}
+    # Collapse repeats of an *owned* name to the first element carrying it,
+    # the same invariant the other two editors keep: exactly one assignment
+    # of an owned key survives, holding the flake's value. A dict
+    # comprehension over `elements` used to do this lookup and silently kept
+    # the *last* repeat instead, so the earlier one stayed behind at
+    # whatever it said - the mirror image of the bug the other two editors
+    # had, and worth removing for the same reason. An unowned name that
+    # repeats is left exactly as it is: not this program's to collapse.
+    by_name: dict[str | None, ET.Element] = {}
+    superseded: set[int] = set()
+    for element in elements:
+        name = element.attrib.get("name")
+        if name in by_name:
+            if name in keys:
+                superseded.add(id(element))
+            continue
+        by_name[name] = element
     changed = recreating
+    if superseded:
+        elements = [e for e in elements if id(e) not in superseded]
+        changed = True
     for name, spec in keys.items():
         element = by_name.get(name)
         if element is None:
@@ -555,6 +582,30 @@ def set_ini_settings(
             if isinstance(value, Removal) and _sweep_key(lines, key, section):
                 changed = True
 
+    # Then the written keys lose their stale twins, in a second pass of its
+    # own and for the same index-shifting reason. A duplicate section header
+    # is the shape `_sweep_key` already guards removals against, and a write
+    # needs the guard just as much: the pass below edits the *first* instance
+    # of the section, while every INI reader this box writes for - Qt's
+    # QSettings, configparser - resolves a repeated key to the *last* one. So
+    # the file ends up holding the flake's value and the emulator goes on
+    # reading the stale one, and because the writing pass then finds its own
+    # value already in place it reports nothing to do, on this launch and
+    # every launch after it. Silent, permanent, and for the login keys it is
+    # a stale account token surviving exactly where `_sweep_key` was written
+    # to stop one.
+    #
+    # Bounds are recomputed per key because a deletion ahead of the section
+    # shifts them - an orphan assignment in the headerless preamble is the
+    # ordinary way that happens.
+    for section, keys in sections.items():
+        for key in _without_removals(keys):
+            bounds = _ini_section_bounds(lines, section)
+            if bounds is None:
+                break  # no instance of this section yet; nothing to prune
+            if _sweep_key(lines, key, section, protect=bounds):
+                changed = True
+
     for section, keys in sections.items():
         writes = _without_removals(keys)
         if not writes:
@@ -606,8 +657,21 @@ def _ini_section_bounds(lines: Sequence[str], section: str) -> tuple[int, int] |
     return None if start is None else (start, len(lines))
 
 
-def _sweep_key(lines: list[str], key: str, section: str | None) -> bool:
+def _sweep_key(
+    lines: list[str],
+    key: str,
+    section: str | None,
+    *,
+    protect: tuple[int, int] | None = None,
+) -> bool:
     """Delete every assignment of `key` this file's owner could mean. In place.
+
+    `protect` is a half-open line range whose matches are kept, and it is
+    what lets a *write* use this sweep too. A written key has the same
+    duplicate problem a removed one does - see `set_ini_settings` - but it
+    needs exactly one assignment left standing to carry the flake's value,
+    so the writing pass protects the range it is about to edit and sweeps
+    every other copy.
 
     What `REMOVE` promises (see `Removal`), rather than what a single
     index lookup can deliver. For an INI file `section` names the one the
@@ -648,6 +712,8 @@ def _sweep_key(lines: list[str], key: str, section: str | None) -> bool:
                 continue
             if current is not None and current != section:
                 continue
+        if protect is not None and protect[0] <= index < protect[1]:
+            continue
         assignment = _split_ini_assignment(line)
         if assignment is not None and assignment[1] == key:
             doomed.append(index)
@@ -724,6 +790,18 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
     # after it.
     for key, value in keys.items():
         if isinstance(value, Removal) and _sweep_key(lines, key, None):
+            changed = True
+
+    # Written keys lose their stale twins next, the INI editor's second pass
+    # with `None` for the section because this file has none: a repeated key
+    # here is repeated outright. RetroArch's own parser keeps the last
+    # assignment it reads, so without this the box writes the flake's value
+    # into the first and RetroArch goes on reading the one below it.
+    for key in _without_removals(keys):
+        index = _ini_key_index(lines, 0, len(lines), key)
+        if index is not None and _sweep_key(
+            lines, key, None, protect=(index, index + 1)
+        ):
             changed = True
 
     for key, value in _without_removals(keys).items():
@@ -1039,13 +1117,19 @@ def _login2_request(
         body = urllib.parse.urlencode(
             {"r": "login2", "u": username, "p": password}
         ).encode()
-        request = urllib.request.Request(api_url, data=body, method="POST")
-        # S310 flags urlopen for an unbounded scheme (file://, etc.), which
+        # S310 flags an unbounded URL scheme (file://, and custom ones) on
+        # both halves of this call, the `Request` and the `urlopen`. It
         # matters when the URL comes from somewhere untrusted. Here it comes
         # from the retroachievements namespace's `api_url`, which - like
         # every other path in the owned-values document - is a store path
         # the module rendered, not anything a user or the network supplies;
         # the same trust boundary the rest of this program already assumes.
+        #
+        # Only the `urlopen` half carried a suppression until the bandit
+        # rules were actually turned on, because a `noqa` for an unselected
+        # rule silences nothing and so nothing said the other half was
+        # unmarked. `RUF100` is on now to keep that from recurring.
+        request = urllib.request.Request(api_url, data=body, method="POST")  # noqa: S310
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
             raw = response.read(_MAX_LOGIN_BODY)
     except urllib.error.HTTPError as error:

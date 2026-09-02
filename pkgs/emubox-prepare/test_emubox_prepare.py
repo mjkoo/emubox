@@ -3000,6 +3000,166 @@ def test_retroarch_removal_sweeps_every_occurrence(tmp_path: Path) -> None:
     assert 'video_fullscreen = "true"' in text
 
 
+# --- A written key leaves exactly one assignment behind --------------------
+#
+# The mirror of the removal sweeps above, and it was missing. Removals were
+# careful about a repeated key from the start; writes were not, so they
+# edited the first assignment and left every later one saying whatever it
+# said. Both readers this box writes for resolve a repeat to the *last*
+# assignment, so the file held the flake's value while the emulator went on
+# reading the stale one - and since the writing pass then found its own
+# value already in place, it reported nothing to do on every launch after.
+# For `username` and `token` that is a stale account surviving in exactly
+# the place `_sweep_key` exists to clear it from.
+#
+# The invariant all three editors now share: after a write, exactly one
+# assignment of an owned key is in the file and it holds the flake's value.
+# What each editor may never do is touch a key it does not own, including a
+# same-named one under somebody else's section.
+
+
+def test_ini_write_leaves_no_stale_twin_in_a_duplicated_section(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text(
+        "[Achievements]\nUsername = stale-first\nKeepMe = yes\n"
+        "[Other]\nUsername = not-ours\n"
+        "[Achievements]\nUsername = stale-second\n"
+    )
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+
+    text = path.read_text()
+    assert text.count("Username = correct") == 1
+    assert "stale-first" not in text
+    assert "stale-second" not in text
+    # Neither an unowned key nor a same-named key under a section this
+    # program does not own is its to rewrite or remove.
+    assert "KeepMe = yes" in text
+    assert "Username = not-ours" in text
+
+
+def test_ini_write_sweeps_a_stray_assignment_above_every_section_header(
+    tmp_path: Path,
+) -> None:
+    # The write side of `..._removal_sweeps_a_key_written_above_every_section_header`:
+    # an orphan assignment belongs to no section, so it is claimed by the
+    # same owner - and it sorts *before* the section, which is why the
+    # pruning pass recomputes the section bounds after every deletion.
+    path = tmp_path / "settings.ini"
+    path.write_text("Username = stray\n[Achievements]\nUsername = stale\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+
+    text = path.read_text()
+    assert "stray" not in text
+    assert text.count("Username = correct") == 1
+
+
+def test_ini_write_is_idempotent_after_collapsing_a_duplicate(tmp_path: Path) -> None:
+    # The property that made the bug invisible: a second run must agree the
+    # file is already right, and must not report a write it did not make.
+    path = tmp_path / "settings.ini"
+    path.write_text(
+        "[Achievements]\nUsername = stale-first\n[Achievements]\nUsername = stale-second\n"
+    )
+    ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}})
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+
+    assert unwritten(path)
+
+
+def test_retroarch_write_leaves_no_stale_twin(tmp_path: Path) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(
+        'cheevos_username = "stale-first"\nvideo_fullscreen = "true"\n'
+        'cheevos_username = "stale-last"\n'
+    )
+
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is True
+
+    text = path.read_text()
+    assert text.count('cheevos_username = "correct"') == 1
+    assert "stale" not in text
+    assert 'video_fullscreen = "true"' in text
+
+
+def test_retroarch_write_is_idempotent_after_collapsing_a_duplicate(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('cheevos_username = "one"\ncheevos_username = "two"\n')
+    ep.set_retroarch_settings(path, {"cheevos_username": "correct"})
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is False
+
+    assert unwritten(path)
+
+
+def test_esde_write_collapses_a_repeated_owned_element(tmp_path: Path) -> None:
+    # ES-DE had the same defect inverted: a dict comprehension over the
+    # parsed elements kept the *last* repeat, so the write landed there and
+    # the earlier element stayed behind holding the old value.
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<string name="Theme" value="stale-first" />\n'
+        '<string name="Other" value="keep" />\n'
+        '<string name="Theme" value="stale-last" />\n'
+    )
+
+    assert (
+        ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+        is True
+    )
+
+    names = [(n, v) for _, n, v in esde_elements(path)]
+    assert names.count(("Theme", "correct")) == 1
+    assert len([n for n, _ in names if n == "Theme"]) == 1
+    assert ("Other", "keep") in names
+
+
+def test_esde_write_leaves_a_repeated_unowned_element_alone(tmp_path: Path) -> None:
+    # Collapsing is only ever applied to a name the flake owns. Two
+    # elements the frontend wrote under one unowned name are the frontend's
+    # business, and this program does not get to pick one.
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<string name="Unowned" value="one" />\n'
+        '<string name="Unowned" value="two" />\n'
+        '<string name="Theme" value="stale" />\n'
+    )
+
+    ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+
+    names = [(n, v) for _, n, v in esde_elements(path)]
+    assert ("Unowned", "one") in names
+    assert ("Unowned", "two") in names
+
+
+def test_esde_write_is_idempotent_after_collapsing_a_duplicate(tmp_path: Path) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<string name="Theme" value="one" />\n'
+        '<string name="Theme" value="two" />\n'
+    )
+    ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+    freeze(path)
+
+    assert (
+        ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+        is False
+    )
+
+    assert unwritten(path)
+
+
 # --- Final wave: an unparseable file is not an absent one -----------------
 #
 # The all-removals branch of both flat-file editors used to read "the parser

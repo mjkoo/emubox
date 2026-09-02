@@ -1,8 +1,22 @@
-# Defaults plus ARG: an unused argument here is almost always an
-# inventory entry's field or a directory that stopped being threaded
-# through to the hashing, which would silently narrow what this tool
-# checks rather than fail. The same rule is enabled for emubox-prepare
-# next door, for the same reason in its own vocabulary.
+# Defaults plus three groups, kept in step with emubox-prepare next door so
+# the two project-owned Python programs are linted to one standard.
+#
+# ARG: an unused argument here is almost always an inventory entry's field
+# or a directory that stopped being threaded through to the hashing, which
+# would silently narrow what this tool checks rather than fail.
+#
+# S (flake8-bandit): this tool hashes files off `/data` and reports on
+# them. Nothing here fires today, which is the cheapest possible time to
+# turn a ruleset on.
+#
+# RUF100: a noqa naming a rule nobody selected reads like a considered
+# suppression and silences nothing. Next door that had already happened.
+#
 # Under `[lint]` rather than at the top level, which this ruff deprecates.
 [lint]
-extend-select = ["ARG"]
+extend-select = ["ARG", "S", "RUF100"]
+
+# S101, for the reason spelled out in emubox-prepare's config: the rule
+# guards against `python -O` stripping an assertion that was validating
+# input, and nothing here runs under `-O` or asserts on input.
+ignore = ["S101"]

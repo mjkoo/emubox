@@ -465,6 +465,14 @@ in
     # --- off-site backups: local fake repository, real service transaction --
 
     with checked("Restic uses one read-only source and backs up only typed roots"):
+        # The declared niceness reached the running unit. The values themselves
+        # are pinned in tests/backups.nix; what systemd loaded is only visible
+        # here.
+        assert unit_property(BACKUP, "Nice") == "19"
+        # systemd exports the I/O class as an integer (`"i"` in
+        # dbus-execute.c), so `systemctl show` prints IOPRIO_CLASS_IDLE's
+        # numeric 3 rather than the `idle` spelling the unit declares.
+        assert unit_property(BACKUP, "IOSchedulingClass") == "3"
         machine.succeed("systemctl stop restic-backups-emubox.timer")
         machine.succeed("mkdir -p /data/es-de /data/bios /data/home/player/.cache /data/home/player/.local/cache")
         machine.succeed("printf original > /data/saves/snapshot-consistency-fixture")

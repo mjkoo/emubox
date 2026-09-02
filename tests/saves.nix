@@ -242,12 +242,22 @@ assert lib.assertMsg
   (lib.all (
     mapping:
     lib.any (
-      mount: mount.where == mapping.where && lib.elem "emubox-save-migrate.service" mount.after
+      mount:
+      mount.where == mapping.where
+      && lib.elem "emubox-save-migrate.service" mount.after
+      # The link that makes a mount failure a kiosk failure. The target
+      # `requires` every mount and display-manager `requires` the target
+      # (asserted above), so one mount that cannot activate fails the target
+      # and the kiosk never starts. Without this the display-manager
+      # assertion proves only that it waits for a target nothing depends on.
+      && lib.elem "emubox-save-routes.target" mount.requiredBy
+      && lib.hasPrefix "/data/saves/" mount.what
     ) host.config.systemd.mounts
   ) saves.bindMappings)
   ''
     tests/saves.nix: migration must complete before every mandatory save bind
-    mount can activate.
+    mount, each mount must source from beneath /data/saves, and a mount that
+    fails must take the save-route target, and so the kiosk, down with it.
   '';
 assert lib.assertMsg
   (

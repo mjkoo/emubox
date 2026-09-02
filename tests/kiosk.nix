@@ -1332,6 +1332,18 @@ assert lib.assertMsg
           retry(lambda _: session_on_seat("player"), timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)
 
+          # Every route's fixture was written through the emulator's own save
+          # path before the reboot; each must still read back from beneath
+          # `/data/saves`. Checked here rather than in a subtest of its own so
+          # that it is genuinely across the boot the greeter triggered, and
+          # over every route rather than the single one tests/default.nix
+          # carries across its crash.
+          for route in save_routes:
+              fixture = f"{route['destination']}/kiosk-route-fixture"
+              assert machine.succeed(f"cat {fixture}").strip() == "kiosk", fixture
+          for mapping in save_bind_mappings:
+              machine.succeed(f"mountpoint -q {mapping['where']}")
+
       # --- emulators/retroachievements: design D7 ---------------------------
       #
       # Everything below runs after the kiosk session mechanism above is

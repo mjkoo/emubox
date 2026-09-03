@@ -158,8 +158,11 @@
   - before (the configupdater layer at the parity baseline, 18
     definitions from `_INI_SECTION_RE` through
     `set_retroarch_settings`): 187 statements, 73 branch points.
-  - after (the document model, 20 definitions from `Blank` through
-    `set_retroarch_settings`): 201 statements, 79 branch points.
+  - after (the document model, 21 definitions from `Blank` through
+    `set_retroarch_settings`, `_delete_key` included): 204 statements,
+    78 branch points. An earlier record here said 201/79, measured
+    before a review-suggested helper extraction landed; this is the
+    re-run at the commit that carries the record.
   The raw counts grew: the five node dataclasses and their field
   declarations are 5 of the 20 definitions and carry no logic, and
   the classifier states the whole grammar in one place where the old

@@ -15,7 +15,7 @@ An owned setting the flake declares a value for SHALL appear exactly once in the
 
 #### Scenario: Owned key appears more than once
 - **WHEN** the frontend is about to launch and the settings file carries two or more entries for one owned setting
-- **THEN** exactly one entry for that setting remains, holding the flake's value, and a later launch reports the file already correct rather than changing it again
+- **THEN** exactly one entry for that setting remains, holding the flake's value, and a later launch leaves the file unchanged rather than changing it again
 
 #### Scenario: Unowned key repeats
 - **WHEN** the settings file carries two or more entries for a setting the flake does not own

@@ -248,9 +248,16 @@ code did. Assigning `section[key] = value` on a section instance that
 already carries `key` twice edits the first line and leaves the second,
 exactly as a single `del` does. So a repeat has three shapes, not two:
 across repeated instances of a section, between the headerless region and
-a section, and twice inside one section instance. Only the first two are
-handled today; the third is a live gap in the current editor, and task 2.3
-closes it.
+a section, and twice inside one section instance. Only the first is fully
+handled today; the third is a live gap in the current editor, and the
+second has a live edge executed against today's code: when the owned
+section is absent from the file entirely, the stale-twin sweep finds no
+section bounds and stops, so a write appends the fresh section while the
+headerless twin stands - the emulator reads the stale value for one
+launch, and the next run sweeps the twin and writes again, so the editor
+is not idempotent on that shape either. Both are closed by the same rule,
+since the reduce runs over the headerless region whether or not the
+section exists yet, and task 2.3 pins both.
 
 ### 6. The load helper has a silent variant, for the read that is only a probe
 
@@ -318,8 +325,9 @@ checked against `configupdater` 3.2 rather than assumed.
 **Outside the contract, deliberately.** Delimiter spacing on a changed owned
 value, so a source line `Key=old` comes back as `Key = new`; the position of a
 newly seeded owned key within its section; the position of the surviving
-assignment when a repeat is reduced to one; and an inline comment sharing a
-line with an owned assignment whose value changes. None is observable to an
+assignment when a repeat is reduced to one; an inline comment sharing a
+line with an owned assignment whose value changes; and a section header's
+trailing comment when rule 3 below normalises that header. None is observable to an
 emulator reading the file. `configupdater` 3.2 does expose
 `space_around_delimiters`, which renders the spaceless form directly, but it is
 per document rather than per line and the ruling is not to use it.
@@ -388,7 +396,9 @@ and stranding a credential. None is closed by a constructor option.
      parity; `[foo] = bar` is not, and is recorded below as a shape that
      moves.
    - Both match but their names differ: **rewrite that line to `[<name>]`,
-     where `<name>` is `_INI_SECTION_RE`'s group, before wrapping.** This is
+     where `<name>` is `_INI_SECTION_RE`'s group, before wrapping.** The
+     rewritten line is still subject to rule 4, which runs after this rule -
+     a rewrite can mint the sentinel's canonical spelling. This is
      the case a legal trailing comment containing a `]` produces -
      `[Achievements] ; was [Cheevos]`, which today's parser reads as section
      `Achievements` and edits in place, removing the token and keeping every
@@ -413,14 +423,21 @@ and stranding a credential. None is closed by a constructor option.
    every newline-free string is a legal header name, and a name containing a
    newline cannot serve as the wrapper. **Rule:** the sentinel is a fixed
    improbable literal, and the refusal check is the whole of the defence. The
-   load helper refuses source text in which any line, after its leading
-   whitespace is stripped, is matched by `SECTCRE` with a header group equal to
-   the sentinel - with no restriction on what follows the closing bracket,
-   since that group is `.*` and accepts any text. A naive substring test for
-   `[<sentinel>]\n` is not sufficient. This rule is needed for *both* formats
-   and is the sole defence against the collision: a canonical `[<sentinel>]`
-   line is named identically by both grammars, so rule 3 accepts it and only
-   this rule catches it. Rule 3 refuses only the suffixed spellings.
+   load helper refuses a document in which any line, as it stands after rule
+   2's whitespace stripping and rule 3's header normalisation, is matched by
+   `SECTCRE` with a header group equal to the sentinel - with no restriction
+   on what follows the closing bracket, since that group is `.*` and accepts
+   any text. The check runs after rule 3 because rule 3's rewrite branch can
+   itself mint the canonical line, executed against 3.2: `[<sentinel>] ; [x]`
+   has a greedy `SECTCRE` header of `<sentinel>] ; [x` in the source
+   spelling, so a check over the raw text passes it, and the rewrite then
+   normalises it to `[<sentinel>]` - exactly the line this rule exists to
+   refuse, published into the written file if nothing checks again. A naive
+   substring test for `[<sentinel>]\n` is not sufficient either. This rule is
+   needed for *both* formats and is the sole defence against the collision: a
+   canonical `[<sentinel>]` line, whether present in the source or minted by
+   rule 3's rewrite, is named identically by both grammars, so rule 3 accepts
+   it and only this rule catches it.
 5. *An empty or whitespace-only file.* `_parse_ini` returns None for text that
    does not `strip()`, which drives `set_ini_settings`'s deferred "is empty;
    recreating it" note; through the synthetic header, `""`, `"\n"` and
@@ -434,7 +451,16 @@ and stranding a credential. None is closed by a constructor option.
    `emubox-prepare` unguarded under `set -e` with an EXIT trap that ends at the
    greeter, so an escaping parse error would end the family's evening rather
    than recreate a file. **Rule:** the load helper catches
-   `configparser.Error` and reports the file unparseable.
+   `configparser.Error` and reports the file unparseable. One consequence of
+   how the library raises, executed against 3.2 and easy to get wrong: a
+   `MissingSectionHeaderError` raises immediately, but a `ParsingError` is
+   collected and raised only after the whole source has been consumed, with
+   the document object partially populated behind it. A helper that binds the
+   document before `read_string` succeeds therefore holds a half-parsed
+   document on the error path, and if any code reaches it the recreate path
+   never runs - executed, that left a `Token` assignment on disk through an
+   all-removals pass. The helper parses into a local and publishes the
+   document only on success; nothing may touch it after either exception.
 
 **Recreate width.** Which files are editable is set by the parser options *and*
 by the guards above, and the defaults do not match today's parsers.

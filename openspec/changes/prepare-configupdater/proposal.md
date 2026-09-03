@@ -3,8 +3,8 @@
 `emubox-prepare` carries its own INI parser, its own RetroArch flat-file
 parser, and the line-index arithmetic both need: eleven functions, about 159
 lines, hand-maintained. All eleven go; the one constant they share stays. Parsing a settings file is a solved problem, and the
-part of it this program actually needs - editing a key in place while leaving
-comments, ordering and every unowned key byte-identical - is solved too, by
+part of it this program actually needs - editing a key in place while every
+setting the emulator reads keeps its key and its value - is solved too, by
 `configupdater`, which is packaged in nixpkgs, pure Python and maintained.
 
 What breaks if this is not done: nothing today, and that is the point of doing
@@ -87,7 +87,7 @@ None.
 
 `pkgs/emubox-prepare/emubox_prepare.py` and its test suite, which gains
 tests and amends one; `pkgs/emubox-prepare/package.nix` gains one Python
-dependency. No NixOS module changes, and no changes to the module-level
+dependency. No NixOS module behaviour changes, and no changes to the module-level
 unit or VM tests: the program's invocation contract, its exit codes and
 the files it writes are all unchanged. One prose note in
 `modules/emulators/default.nix` explains a past Azahar key-spelling

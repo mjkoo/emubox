@@ -72,8 +72,8 @@ governs and the replacement carries only the owned values.
   file with no sections, or under a section header that appears twice,
   and the frontend is about to launch
 - **THEN** exactly one assignment of that key remains, holding the
-  flake's value, and a later launch reports the file already correct
-  rather than changing it again
+  flake's value, and a later launch leaves the file unchanged rather
+  than changing it again
 
 #### Scenario: Unowned key repeats
 - **WHEN** an emulator's readable configuration assigns a key the flake

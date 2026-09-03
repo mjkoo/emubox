@@ -91,11 +91,12 @@ The three editors, and what each is built on:
 - ES-DE's settings file is a rootless sequence of typed XML elements, read
   through `xml.etree.ElementTree` under a wrapper element.
 - Sectioned INI and RetroArch's headerless `key = "value"` file are both
-  read through `configupdater`, which edits a document in place and so keeps
-  comments, ordering and every key the flake does not own. Every flat file
-  is wrapped in a synthetic section header that is stripped again on the way
-  out, which is what lets one sectioned-INI library read a file with no
-  sections and an INI file whose first assignment sits above every header.
+  read into a line-oriented document model of this module's own: every
+  line is classified as blank, comment, section header or assignment, each
+  node keeps its source line verbatim, and rendering is concatenation -
+  which keeps comments, ordering, indentation and every key the flake does
+  not own. The grammar is exactly what each emulator's own parser reads,
+  stated once in the per-line classifier.
 
 What the flat editors promise is semantic equivalence for the emulator that
 reads the file: every setting it reads keeps its key, its value and its
@@ -117,7 +118,6 @@ credential rather than a preference.
 from __future__ import annotations
 
 import base64
-import configparser
 import hashlib
 import http.client
 import json
@@ -137,15 +137,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-from configupdater import (
-    AlreadyAttachedError,
-    AssignMultilineValueError,
-    ConfigUpdater,
-    InconsistentStateError,
-    NotAttachedError,
-    Parser,
-    Section,
-)
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # ES-DE writes its settings as a rootless sequence of typed elements - pugixml
@@ -155,10 +146,6 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 _WRAPPER = "emubox-settings-forest"
 _XML_DECLARATION = '<?xml version="1.0"?>'
 _DECLARATION_RE = re.compile(r"^\s*<\?xml[^>]*\?>\s*")
-# A trailing comment after a section header is legal INI and is accepted by
-# configparser and Qt alike; rejecting one would send the whole file through
-# the recreate path and lose every unowned key in it.
-_INI_SECTION_RE = re.compile(r"^\s*\[(?P<name>[^]]*)\][ \t]*(?:[;#].*)?$")
 
 
 def note(message: str) -> None:
@@ -370,10 +357,11 @@ def _writable(
     the flake as a multi-line string. Neither is validated anywhere else.
 
     Dropped rather than raised, and dropped for *every* branch rather than
-    only where the library objects. The library refuses to assign such a
-    value to an option that already exists but builds one happily for an
-    option that does not, so a guard on the edit path alone would let the
-    recreate path write the very line that makes the next launch raise.
+    only at the edit path: the recreate branches build fresh assignment
+    nodes without passing the edit path, so a guard there alone would let
+    a recreation write the very line that destroys the file one launch
+    later. The renderer's own assertion is the backstop, not the policy;
+    this drop, with its note, is the policy.
     """
     writable: dict[str, str | Removal] = {}
     for key, value in keys.items():
@@ -521,392 +509,6 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
     return changed
 
 
-# --- Reading a flat file: sectioned INI, and RetroArch's headerless one ---
-#
-# Both flat formats are edited through one comment-preserving INI library,
-# and every file is read through a synthetic section header that the dump
-# strips off again. One trick, two problems: RetroArch's file has no sections
-# at all, so a sectioned-INI library cannot read it otherwise; and an INI
-# file carrying an assignment above its first header is rejected by the
-# library outright, though it has always been editable here, because a key
-# there belongs to no section and so to no section's owner.
-#
-# The wrapper's name is an improbable literal rather than something
-# unspellable, because nothing is unspellable: the library's section grammar
-# accepts any newline-free name, and a name carrying a newline could not
-# serve as the wrapper. A file that spells this one is refused and recreated,
-# which is the whole of the defence against that collision.
-_FLAT_WRAPPER_SECTION = "emubox-flat-file-wrapper"
-_FLAT_WRAPPER_HEADER = f"[{_FLAT_WRAPPER_SECTION}]"
-
-# What a refusal to parse can arrive as. `configupdater` raises four
-# exceptions of its own that are NOT `configparser.Error` - its parser raises
-# one of them from its own "cannot happen" branches - so catching the
-# `configparser` base alone leaves them to escape. The policy here is
-# recreate, not fail, and `main`'s editor loop guards `OSError` alone, so an
-# escaping library exception ends the session at a greeter rather than
-# replacing one file.
-_FLAT_PARSE_ERRORS = (
-    configparser.Error,
-    AssignMultilineValueError,
-    InconsistentStateError,
-    NotAttachedError,
-    AlreadyAttachedError,
-)
-
-
-class _Unparseable(Exception):
-    """A flat file that has to be recreated rather than edited in place.
-
-    `reason` is what the journal is told, or None where the caller owns the
-    note instead. Only one refusal is silent - an empty file - because the
-    INI editor defers that note until it has confirmed a write actually
-    follows: a file whose owned keys are all removals is "recreated" into
-    nothing at all, and announcing that before every launch was a lie
-    repeated forever.
-    """
-
-    def __init__(self, reason: str | None) -> None:
-        super().__init__(reason or "")
-        self.reason = reason
-
-
-def _flat_document(*, ini: bool) -> ConfigUpdater:
-    """An empty parser configured the way both flat formats are read.
-
-    `delimiters` is `=` alone, so a `Time: 12` line stays a line that is not
-    a setting rather than becoming an option, which is what this program has
-    always done with one. `comment_prefixes` is per format: RetroArch's own
-    parser gives `;` no special meaning, so a `;`-prefixed line there is not
-    a comment and a file carrying one is not that format.
-
-    `optionxform` is assigned rather than passed, because `ConfigUpdater`
-    takes no such argument, though the `Parser` it builds internally does.
-    Left at its default the library folds option names to lower case, and the
-    keys this program owns are not all lower case - `Username`, `Token`, and
-    Azahar's `firstStart` and `firstStart\\default`. Folding would make
-    `"Username" in section` False for a file spelling it `Username`, so a
-    sweep that iterates to absence would never run and the editor would
-    append a second credential beside the stale one.
-    """
-    document = ConfigUpdater(
-        strict=False,
-        delimiters=("=",),
-        comment_prefixes=("#", ";") if ini else ("#",),
-    )
-    # Assigned rather than passed, and the checker is told so: the attribute
-    # it shadows is declared as a method, which is how `configparser` has
-    # always let a caller replace the transform.
-    document.optionxform = str  # ty: ignore[invalid-assignment]
-    return document
-
-
-def _flat_source(text: str) -> str:
-    """`text` made safe for the library, wrapped in the synthetic header.
-
-    The same for both formats, because every hazard it answers is the
-    library's rather than the file's. Raises `_Unparseable` for the two shapes
-    that have to be recreated instead: a bracketed line the library would
-    name differently than this program does, and a file already carrying the
-    wrapper's own header.
-    """
-    # A final line with no terminator has none in the library's stored text
-    # either, so appending an option writes straight onto the end of it:
-    # `Token = x` plus a new key renders `Token = xNew = y`, destroying an
-    # unowned assignment and the owned key together, and the next run reads
-    # the wreckage back as a healthy assignment. An unterminated last line is
-    # what a power cut leaves. Appended, never normalised: a strip-then-
-    # append would eat a trailing run of blank lines the file is entitled to.
-    if text and not text.endswith("\n"):
-        text += "\n"
-
-    # Split on newlines alone. `str.splitlines()` also breaks on U+2028, form
-    # feed and the other exotic separators, so a value carrying one would be
-    # cut into a fragment that fails the checks below and take the whole file
-    # into the recreate path with it.
-    #
-    # Then strip each line's leading whitespace, all of it. A
-    # `configparser`-family parser reads a line indented past its option as a
-    # continuation of that option's value, so an indented comment, assignment
-    # or section header is swallowed and disappears on the next write.
-    # Stripped, each is a line in its own right again; the cost is the
-    # indentation, which no emulator reads.
-    #
-    # All of it rather than spaces and tabs, because the parser strips the
-    # whole line before matching a section header against it. Stripping less
-    # than the parser does leaves a gap between what the checks below see and
-    # what the library reads: a header indented by a form feed or a
-    # non-breaking space is not examined here - the bracket test below never
-    # fires - and is still a section to the library, so a removal sweeping
-    # the declared section walks straight past a live token that then parses
-    # cleanly on every launch after. Stripping less also leaves those same
-    # characters able to indent a line into a value continuation.
-    lines = [line.lstrip() for line in text.split("\n")]
-
-    for index, line in enumerate(lines):
-        if not line.startswith("["):
-            continue
-        theirs = Parser.SECTCRE.match(line)
-        if theirs is None:
-            # Not a header to the library either, so it reaches the parser
-            # as whatever it is: `[foo bar = baz` stays an ordinary option
-            # named `[foo bar`, exactly as this program has always read it,
-            # and `[]` raises below and takes the recreate path - which is
-            # better than it used to fare, where an empty section name never
-            # equalled the owned one and a live token stranded on disk.
-            continue
-        ours = _INI_SECTION_RE.match(line)
-        if ours is None:
-            # The library reads a section here and this program does not, so
-            # every key below the line would be attributed to a section that
-            # does not exist in the file the emulator reads - and a removal
-            # sweeping the declared section would walk past a live token.
-            raise _Unparseable(
-                f"has a section header this program cannot read ({line!r})"
-            )
-        if ours.group("name") != theirs.group("header"):
-            # Both read a header, under different names. The ordinary way
-            # that happens is a legal trailing comment carrying a `]`:
-            # `[Achievements] ; was [Cheevos]`, which the library's greedy
-            # grammar names `Achievements] ; was [Cheevos`. Refusing it would
-            # recreate a file this program can edit, costing every unowned
-            # setting in it; normalising the header makes both grammars agree
-            # and costs only the header's own trailing comment.
-            lines[index] = f"[{ours.group('name')}]"
-
-    # After the rewrite above, never before it: a normalisation can itself
-    # mint the wrapper's canonical spelling out of `[<wrapper>] ; [x]`, whose
-    # greedy header in the source text is `<wrapper>] ; [x` and so passes a
-    # check over the raw text. A file carrying the wrapper's header yields
-    # two same-named sections, lookup resolves to the wrapper, the file's own
-    # keys go invisible, and stripping the leading line leaves the other
-    # header standing in what gets written.
-    for line in lines:
-        theirs = Parser.SECTCRE.match(line)
-        if theirs is not None and theirs.group("header") == _FLAT_WRAPPER_SECTION:
-            raise _Unparseable(f"carries this program's own wrapper header ({line!r})")
-
-    return f"{_FLAT_WRAPPER_HEADER}\n" + "\n".join(lines)
-
-
-def _load_flat(text: str, *, ini: bool) -> ConfigUpdater:
-    """`text` as an editable document, or `_Unparseable` if it is not one."""
-    if ini and not text.strip():
-        # An empty file is not a healthy document missing every key. Silent:
-        # `set_ini_settings` owns this note and emits it only once it knows a
-        # write follows. INI only, matching RetroArch's own parser, which has
-        # never had an emptiness check.
-        raise _Unparseable(None)
-
-    source = _flat_source(text)
-    document = _flat_document(ini=ini)
-    try:
-        # Parsed into a local and published only on success. A
-        # `MissingSectionHeaderError` raises at once, but a `ParsingError` is
-        # collected and raised after the whole source has been consumed, with
-        # a half-parsed document left behind it; an editor that reached that
-        # document would edit it, skip the recreation, and leave a live token
-        # on disk through an all-removals pass.
-        document.read_string(source)
-    except _FLAT_PARSE_ERRORS as error:
-        #
-        # Bounded, because the message names every offending line with its
-        # content and a badly torn file has many. The bound caps how much of
-        # the file reaches the journal, not which part: a torn write can put
-        # a credential fragment on a line that fails to parse, and the note
-        # has always been able to carry one. Keeping the reason at all is
-        # what makes the recreation diagnosable at 8pm on a Friday.
-        detail = " ".join(str(error).split())[:200]
-        raise _Unparseable(f"has a line that is not a setting ({detail})") from error
-
-    if not ini:
-        for section in document.iter_sections():
-            if section.name != _FLAT_WRAPPER_SECTION:
-                # RetroArch's own parser rejects every line without an `=`,
-                # so its files have no headers at all. Refusing one keeps
-                # this editor's premise true - the whole file is one
-                # section - rather than leaving everything below a bracketed
-                # line invisible to both the removal and the write sweeps.
-                raise _Unparseable(f"has a section header ({section.name!r})")
-
-    for section in document.iter_sections():
-        for option in section.iter_options():
-            if "\n" in (option.value or ""):
-                # The backstop behind stripping every line's indentation: a
-                # continuation needs a line the parser sees as indented, and
-                # after the strip no line is. Kept because the claim rests on
-                # two whitespace definitions agreeing, and if they ever drift
-                # the file takes the recreate path rather than losing a line.
-                raise _Unparseable(
-                    f"has a value spanning more than one line ({option.key!r})"
-                )
-
-    return document
-
-
-def _read_flat(path: Path, *, ini: bool) -> ConfigUpdater | None:
-    """The file as an editable document, or None if it must be recreated."""
-    text = _read_text(path)
-    if text is None:
-        return None
-    try:
-        return _load_flat(text, ini=ini)
-    except _Unparseable as refusal:
-        if refusal.reason is not None:
-            note(f"{path} {refusal.reason}; recreating it")
-        return None
-
-
-def _read_flat_quietly(path: Path, *, ini: bool) -> ConfigUpdater | None:
-    """The same, for a caller that is only asking what is already on disk.
-
-    Silent where `_read_flat` is loud, and for the same reason `_read_quietly`
-    is: this one runs before the program has decided to write anything, so a
-    note here would announce a recreation that is not happening.
-    """
-    text = _read_quietly(path)
-    if text is None:
-        return None
-    try:
-        return _load_flat(text, ini=ini)
-    except _Unparseable:
-        return None
-
-
-def _empty_flat_document(*, ini: bool) -> ConfigUpdater:
-    """A fresh document, wrapped exactly as a loaded one is.
-
-    So the recreate branches and the edit branches serialise through one
-    unconditional strip-the-first-line dump, rather than each format carrying
-    a renderer of its own.
-    """
-    document = _flat_document(ini=ini)
-    document.read_string(f"{_FLAT_WRAPPER_HEADER}\n")
-    return document
-
-
-def _dump_flat(document: ConfigUpdater) -> str:
-    """The document's text, with the synthetic header stripped off again."""
-    text = str(document)
-    prefix = f"{_FLAT_WRAPPER_HEADER}\n"
-    assert text.startswith(prefix)  # every document here came from this module
-    return text[len(prefix) :]
-
-
-def _flat_places(document: ConfigUpdater, section: str | None) -> list[Section]:
-    """Every place in the document an owned key of `section` can be assigned.
-
-    Each instance of the declared section - a header written twice is a shape
-    a torn or hand-edited file takes - plus the wrapper section, which holds
-    the region above the file's first header. An assignment there belongs to
-    no section, so no other section's owner can claim it. `section=None` is
-    RetroArch's flat file, whose whole content is the wrapper section.
-
-    An assignment under a *different* section is not in this list: it
-    genuinely belongs to somebody else.
-    """
-    return [
-        candidate
-        for candidate in document.iter_sections()
-        if candidate.name == _FLAT_WRAPPER_SECTION
-        or (section is not None and candidate.name == section)
-    ]
-
-
-def _flat_write_target(document: ConfigUpdater, section: str | None) -> Section:
-    """The one place an owned key's surviving assignment is left standing.
-
-    Appends the section when the file has none, which is what seeds a key
-    whose section the emulator has never written.
-    """
-    if section is None:
-        return document[_FLAT_WRAPPER_SECTION]
-    existing = document.get_section(section)
-    if existing is not None:
-        return existing
-    document.add_section(section)
-    return document[section]
-
-
-def _sweep_flat_key(document: ConfigUpdater, key: str, section: str | None) -> bool:
-    """Delete every assignment of an owned key, everywhere it belongs.
-
-    What `REMOVE` promises, rather than what a single lookup delivers. The
-    loop is not decoration: deleting an option removes one assignment, so a
-    section carrying the key twice still holds the second afterwards.
-    """
-    swept = False
-    for place in _flat_places(document, section):
-        while key in place:
-            del place[key]
-            swept = True
-    return swept
-
-
-def _write_flat_key(
-    document: ConfigUpdater, key: str, value: str, section: str | None
-) -> bool:
-    """Leave exactly one assignment of an owned key, holding the flake's value.
-
-    A repeat takes three shapes and all three end the same way: across
-    instances of a repeated section header, between the headerless region and
-    the section, and twice inside one section instance. Every reader this box
-    writes for resolves a repeat to one entry, so a copy left holding an
-    older value is the one the emulator obeys - and because the file does
-    carry the flake's value somewhere, the next launch finds nothing to do
-    and the discrepancy never surfaces. For the account name and token that
-    survivor is a bearer credential rather than a preference.
-
-    Deletion iterates to *one* here, never to absence: absence in every place
-    but the one being written, and inside that one down to a single survivor,
-    which then takes the value only if it does not already hold it. Deleting
-    every copy and assigning afterwards would be simpler and wrong - it makes
-    the editor write on every launch, which is the flash wear the comparison
-    below exists to prevent.
-
-    Callers drop a value carrying a newline before reaching here, so the
-    assignment below cannot be one the library refuses to store.
-    """
-    target = _flat_write_target(document, section)
-    changed = False
-
-    for place in _flat_places(document, section):
-        # Identity, not equality: a section compares equal on its name and its
-        # contents, so two instances of a repeated header carrying the same
-        # assignments are `==`, and the twin the sweep exists to clear is
-        # exactly the one that would be skipped.
-        if place is target:
-            continue
-        while key in place:
-            del place[key]
-            changed = True
-
-    # Down to a single survivor inside the written instance. Which copy
-    # survives changes the file's bytes but not the setting: either way one
-    # assignment is left holding the flake's value, and this pass has already
-    # set the change flag. The last is kept because it is the copy whose
-    # bytes are least likely to need rewriting - a file already showing the
-    # right value at the end of the section keeps that line verbatim.
-    copies = [option for option in target.iter_options() if option.key == key]
-    for stale in copies[:-1]:
-        stale.detach()
-        changed = True
-
-    if key not in target:
-        target[key] = value
-        return True
-
-    # Assigning rewrites the whole line, so an unconditional assignment would
-    # renormalise the spacing of a file its own emulator writes without any -
-    # Azahar rewrites `qt-config.ini` in full whenever it saves - and the two
-    # of them would take turns rewriting it before every launch, forever.
-    current = target[key].value
-    if current is None or current.strip() != value:
-        target[key] = value
-        changed = True
-    return changed
-
-
 # --- A flat file as a line-oriented document -------------------------------
 #
 # Sectioned INI and RetroArch's headerless `key = "value"` file are close
@@ -981,6 +583,22 @@ class Document:
     """The whole file; `sections[0]` is always the preamble."""
 
     sections: list[SectionNode]
+
+
+class _Unparseable(Exception):
+    """A flat file that has to be recreated rather than edited in place.
+
+    `reason` is what the journal is told, or None where the caller owns the
+    note instead. Only one refusal is silent - an empty file - because the
+    INI editor defers that note until it has confirmed a write actually
+    follows: a file whose owned keys are all removals is "recreated" into
+    nothing at all, and announcing that before every launch was a lie
+    repeated forever.
+    """
+
+    def __init__(self, reason: str | None) -> None:
+        super().__init__(reason or "")
+        self.reason = reason
 
 
 # This program's section grammar: a non-empty bracketed name that cannot
@@ -1175,6 +793,19 @@ def _document_write_target(document: Document, section: str | None) -> SectionNo
     return created
 
 
+def _delete_key(place: SectionNode, key: str) -> bool:
+    """Delete every assignment of `key` in one section; whether any went."""
+    kept = [
+        child
+        for child in place.children
+        if not (isinstance(child, Assignment) and child.key == key)
+    ]
+    if len(kept) == len(place.children):
+        return False
+    place.children[:] = kept
+    return True
+
+
 def _sweep_key(document: Document, key: str, section: str | None) -> bool:
     """Delete every assignment of an owned key, everywhere it belongs.
 
@@ -1183,13 +814,7 @@ def _sweep_key(document: Document, key: str, section: str | None) -> bool:
     """
     swept = False
     for place in _document_places(document, section):
-        kept = [
-            child
-            for child in place.children
-            if not (isinstance(child, Assignment) and child.key == key)
-        ]
-        if len(kept) != len(place.children):
-            place.children[:] = kept
+        if _delete_key(place, key):
             swept = True
     return swept
 
@@ -1226,13 +851,7 @@ def _write_key(document: Document, key: str, value: str, section: str | None) ->
         # be skipped.
         if place is target:
             continue
-        kept = [
-            child
-            for child in place.children
-            if not (isinstance(child, Assignment) and child.key == key)
-        ]
-        if len(kept) != len(place.children):
-            place.children[:] = kept
+        if _delete_key(place, key):
             changed = True
 
     copies = [

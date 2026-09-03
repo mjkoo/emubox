@@ -3915,49 +3915,19 @@ def test_main_enabled_then_disabled_removes_every_credential_and_stays_idempoten
     assert not cache_file.exists()
 
 
-# --- Reading a flat file through one INI library ---------------------------
+# --- The refusal boundary, exercised through the editors --------------------
 #
-# Both flat editors read every file through a synthetic section header that
-# the dump strips again, so a headerless RetroArch config and an INI file
-# whose first assignment sits above every header are both editable by a
-# sectioned-INI library. The library's idea of an unparseable file is not
-# this program's, and the gap goes both ways: a shape it accepts where this
-# program recreated costs nothing, but a shape it *names differently* narrows
-# the recreate path and strands a live bearer token on disk. The tests below
-# pin each of those seams to the mechanism that closes it.
+# The boundary between "edited in place" and "recreated, unowned keys lost"
+# is the riskiest thing the flat editors carry, so the shapes that sit on
+# it are pinned here through the public editors: unterminated last lines,
+# indentation, bracketed lines the header grammar argues about, and the
+# section name the editors' old implementation once reserved for itself.
 
-WRAPPER = ep._FLAT_WRAPPER_SECTION
-
-
-def load(text: str, *, ini: bool = True) -> ep.ConfigUpdater:
-    return ep._load_flat(text, ini=ini)
-
-
-def round_trip(text: str, *, ini: bool = True) -> str:
-    return ep._dump_flat(load(text, ini=ini))
-
-
-def test_flat_round_trip_is_byte_identical_for_a_file_starting_with_a_header() -> None:
-    # An unedited round trip is not the contract - an edited file promises
-    # only that no unowned setting changed - but it is free, and it is what
-    # says the synthetic header leaves no blank line where it stood.
-    text = "# written by the emulator\n[Interface]\nLanguage = 0\n\n[Display]\nFullscreen = False\n"
-
-    assert round_trip(text) == text
-
-
-def test_flat_round_trip_is_byte_identical_for_a_file_with_a_preamble() -> None:
-    # The shape the library rejects outright with MissingSectionHeaderError,
-    # and the reason the wrapper exists at all for an INI file.
-    text = "Token = stray\n; a comment\n[Achievements]\nUsername = alice\n"
-
-    assert round_trip(text) == text
-
-
-def test_flat_round_trip_keeps_a_trailing_run_of_blank_lines() -> None:
-    text = '# RetroArch config\nvideo_fullscreen = "true"\n\n\n'
-
-    assert round_trip(text, ini=False) == text
+# The synthetic wrapper section name a previous implementation read every
+# flat file through. No current code spells it; these tests pin that a file
+# carrying it is an ordinary file, and that no file this program writes
+# ever gains it.
+WRAPPER = "emubox-flat-file-wrapper"
 
 
 # A final line with no terminating newline.
@@ -3966,12 +3936,11 @@ def test_flat_round_trip_keeps_a_trailing_run_of_blank_lines() -> None:
 def test_ini_appending_a_key_to_an_unterminated_file_keeps_the_last_line(
     tmp_path: Path,
 ) -> None:
-    # The library stores each block's raw text including its terminator, so
-    # an unterminated last option has none and a new option is written
-    # straight onto the end of it: `Token = xNew = y`, which destroys the
-    # unowned assignment and the owned key together and which the next run
-    # reads back as a healthy setting. An unterminated last line is what a
-    # power cut leaves.
+    # An unterminated last line is what a power cut leaves. A renderer that
+    # reproduced the missing terminator would write a new option straight
+    # onto the end of that line - `Token = keepmeUsername = alice` - which
+    # destroys the unowned assignment and the owned key together and which
+    # the next run reads back as a healthy setting.
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nToken = keepme")
 
@@ -3995,10 +3964,13 @@ def test_retroarch_appending_a_key_to_an_unterminated_file_keeps_the_last_line(
     assert 'cheevos_username = "alice"' in lines
 
 
-# An indented line, which a configparser-family parser reads as a
-# continuation of the option above it and which therefore disappears on the
-# next write. Each case changes an owned value in the same run, since that is
-# when an unstripped helper destroys the line.
+# An indented line. A configparser-family parser would read one as a
+# continuation of the option above it; this program's classifier reads the
+# fully stripped line, so an indented comment, assignment or header is
+# still that line, and its indentation survives the write because the node
+# keeps the raw line. Each case changes an owned value in the same run, so
+# a helper that destroyed or stripped the neighbouring lines would show up
+# in the written file.
 
 
 def test_ini_keeps_an_indented_comment_through_a_write(tmp_path: Path) -> None:
@@ -4040,17 +4012,6 @@ def test_ini_keeps_an_indented_section_header_through_a_write(tmp_path: Path) ->
     assert "ConfirmStop = False" in text
 
 
-def test_flat_documents_read_an_indented_line_as_a_value_continuation() -> None:
-    # Why the stripping above exists, stated against the library rather than
-    # against a file: left indented, this line is not a line at all but the
-    # tail of the value above it, and writing that option renders the file
-    # without it.
-    document = ep._flat_document(ini=True)
-    document.read_string(f"[{WRAPPER}]\n[A]\nkey = 1\n    continued\n")
-
-    assert document["A"]["key"].value == "1\ncontinued"
-
-
 @pytest.mark.parametrize("indent", [" ", "\t", "\x0b", "\x0c", "\xa0", "\u3000"])
 def test_ini_keeps_a_line_indented_by_any_whitespace(
     tmp_path: Path, indent: str
@@ -4074,13 +4035,12 @@ def test_ini_keeps_a_line_indented_by_any_whitespace(
 def test_ini_removes_a_token_under_a_header_indented_by_exotic_whitespace(
     tmp_path: Path, indent: str
 ) -> None:
-    # The credential path, through the same gap. The parser strips the whole
-    # line before matching a section header, so a header indented by anything
-    # this program does not strip is still a section to the library while the
-    # bracket test never examines it - the removal sweeps a section the file
-    # does not appear to have, the document parses cleanly so nothing is
-    # recreated, and the token stays on disk on this launch and every launch
-    # after it.
+    # The credential path, through the same gap. If classification stripped
+    # less whitespace than a header can be indented by, a header indented by
+    # the difference would not be a header here - the removal would sweep a
+    # section the file does not appear to have, the document would parse
+    # cleanly so nothing is recreated, and the token would stay on disk on
+    # this launch and every launch after it.
     path = tmp_path / "secrets.ini"
     path.write_text(f"{indent}[Achievements] ; was [Cheevos]\nToken = TOKENlive\n")
 
@@ -4089,11 +4049,12 @@ def test_ini_removes_a_token_under_a_header_indented_by_exotic_whitespace(
     assert "TOKENlive" not in path.read_text()
 
 
-# A bracketed line the library names differently than this program
-# does. This is the credential path: where the two grammars disagree about a
-# section's *name*, a removal loop over the declared section finds nothing,
-# the document parses cleanly so no recreation fires, and a live token
-# survives every launch after.
+# A bracketed line the permissive header grammar other INI readers use
+# (greedy to the last bracket) names differently than this program's. This
+# is the credential path: were such a line kept, a removal loop over the
+# declared section could sweep a section the emulator reads under another
+# name, the file would parse cleanly so no recreation fires, and a live
+# token would survive every launch after.
 
 RA_SECRET = {"Achievements": {"Token": ep.REMOVE}}
 
@@ -4136,12 +4097,12 @@ def test_ini_keeps_a_header_whose_hash_comment_carries_a_bracket(
 @pytest.mark.parametrize(
     "header", ["[Achievements] [was Cheevos]", "[Achievements][x]"]
 )
-def test_ini_recreates_a_header_only_the_library_reads(
+def test_ini_recreates_a_header_shape_two_grammars_name_differently(
     tmp_path: Path, header: str
 ) -> None:
-    # Both grammars read a header here, under names that cannot be reconciled
-    # by normalising, so the file takes the recreate path - which is what it
-    # does today, and which is what takes the token off the disk.
+    # The permissive grammar reads a header here under a name this
+    # program's grammar cannot reproduce, so the file takes the recreate
+    # path - which is what takes the token off the disk.
     path = tmp_path / "secrets.ini"
     path.write_text(f"{header}\nToken = TOKENlive\n")
 
@@ -4154,10 +4115,10 @@ def test_ini_recreates_a_header_only_the_library_reads(
 def test_ini_recreates_a_file_with_an_empty_section_name(
     tmp_path: Path, header: str
 ) -> None:
-    # The library reads no header here, so the line reaches the parser and
-    # raises. Better than it used to fare: this program's own grammar matched
-    # `[]` with an empty name that never equalled the owned section, so the
-    # token stranded on disk through every launch.
+    # `[]` is not a header - a header's name is non-empty - and it carries
+    # no `=`, so it is not a setting either and the file is refused. An
+    # empty section name could never equal the owned section's, so keeping
+    # it would strand the token on disk through every launch.
     path = tmp_path / "secrets.ini"
     path.write_text(f"{header}\nToken = TOKENlive\n")
 
@@ -4169,9 +4130,10 @@ def test_ini_recreates_a_file_with_an_empty_section_name(
 def test_ini_keeps_a_bracketed_line_neither_grammar_reads_as_a_header(
     tmp_path: Path,
 ) -> None:
-    # `[foo bar = baz` is an ordinary option named `[foo bar` to the library
-    # and to this program alike, and it stays one. A guard that refused every
-    # bracketed line would destroy a file this program preserves.
+    # `[foo bar = baz` has no closing bracket, so no header grammar -
+    # strict or permissive - reads it; it is an ordinary assignment named
+    # `[foo bar` and stays one. A guard that refused every bracketed line
+    # would destroy a file this program preserves.
     path = tmp_path / "secrets.ini"
     path.write_text("[Achievements]\nToken = TOKENlive\n[foo bar = baz\n")
 
@@ -4291,32 +4253,10 @@ def test_retroarch_recreates_a_file_spelling_the_wrapper_header(
     assert WRAPPER not in text
 
 
-def test_a_naive_substring_check_would_not_catch_the_normalised_spelling() -> None:
-    # What makes the ordering load-bearing rather than incidental: the
-    # canonical wrapper line is absent from this source text and present
-    # after the header normalisation runs.
-    source = f"[{WRAPPER}] ; [x]\nToken = live\n"
-
-    assert f"[{WRAPPER}]\n" not in source
-    with pytest.raises(ep._Unparseable):
-        load(source)
-
-
 # An empty or whitespace-only file. INI only, matching RetroArch's
-# own parser, which has never had an emptiness check. Reported *silently*, so
-# `set_ini_settings` keeps its own deferred note and emits it only once a
-# write is confirmed.
-
-
-@pytest.mark.parametrize("text", ["", "\n", "   \n"])
-def test_flat_reports_an_empty_ini_unparseable_without_a_word(
-    text: str, capsys: pytest.CaptureFixture[str]
-) -> None:
-    with pytest.raises(ep._Unparseable) as refused:
-        load(text)
-
-    assert refused.value.reason is None
-    assert capsys.readouterr().err == ""
+# own parser, which has never had an emptiness check. Refused *silently* at
+# parse, so `set_ini_settings` keeps its own deferred note and emits it
+# only once a write is confirmed.
 
 
 @pytest.mark.parametrize("text", ["", "\n", "   \n"])
@@ -4332,30 +4272,23 @@ def test_ini_recreates_a_whitespace_only_file_with_its_own_note(
     assert "is empty; recreating it" in capsys.readouterr().err
 
 
-def test_flat_reads_an_empty_retroarch_file_as_a_document() -> None:
-    assert ep._dump_flat(load("", ini=False)) == ""
-
-
-# The library's own parse failures. `main`'s editor loop guards
-# `except OSError` only and the kiosk session runs this program unguarded
-# under `set -e` with an EXIT trap that ends at the greeter, so an escaping
-# parse error would end the family's evening rather than recreate a file.
-# Each case asserts the editor recreates the file carrying every owned value,
-# not merely that it returned - a helper that swallowed the exception and
-# gave up would satisfy the weaker claim while leaving the file valueless.
+# Every shape of a non-setting line, through the public editors. The
+# refusal must arrive as a recreation carrying every owned value, not
+# merely a return - a helper that swallowed the refusal and gave up would
+# satisfy the weaker claim while leaving the file valueless.
 
 
 @pytest.mark.parametrize(
     "line",
     [
-        # A `key: value` line, which the library's default delimiters would
-        # have made an ordinary option.
+        # A `key: value` line: `=` is the only delimiter either format has,
+        # so a colon assignment is not a setting here.
         "Time: 12",
         "barekeywithnoassignment",
         "= value",
     ],
 )
-def test_ini_recreates_a_file_the_library_cannot_parse(
+def test_ini_recreates_every_shape_of_a_non_setting_line(
     tmp_path: Path, line: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = tmp_path / "Dolphin.ini"
@@ -4371,7 +4304,7 @@ def test_ini_recreates_a_file_the_library_cannot_parse(
 
 
 @pytest.mark.parametrize("line", ["Time: 12", "barekeywithnoassignment", "= value"])
-def test_retroarch_recreates_a_file_the_library_cannot_parse(
+def test_retroarch_recreates_every_shape_of_a_non_setting_line(
     tmp_path: Path, line: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = tmp_path / "retroarch.cfg"
@@ -4386,37 +4319,25 @@ def test_retroarch_recreates_a_file_the_library_cannot_parse(
     assert "not a setting" in capsys.readouterr().err
 
 
-# --- The two library behaviours the editors are built around ---------------
+# --- Key names match exactly, never case-folded -----------------------------
 
 
-def test_flat_lookup_does_not_fold_a_key_to_lower_case() -> None:
-    # Left at the library's default, option names are lower-cased, and every
-    # key this program owns is spelled with capitals. The consequence is a
-    # lookup one: `"Username" in section` would be False for a file spelling
-    # the key `Username` while `section["Username"]` resolved to the folded
-    # option, so a sweep written as `while key in section` would never run
-    # and the editor would append a second credential beside the stale one.
-    # A written key's declared case is preserved either way, so rendering
-    # pins nothing and is deliberately not the criterion here.
-    section = load("[Achievements]\nUsername = capital\nusername = lower\n")[
-        "Achievements"
-    ]
+def test_ini_edits_only_the_key_spelled_with_the_declared_case(
+    tmp_path: Path,
+) -> None:
+    # Every key this program owns is spelled with capitals, and a reader
+    # that folded case would make the sweep miss the file's copy and append
+    # a second credential beside the stale one. A lower-cased twin is
+    # somebody else's key and keeps its value.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = capital\nusername = lower\n")
 
-    assert "Username" in section
-    assert section["Username"].value == "capital"
-    assert section["username"].value == "lower"
-    assert section.options() == ["Username", "username"]
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
 
-
-def test_flat_deleting_a_repeated_key_leaves_the_second_assignment() -> None:
-    # Why both sweeps are loops. It reads as though it should be idempotent
-    # and is not.
-    section = load("[Achievements]\ntoken = one\ntoken = two\n")["Achievements"]
-
-    del section["token"]
-
-    assert "token" in section
-    assert section["token"].value == "two"
+    settings = ini_settings(path)
+    assert ("Achievements", "Username", "correct") in settings
+    assert ("Achievements", "username", "lower") in settings
+    assert ("Achievements", "Username", "capital") not in settings
 
 
 # --- The wrapper header never reaches a file this program writes -----------
@@ -4836,6 +4757,21 @@ def test_the_ini_probe_reads_the_value_that_is_there(tmp_path: Path) -> None:
     assert ep._current_ini_value(path, "Achievements", "Token") == "spaced"
 
 
+def test_the_ini_probe_reads_the_first_copy_of_a_repeated_key(
+    tmp_path: Path,
+) -> None:
+    # A hand-edited or torn file can repeat the key; the probe answers with
+    # the first copy, in the first instance of the section, and it is the
+    # editor's job - not the probe's - to reduce the repeat on its next
+    # write.
+    path = tmp_path / "settings.ini"
+    path.write_text(
+        "[Achievements]\nToken = first\nToken = second\n[Achievements]\nToken = third\n"
+    )
+
+    assert ep._current_ini_value(path, "Achievements", "Token") == "first"
+
+
 # --- RetroArch's flat file, under the same contract ------------------------
 
 RA_MIXED = (
@@ -5158,37 +5094,6 @@ def test_ini_collapses_a_repeat_whose_live_assignment_is_already_right(
     assert unwritten(path)
 
 
-def test_a_library_failure_the_parser_does_not_own_still_recreates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # `configupdater` raises four exceptions that are not `configparser.Error`
-    # and its parser raises one of them from its own "cannot happen" branches.
-    # Catching the `configparser` base alone would let those escape, and the
-    # session runs this program unguarded: the editor loop above it guards
-    # `OSError`, so an escaping library exception ends the evening at a
-    # greeter instead of replacing one file. Driven through a patched parse
-    # because the branches that raise it are unreachable by construction.
-    real = ep.ConfigUpdater.read_string
-
-    def explode(self: ep.ConfigUpdater, source: str) -> None:
-        # Only the file's own text: the fresh document the recreation builds
-        # parses a constant of this module's own and must still work.
-        if source.strip() != ep._FLAT_WRAPPER_HEADER:
-            raise ep.InconsistentStateError("simulated library failure")
-        real(self, source)
-
-    monkeypatch.setattr(ep.ConfigUpdater, "read_string", explode)
-
-    path = tmp_path / "Dolphin.ini"
-    path.write_text("[Interface]\nConfirmStop = True\nKeepMe = yes\n")
-
-    assert ep.set_ini_settings(path, INI_OWNED) is True
-
-    text = path.read_text()
-    assert "ConfirmStop = False" in text
-    assert "Fullscreen = True" in text
-
-
 def test_ini_refuses_an_owned_value_carrying_a_carriage_return(
     tmp_path: Path,
 ) -> None:
@@ -5209,31 +5114,6 @@ def test_ini_refuses_an_owned_value_carrying_a_carriage_return(
     settings = ini_settings(path)
     assert ("Achievements", "KeepMe", "precious") in settings
     assert ("Achievements", "Username", "old") in settings
-
-
-def test_flat_refuses_a_value_the_parser_still_read_as_a_continuation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The backstop behind stripping every line's indentation. It is
-    # unreachable while the strip and the parser agree on what whitespace is,
-    # which they do today - so it is driven through a strip that has been
-    # made to disagree, which is exactly the drift it exists to absorb. What
-    # it must deliver is the recreate path, not a swallowed line.
-    real = ep._flat_source
-
-    def leaves_an_indent(text: str) -> str:
-        # Indentation put back *after* the real stripping, which is what a
-        # strip and a parser that disagreed about one whitespace character
-        # would leave behind.
-        return real(text).replace("\ncontinued", "\n continued")
-
-    monkeypatch.setattr(ep, "_flat_source", leaves_an_indent)
-
-    with pytest.raises(ep._Unparseable) as refused:
-        ep._load_flat("[A]\nkey = 1\ncontinued\n", ini=True)
-
-    assert refused.value.reason is not None
-    assert "more than one line" in refused.value.reason
 
 
 # --- A flat file as a line-oriented document --------------------------------
@@ -5617,14 +5497,3 @@ def test_the_module_loads_no_name_that_nothing_binds() -> None:
     )
 
     assert dangling == []
-
-
-def test_the_section_regex_is_what_the_header_guard_compares_against() -> None:
-    # The one module-level constant the rewrite kept rather than deleted, and
-    # it is kept for one reason: it supplies the name the library's own
-    # section grammar is reconciled against. If nothing loads it, that
-    # reconciliation is not implemented and a header the two grammars name
-    # differently would strand a live credential.
-    _, loaded, _ = module_names()
-
-    assert "_INI_SECTION_RE" in loaded

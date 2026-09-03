@@ -131,25 +131,41 @@
 
 ## 4. Deleting the old layer
 
-- [ ] 4.1 Delete the configupdater layer - `_flat_document`,
+- [x] 4.1 Delete the configupdater layer - `_flat_document`,
   `_flat_source`, `_load_flat`, `_read_flat`, `_read_flat_quietly`,
   `_empty_flat_document`, `_dump_flat`, `_flat_places`,
   `_flat_write_target`, `_sweep_flat_key`, `_write_flat_key`, the
   wrapper constants, `_FLAT_PARSE_ERRORS`, the configupdater imports -
   plus the tests that exist only to pin that library's behavior, and
   verify the whole-module orphan tests and the full suite pass.
-- [ ] 4.2 Remove `configupdater` from `package.nix` and from
+- [x] 4.2 Remove `configupdater` from `package.nix` and from
   `flake.nix`'s prepare python, update both files' comments, and
   verify `nix build .#checks.aarch64-darwin.emubox-prepare` passes.
-- [ ] 4.3 Update the module docstring's editor overview and any prose
+- [x] 4.3 Update the module docstring's editor overview and any prose
   in the repo naming configupdater as what the editors read through,
   and verify `grep -ri configupdater` over the repo (generated,
   `.scratch/` and `openspec/` paths aside - the planning artifacts
   name the library by design) reports nothing in code or durable
   docs.
-- [ ] 4.4 Record the measured before/after statement and branch counts
+- [x] 4.4 Record the measured before/after statement and branch counts
   of the flat-file layer in this file, and verify the numbers come
   from the same AST measurement run against both revisions.
+  One instrument (`.scratch/prepare-flat-cst/measure.py`: statements
+  are every AST statement node inside the layer's top-level
+  definitions; branch points are if/elif, while, for, comprehension
+  ifs, ternaries, except handlers, asserts, and each boolean operator
+  beyond its first operand), run against both revisions:
+  - before (the configupdater layer at the parity baseline, 18
+    definitions from `_INI_SECTION_RE` through
+    `set_retroarch_settings`): 187 statements, 73 branch points.
+  - after (the document model, 20 definitions from `Blank` through
+    `set_retroarch_settings`): 201 statements, 79 branch points.
+  The raw counts grew: the five node dataclasses and their field
+  declarations are 5 of the 20 definitions and carry no logic, and
+  the classifier states the whole grammar in one place where the old
+  layer inherited most of it from the library. What the change buys
+  is stated in the proposal - the refusal boundary no longer depends
+  on a library's internals - not a smaller number here.
 
 ## 5. Evidence
 

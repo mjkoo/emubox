@@ -257,7 +257,6 @@
           preparePython = pkgs.python3.withPackages (ps: [
             ps.pytest
             ps.cryptography
-            ps.configupdater
           ]);
         in
         {

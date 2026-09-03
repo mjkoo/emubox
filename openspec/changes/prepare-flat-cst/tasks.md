@@ -123,11 +123,12 @@
   transcription. Tables came from the evaluated module configuration
   (every flat file's static keys, plus each RetroAchievements target's
   logged-in and logged-out merges) plus the declared wrapper-owning
-  and all-removals tables. 1721 file states (the loader corpus plus
-  the absent file) x 12 INI and 4 RetroArch tables, run twice per
-  side for flash-wear parity: 34692 comparisons, 3148 declared
-  wrapper divergences skipped, 0 undeclared differences in written
-  bytes, write verdicts, or second-run bytes.
+  and all-removals tables. 1720 file states (the loader corpus, less
+  one string no disk read can produce, plus the absent file) x 18 INI
+  and 4 RetroArch tables, run twice per side for flash-wear parity:
+  34692 comparisons, 3148 declared wrapper divergences skipped, 0
+  undeclared differences in written bytes, write verdicts, or
+  second-run bytes.
 
 ## 4. Deleting the old layer
 
@@ -158,11 +159,13 @@
   - before (the configupdater layer at the parity baseline, 18
     definitions from `_INI_SECTION_RE` through
     `set_retroarch_settings`): 187 statements, 73 branch points.
-  - after (the document model, 21 definitions from `Blank` through
-    `set_retroarch_settings`, `_delete_key` included): 204 statements,
-    78 branch points. An earlier record here said 201/79, measured
-    before a review-suggested helper extraction landed; this is the
-    re-run at the commit that carries the record.
+  - after (the document model as review fixes left it, 23 definitions
+    from `Blank` through `set_retroarch_settings`, the extracted
+    helpers and node factories included): 218 statements, 83 branch
+    points. Earlier records here (201/79, then 204/78) each measured
+    an intermediate revision that later review fixes then grew; this
+    run measures `emubox_prepare.py` as of the last commit that
+    touched it, so a docs-only commit cannot invalidate it again.
   The raw counts grew: the five node dataclasses and their field
   declarations are 5 of the 20 definitions and carry no logic, and
   the classifier states the whole grammar in one place where the old
@@ -173,8 +176,11 @@
 ## 5. Evidence
 
 - [x] 5.1 Run the full suite and `just check-all`, and verify both
-  exit clean. 347 tests passed; check-all (fmt-check, flake check,
-  eval, workflow lint) exit 0.
+  exit clean. 342 tests passed at the branch head (an earlier run
+  recorded 347; the review fix round then deleted redundant tests and
+  added guard tests); check-all (fmt-check, flake check, eval,
+  workflow lint) exit 0. The check-phase derivation also rebuilt
+  clean on both platforms at the same head.
 - [x] 5.2 Build the derivation's check phase for x86_64-linux on the
   remote builder, and verify it passes.
 - [ ] 5.3 Verify `just kiosk-test` passes in CI once the branch is

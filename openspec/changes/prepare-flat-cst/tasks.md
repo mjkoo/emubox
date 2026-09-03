@@ -2,11 +2,11 @@
 
 ## 1. The document model and classifier
 
-- [ ] 1.1 Add the node dataclasses and `Document` from design.md's
+- [x] 1.1 Add the node dataclasses and `Document` from design.md's
   vocabulary table alongside the existing layer, untouched by any
   caller yet, and verify `ruff check` and `ty check` pass with the new
   definitions referenced by their tests alone.
-- [ ] 1.2 Implement the per-line classifier with per-format data
+- [x] 1.2 Implement the per-line classifier with per-format data
   (comment prefixes, headers legal or refused) and a test per rule:
   blank, comment, header, assignment, junk, non-empty header names,
   non-empty assignment keys (`= v` is junk), library-header-shape
@@ -16,11 +16,32 @@
   split on `\n` alone, classification on the fully stripped line.
   Verify each rule's test fails when its rule is broken (run the
   broken variant once, record the failing test name in this file).
-- [ ] 1.3 Implement parse and render, and verify the round-trip
+  Mutation evidence - each broken variant was run once and made
+  exactly this test fail:
+  - blanks read as comments -> test_classifier_reads_a_blank_line_as_blank
+  - comment prefixes not per-format ->
+    test_classifier_reads_comment_prefixes_per_format
+  - headers junked in INI -> test_classifier_reads_a_header_in_an_ini_file
+  - headers accepted in RetroArch ->
+    test_classifier_refuses_a_header_in_a_retroarch_file
+  - empty header names accepted ->
+    test_classifier_does_not_read_an_empty_name_as_a_header
+  - loose-header junk rule dropped ->
+    test_classifier_junks_a_loose_header_shape_even_when_it_carries_an_equals
+  - empty assignment keys accepted ->
+    test_classifier_junks_an_assignment_with_an_empty_key
+  - assignment halves left unstripped ->
+    test_classifier_reads_an_assignment_and_strips_its_halves
+  - junk lines kept as comments ->
+    test_classifier_junks_a_line_with_no_equals
+  - classification on the raw line ->
+    test_classifier_classifies_the_fully_stripped_line
+  - split via str.splitlines -> test_parse_splits_on_newlines_alone
+- [x] 1.3 Implement parse and render, and verify the round-trip
   property test passes: for every readable fixture in the suite,
   parse-then-render is byte-identical except the appended final
   newline when the source lacked one.
-- [ ] 1.4 Implement the refusal path and verify a test per parity-table
+- [x] 1.4 Implement the refusal path and verify a test per parity-table
   row from design.md - every "yes" row refuses in both formats it
   applies to, and each refusal reaches the journal with a reason
   except the empty INI file, which stays silent for the editor to

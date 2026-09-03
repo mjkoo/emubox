@@ -5212,6 +5212,309 @@ def test_flat_refuses_a_value_the_parser_still_read_as_a_continuation(
     assert "more than one line" in refused.value.reason
 
 
+# --- A flat file as a line-oriented document --------------------------------
+#
+# The document model underneath both flat editors: dataclass nodes that each
+# keep their source line verbatim, one per-line classifier per format, and
+# rendering by concatenation. The grammar is this program's own statement of
+# what the emulators' parsers read, so these tests pin each classifier rule
+# and the refusal boundary directly, one rule per test.
+
+
+def test_document_nodes_hold_their_source_lines_verbatim() -> None:
+    blank = ep.Blank(raw="  ")
+    comment = ep.Comment(raw="  # note")
+    assignment = ep.Assignment(raw="Token =  x ", key="Token", value="x")
+    preamble = ep.SectionNode(
+        raw_header=None, name=None, children=[blank, comment, assignment]
+    )
+    section = ep.SectionNode(raw_header="[A] ; kept", name="A", children=[])
+    document = ep.Document(sections=[preamble, section])
+
+    assert document.sections[0].raw_header is None
+    assert assignment.raw == "Token =  x "
+    assert section.name == "A"
+    assert section.raw_header == "[A] ; kept"
+
+
+def test_classifier_reads_a_blank_line_as_blank() -> None:
+    node = ep._classify_flat_line(" \t ", ini=True)
+
+    assert isinstance(node, ep.Blank)
+    assert node.raw == " \t "
+
+
+def test_classifier_reads_comment_prefixes_per_format() -> None:
+    # `#` and `;` are comments in INI; RetroArch's own parser gives `;` no
+    # special meaning, so a `;`-prefixed line there is not a comment and a
+    # file carrying one is not that format.
+    assert isinstance(ep._classify_flat_line("# c", ini=True), ep.Comment)
+    assert isinstance(ep._classify_flat_line("; c", ini=True), ep.Comment)
+    assert isinstance(ep._classify_flat_line("# c", ini=False), ep.Comment)
+    with pytest.raises(ep._Unparseable, match="not a setting"):
+        ep._classify_flat_line("; c", ini=False)
+
+
+def test_classifier_reads_a_header_in_an_ini_file() -> None:
+    node = ep._classify_flat_line("[Interface]", ini=True)
+
+    assert isinstance(node, ep.SectionNode)
+    assert node.name == "Interface"
+    assert node.raw_header == "[Interface]"
+    assert node.children == []
+
+
+def test_classifier_keeps_a_headers_trailing_comment_in_its_raw_line() -> None:
+    node = ep._classify_flat_line("[Achievements] ; was [Cheevos]", ini=True)
+
+    assert isinstance(node, ep.SectionNode)
+    assert node.name == "Achievements"
+    assert node.raw_header == "[Achievements] ; was [Cheevos]"
+
+
+def test_classifier_refuses_a_header_in_a_retroarch_file() -> None:
+    with pytest.raises(ep._Unparseable, match="has a section header") as refused:
+        ep._classify_flat_line("[Foo]", ini=False)
+
+    assert "Foo" in str(refused.value)
+
+
+def test_classifier_does_not_read_an_empty_name_as_a_header() -> None:
+    # `[]` is not a header - an empty name could never equal an owned
+    # section's - and it has no `=`, so it is junk in both formats.
+    for ini in (True, False):
+        with pytest.raises(ep._Unparseable, match="not a setting"):
+            ep._classify_flat_line("[]", ini=ini)
+
+
+@pytest.mark.parametrize("line", ["[Name] = v", "[Name]x = y", "[]] = v"])
+def test_classifier_junks_a_loose_header_shape_even_when_it_carries_an_equals(
+    line: str,
+) -> None:
+    # The permissive `[anything]` grammar other INI readers use is greedy to
+    # the last bracket, so each of these is a header to such a reader and
+    # unreadable to this program's grammar. Keys below it could land under a
+    # section the emulator reads differently, so the file is refused - the
+    # junk rule outranks the assignment rule.
+    for ini in (True, False):
+        with pytest.raises(ep._Unparseable, match="not a setting"):
+            ep._classify_flat_line(line, ini=ini)
+
+
+@pytest.mark.parametrize(
+    ("line", "key", "value"),
+    [("[foo bar = baz", "[foo bar", "baz"), ("[] = y", "[]", "y")],
+)
+def test_classifier_keeps_a_bracketed_line_no_header_grammar_reads(
+    line: str, key: str, value: str
+) -> None:
+    # No `]` past the second column, so no header grammar - strict or loose -
+    # reads these; they are ordinary assignments and stay ones.
+    node = ep._classify_flat_line(line, ini=True)
+
+    assert isinstance(node, ep.Assignment)
+    assert node.key == key
+    assert node.value == value
+
+
+def test_classifier_reads_an_assignment_and_strips_its_halves() -> None:
+    node = ep._classify_flat_line("  Token =  live  ", ini=True)
+
+    assert isinstance(node, ep.Assignment)
+    assert node.raw == "  Token =  live  "
+    assert node.key == "Token"
+    assert node.value == "live"
+
+
+def test_classifier_splits_an_assignment_on_the_first_equals() -> None:
+    node = ep._classify_flat_line("key = a = b", ini=True)
+
+    assert isinstance(node, ep.Assignment)
+    assert node.key == "key"
+    assert node.value == "a = b"
+
+
+def test_classifier_junks_an_assignment_with_an_empty_key() -> None:
+    for ini in (True, False):
+        with pytest.raises(ep._Unparseable, match="not a setting"):
+            ep._classify_flat_line("= v", ini=ini)
+
+
+@pytest.mark.parametrize("line", ["barekeywithnoassignment", "Time: 12"])
+def test_classifier_junks_a_line_with_no_equals(line: str) -> None:
+    for ini in (True, False):
+        with pytest.raises(ep._Unparseable, match="not a setting"):
+            ep._classify_flat_line(line, ini=ini)
+
+
+@pytest.mark.parametrize("indent", [" ", "\t", "\x0b", "\x0c", "\xa0", "　"])
+def test_classifier_classifies_the_fully_stripped_line(indent: str) -> None:
+    # Any Unicode whitespace: an indented assignment, comment or header is
+    # still that line, and the node keeps the raw line so the indentation
+    # survives a write.
+    assignment = ep._classify_flat_line(f"{indent}KeepMe = 3", ini=True)
+    comment = ep._classify_flat_line(f"{indent}# note", ini=True)
+    header = ep._classify_flat_line(f"{indent}[Later]", ini=True)
+
+    assert isinstance(assignment, ep.Assignment)
+    assert assignment.raw == f"{indent}KeepMe = 3"
+    assert isinstance(comment, ep.Comment)
+    assert isinstance(header, ep.SectionNode)
+    assert header.raw_header == f"{indent}[Later]"
+
+
+def test_parse_splits_on_newlines_alone() -> None:
+    # A value carrying U+2028 stays one line: `str.splitlines()` would cut
+    # it into a fragment that fails to classify and refuse the whole file.
+    document = ep._parse_flat("key = a b\n", ini=True)
+
+    (node,) = document.sections[0].children
+    assert isinstance(node, ep.Assignment)
+    assert node.value == "a b"
+
+
+def test_parse_attaches_lines_to_the_section_above_them() -> None:
+    document = ep._parse_flat("stray = 1\n[A]\nx = 2\n\n[A]\ny = 3\n", ini=True)
+
+    assert [section.name for section in document.sections] == [None, "A", "A"]
+    preamble, first, second = document.sections
+    assert [n.key for n in preamble.children if isinstance(n, ep.Assignment)] == [
+        "stray"
+    ]
+    assert [n.key for n in first.children if isinstance(n, ep.Assignment)] == ["x"]
+    assert [n.key for n in second.children if isinstance(n, ep.Assignment)] == ["y"]
+
+
+# Parse-then-render must be byte-identical for every readable file, except
+# the appended final newline when the source lacked one. The corpus is the
+# suite's own flat-file fixtures plus the shapes the classifier rules argue
+# about.
+
+ROUND_TRIP_CORPUS: list[tuple[str, bool]] = [
+    (
+        "# written by the emulator\n[Interface]\nLanguage = 0\n\n[Display]\nFullscreen = False\n",
+        True,
+    ),
+    ("Token = stray\n; a comment\n[Achievements]\nUsername = alice\n", True),
+    ("[Achievements]\nToken = keepme", True),
+    ("[Interface]\nConfirmStop = True\n  # note\nKeepMe = 3\n", True),
+    ("[Interface]\nConfirmStop = True\n  Indented = 9\nKeepMe = 3\n", True),
+    ("[Interface]\nConfirmStop = True\n  [Later]\nKeepMe = 3\n", True),
+    ("　[Achievements] ; was [Cheevos]\nToken = live\n", True),
+    ("[Achievements] # old [name]\nToken = live\nUserPref = keepme\n", True),
+    ("[Achievements]\nToken = live\n[foo bar = baz\n", True),
+    ("[] = y\nkey = a = b\n", True),
+    (AZAHAR, True),
+    (SCUMMVM, True),
+    (
+        "[Other]\nFullscreen = False\n[Display]\nFullscreen = False\n[Interface]\nConfirmStop = False\n",
+        True,
+    ),
+    (
+        "[Achievements]\nUsername = stale-one\nUsername = stale-two\nKeepMe = yes\n",
+        True,
+    ),
+    ("", False),
+    (
+        '# RetroArch config\nmenu_driver = "rgui"\ninput_driver = "sdl"\nvideo_fullscreen = "false"\n',
+        False,
+    ),
+    ('# RetroArch config\nvideo_fullscreen = "true"\n\n\n', False),
+    ('cheevos_token = "keepme"', False),
+    ('menu_driver = "ozone"\n', False),
+]
+
+
+@pytest.mark.parametrize(("text", "ini"), ROUND_TRIP_CORPUS)
+def test_parse_then_render_is_byte_identical_plus_a_final_newline(
+    text: str, ini: bool
+) -> None:
+    rendered = ep._render_flat(ep._parse_flat(text, ini=ini))
+
+    expected = text if not text or text.endswith("\n") else text + "\n"
+    assert rendered == expected
+
+
+# The refusal path: what reaches the journal, and what stays silent.
+
+
+@pytest.mark.parametrize("text", ["", "\n", "   \n"])
+def test_parse_refuses_an_empty_ini_without_a_word(
+    text: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(ep._Unparseable) as refused:
+        ep._parse_flat(text, ini=True)
+
+    assert refused.value.reason is None
+    assert capsys.readouterr().err == ""
+
+
+def test_read_document_notes_an_unreadable_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_bytes(b"[Interface]\n\xff\xfe not text\n")
+
+    assert ep._read_document(path, ini=True) is None
+
+    assert "is unreadable" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("text", "ini", "reason"),
+    [
+        ("[Interface]\nthis line has no assignment\n", True, "not a setting"),
+        ("[]\nToken = live\n", True, "not a setting"),
+        ("[] ; c\nToken = live\n", True, "not a setting"),
+        ("[Name] trailing junk\nToken = live\n", True, "not a setting"),
+        ("[Name] = v\nToken = live\n", True, "not a setting"),
+        ("[Name]x = y\nToken = live\n", True, "not a setting"),
+        ("[]] = v\nToken = live\n", True, "not a setting"),
+        ("= v\nToken = live\n", True, "not a setting"),
+        ('video = "1"\n[Foo]\ntoken = "x"\n', False, "has a section header"),
+        ('video = "1"\n; not a comment here\n', False, "not a setting"),
+        ("key = 1\n    continued\n", True, "not a setting"),
+    ],
+)
+def test_read_document_notes_every_other_refusal_with_its_reason(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    text: str,
+    ini: bool,
+    reason: str,
+) -> None:
+    path = tmp_path / ("settings.ini" if ini else "retroarch.cfg")
+    path.write_text(text)
+
+    assert ep._read_document(path, ini=ini) is None
+
+    err = capsys.readouterr().err
+    assert reason in err
+    assert "recreating it" in err
+
+
+def test_read_document_quietly_is_silent_about_every_refusal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("[Interface]\nthis line has no assignment\n")
+    unreadable = tmp_path / "junk.ini"
+    unreadable.write_bytes(b"\xff\xfe")
+
+    assert ep._read_document_quietly(path, ini=True) is None
+    assert ep._read_document_quietly(unreadable, ini=True) is None
+    assert ep._read_document_quietly(tmp_path / "absent.ini", ini=True) is None
+
+    assert capsys.readouterr().err == ""
+
+
+def test_read_document_reads_an_empty_retroarch_file_as_a_document() -> None:
+    document = ep._parse_flat("", ini=False)
+
+    assert ep._render_flat(document) == ""
+    assert [section.raw_header for section in document.sections] == [None]
+
+
 # --- Nothing stranded, in either direction ---------------------------------
 #
 # Replacing a parser leaves two kinds of wreckage and lint sees neither: a

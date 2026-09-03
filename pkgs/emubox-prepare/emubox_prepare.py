@@ -133,6 +133,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
@@ -904,6 +905,237 @@ def _write_flat_key(
         target[key] = value
         changed = True
     return changed
+
+
+# --- A flat file as a line-oriented document -------------------------------
+#
+# Sectioned INI and RetroArch's headerless `key = "value"` file are close
+# enough to share one document model: every line is blank, a comment, a
+# section header or a `key = value` assignment, and nothing nests. The
+# grammar is this program's own statement of what the emulators' parsers
+# read - RetroArch rejects any line without an `=` and has no sections; the
+# Qt-family INI writers emit `[Name]` headers, `#`/`;` comments and
+# `key = value` lines - so the boundary between "edited in place" and
+# "recreated, unowned settings lost" is stated in the classifier below
+# rather than inherited from a parsing library's internals, where a version
+# bump could move it silently.
+#
+# The model is lossless by construction: every node keeps its source line
+# verbatim in `raw`, and rendering is concatenation. A document nobody
+# edited renders byte-identical to what was read, except that a final line
+# missing its terminator gains one - an unterminated last line is what a
+# power cut leaves, and writing a new assignment straight onto the end of
+# it would destroy the unowned line and the owned key together. There is no
+# index arithmetic anywhere: an edit replaces a node, sections own their
+# children, and deletion invalidates nothing.
+
+
+@dataclass
+class Blank:
+    """A line that is empty or whitespace only."""
+
+    raw: str
+
+
+@dataclass
+class Comment:
+    """A line whose stripped text starts with a comment prefix."""
+
+    raw: str
+
+
+@dataclass
+class Assignment:
+    """A `key = value` line. `raw` is the line verbatim.
+
+    `key` and `value` are the stripped halves around the first `=`, which is
+    what every reader this box writes for compares; `raw` keeps the
+    spacing, the indentation and any quoting exactly as the file spelled
+    them. An edit replaces the whole node with one whose `raw` is
+    re-rendered as `key = value`, so only edited lines are ever normalised.
+    """
+
+    raw: str
+    key: str
+    value: str
+
+
+@dataclass
+class SectionNode:
+    """A header line plus every line below it until the next header.
+
+    `raw_header` is None for the preamble - the region above the file's
+    first header, which is first-class here rather than smuggled in under a
+    synthetic name: an assignment there belongs to no section, so no other
+    section's owner can claim it. For RetroArch the whole file is the
+    preamble.
+    """
+
+    raw_header: str | None
+    name: str | None
+    children: list[Blank | Comment | Assignment]
+
+
+@dataclass
+class Document:
+    """The whole file; `sections[0]` is always the preamble."""
+
+    sections: list[SectionNode]
+
+
+# This program's section grammar: a non-empty bracketed name that cannot
+# itself contain `]`, then nothing but an optional trailing comment. A
+# trailing comment after a header is legal INI and accepted by the Qt-family
+# readers alike; rejecting one would send the whole file through the
+# recreate path and lose every unowned key in it. `[]` is deliberately not a
+# header: an empty name could never equal an owned section's, so a removal
+# sweeping the declared section would walk past whatever sits below it.
+_FLAT_HEADER_RE = re.compile(r"\[(?P<name>[^]]+)\][ \t]*(?:[;#].*)?")
+
+# The permissive header shape configparser-family readers accept: `[`, at
+# least one character of any kind, then a closing `]` - greedy to the last
+# bracket, so `]` may sit inside the name. A line this shape matches while
+# the strict grammar above does not - `[Name] trailing junk`, `[Name] = v`,
+# `[]] = v` - is a line two plausible readers of the file name differently,
+# so keys below it could be attributed to a section the emulator reads
+# under another name, and a removal sweeping the declared section would
+# walk past a live token. Such a line refuses the whole file, `=` or not.
+# A line with no `]` past its second column never matches, so `[foo bar =
+# baz` stays an assignment named `[foo bar` and `[] = y` one named `[]`.
+_LOOSE_HEADER_RE = re.compile(r"\[.+\]")
+
+
+def _not_a_setting(line: str) -> str:
+    """The refusal reason for a line no rule reads, bounded for the journal.
+
+    The bound caps how much of the line reaches the journal, not which
+    part: a torn write can put a credential fragment on a line that fails
+    to classify, and the note has always been able to carry one. Keeping
+    the reason at all is what makes the recreation diagnosable at 8pm on a
+    Friday.
+    """
+    return f"has a line that is not a setting ({line[:200]!r})"
+
+
+def _classify_flat_line(
+    raw: str, *, ini: bool
+) -> Blank | Comment | Assignment | SectionNode:
+    """One source line as one node, or `_Unparseable` for a line that is none.
+
+    Classification runs on the line stripped of all leading and trailing
+    whitespace - the node keeps the raw line - so an indented comment,
+    assignment or header is still that line under any Unicode whitespace,
+    and keeps its indentation through a write: there is no continuation
+    concept for indentation to trigger.
+
+    The per-format differences are data, not code paths: RetroArch's own
+    parser gives `;` no special meaning, so a `;`-prefixed line there is
+    not a comment, and its files have no headers at all, so a line this
+    program's header grammar reads refuses the file - left alone it would
+    partition the file and hide everything below it from both the removal
+    and the write sweeps.
+    """
+    line = raw.strip()
+    if not line:
+        return Blank(raw)
+    if line.startswith(("#", ";") if ini else ("#",)):
+        return Comment(raw)
+    header = _FLAT_HEADER_RE.fullmatch(line)
+    if header is not None:
+        if not ini:
+            raise _Unparseable(f"has a section header ({header.group('name')!r})")
+        return SectionNode(raw_header=raw, name=header.group("name"), children=[])
+    if _LOOSE_HEADER_RE.match(line):
+        raise _Unparseable(_not_a_setting(line))
+    key, delimiter, value = line.partition("=")
+    key = key.rstrip()
+    if delimiter and key:
+        return Assignment(raw=raw, key=key, value=value.strip())
+    # `=` with nothing before it, or no `=` at all: not a setting, so the
+    # file is not this format and takes the recreate path.
+    raise _Unparseable(_not_a_setting(line))
+
+
+def _parse_flat(text: str, *, ini: bool) -> Document:
+    """`text` as a document, or `_Unparseable` where it must be recreated.
+
+    Lines are split on `\\n` alone, never `str.splitlines()`: that also
+    breaks on U+2028, form feed and the other exotic separators, so a value
+    carrying one would be cut into a fragment that fails to classify and
+    take the whole file into the recreate path with it.
+
+    An empty INI file is refused silently (`reason` None): it is not a
+    healthy document missing every key, but `set_ini_settings` owns that
+    note and emits it only once it knows a write follows. INI only,
+    matching RetroArch's own parser, which has never had an emptiness
+    check.
+    """
+    if ini and not text.strip():
+        raise _Unparseable(None)
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        # The empty piece after a terminated final line, not a line of the
+        # file; rendering restores the terminator. A genuinely blank final
+        # line arrives as two pieces and keeps its node.
+        lines.pop()
+    preamble = SectionNode(raw_header=None, name=None, children=[])
+    document = Document(sections=[preamble])
+    current = preamble
+    for raw in lines:
+        node = _classify_flat_line(raw, ini=ini)
+        if isinstance(node, SectionNode):
+            document.sections.append(node)
+            current = node
+        else:
+            current.children.append(node)
+    return document
+
+
+def _render_flat(document: Document) -> str:
+    """The document's text: every node's raw line, terminated."""
+    parts: list[str] = []
+    for section in document.sections:
+        if section.raw_header is not None:
+            parts.append(section.raw_header)
+        for child in section.children:
+            if isinstance(child, Assignment):
+                # One line of a settings file holds one setting. Callers
+                # drop owned values carrying a line break before they reach
+                # a node, and parsing cannot build one, so this states an
+                # invariant the module's own code establishes.
+                assert "\n" not in child.raw and "\r" not in child.raw
+            parts.append(child.raw)
+    return "".join(part + "\n" for part in parts)
+
+
+def _read_document(path: Path, *, ini: bool) -> Document | None:
+    """The file as a document, or None if it must be recreated."""
+    text = _read_text(path)
+    if text is None:
+        return None
+    try:
+        return _parse_flat(text, ini=ini)
+    except _Unparseable as refusal:
+        if refusal.reason is not None:
+            note(f"{path} {refusal.reason}; recreating it")
+        return None
+
+
+def _read_document_quietly(path: Path, *, ini: bool) -> Document | None:
+    """The same, for a caller that is only asking what is already on disk.
+
+    Silent where `_read_document` is loud, and for the same reason
+    `_read_quietly` is: this one runs before the program has decided to
+    write anything, so a note here would announce a recreation that is not
+    happening.
+    """
+    text = _read_quietly(path)
+    if text is None:
+        return None
+    try:
+        return _parse_flat(text, ini=ini)
+    except _Unparseable:
+        return None
 
 
 # --- INI with sections ----------------------------------------------------

@@ -169,9 +169,10 @@
 
 ## 5. Evidence
 
-- [ ] 5.1 Run the full suite and `just check-all`, and verify both
-  exit clean.
-- [ ] 5.2 Build the derivation's check phase for x86_64-linux on the
+- [x] 5.1 Run the full suite and `just check-all`, and verify both
+  exit clean. 347 tests passed; check-all (fmt-check, flake check,
+  eval, workflow lint) exit 0.
+- [x] 5.2 Build the derivation's check phase for x86_64-linux on the
   remote builder, and verify it passes.
 - [ ] 5.3 Verify `just kiosk-test` passes in CI once the branch is
   pushed; this box closes only against a CI run that exists.

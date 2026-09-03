@@ -62,38 +62,51 @@
   new editors, which do not exist until group 3 swaps them in.
   Loader-half run (`.scratch/prepare-flat-cst/differential.py`): every
   string constant in the test suite plus the generated edge shapes,
-  1714 distinct texts, 3428 verdict pairs, 3344 agreements, 84
-  disagreements all matching the declared wrapper-header row, 0
+  1720 distinct texts, 3440 verdict pairs, 3356 agreements, 84
+  disagreements all matching the declared wrapper-header row (checked
+  against the refusal message's full prefix, not a substring), 0
   undeclared.
 
 ## 3. Swapping the editors
 
-- [ ] 3.1 Move `set_ini_settings` onto the document model - sweep
+- [x] 3.1 Move `set_ini_settings` onto the document model - sweep
   every instance plus the preamble, write into the first instance,
   reduce survivors keeping the last copy in the target, recreate
   branches building a fresh document - and verify every existing INI
   editor test passes unamended except those pinning stripped
   indentation or normalised headers.
-- [ ] 3.2 Amend the tests that pin the baseline's presentation
+- [x] 3.2 Amend the tests that pin the baseline's presentation
   (stripped indentation, header trailing comments dropped) to pin the
   preserved presentation instead, and verify each amended test fails
   against the baseline behavior and passes against the new.
-- [ ] 3.3 Move `set_retroarch_settings` onto the document model with
+  Verified red against the pre-swap editors, green after:
+  test_ini_keeps_an_indented_comment_through_a_write,
+  test_ini_keeps_an_indented_assignment_through_a_write,
+  test_ini_keeps_an_indented_section_header_through_a_write,
+  test_ini_keeps_a_line_indented_by_any_whitespace (6 params),
+  test_ini_keeps_a_header_whose_trailing_comment_carries_a_bracket,
+  test_ini_keeps_a_header_whose_hash_comment_carries_a_bracket.
+- [x] 3.3 Move `set_retroarch_settings` onto the document model with
   the whole file as the preamble and headers refused, and verify every
   existing RetroArch editor test passes with the same amendment rule
   as 3.1.
-- [ ] 3.4 Move `_current_ini_value` onto the new quiet read path,
+- [x] 3.4 Move `_current_ini_value` onto the new quiet read path,
   first instance of its section only, and verify the probe's silent
   `None`-cause tests pass unamended.
-- [ ] 3.5 Keep `_writable` at both editors' doors and add the renderer
+- [x] 3.5 Keep `_writable` at both editors' doors and add the renderer
   assertion that an assignment renders to one line; verify the
   multi-line and `\r` regression tests pass unamended.
-- [ ] 3.6 Add tests for the two declared refusal-set diffs: a file
+- [x] 3.6 Add tests for the two declared refusal-set diffs: a file
   carrying a section named `emubox-flat-file-wrapper` is edited in
   place with its unowned keys preserved, and an owned-values table
   naming any section is honored with no reservation note. Verify both
   fail against the baseline and pass against the new code.
-- [ ] 3.7 Extend the differential harness through both editors: the
+  Verified red against the pre-swap editors, green after:
+  test_ini_edits_a_file_carrying_a_wrapper_named_section_in_place
+  (4 spellings),
+  test_ini_honors_an_owned_table_naming_a_wrapper_like_section,
+  test_ini_recreating_a_file_owning_only_a_wrapper_like_section_writes_it.
+- [x] 3.7 Extend the differential harness through both editors: the
   new `set_ini_settings` and `set_retroarch_settings` against the old
   layer driven directly through its surviving helpers (`_read_flat`,
   `_sweep_flat_key`, `_write_flat_key`, `_dump_flat`), which group 4
@@ -102,6 +115,19 @@
   diffs. Verify zero undeclared differences, and record the corpus
   size and verdict summary in this file before group 4 deletes the
   old implementation.
+  Editor-half run (`.scratch/prepare-flat-cst/differential_editors.py`):
+  instead of re-driving the surviving helpers through a hand-written
+  loop, the old side is the genuine pre-swap module (the branch commit
+  whose public editors still ran on those helpers), so the comparison
+  is old public editor against new public editor with zero
+  transcription. Tables came from the evaluated module configuration
+  (every flat file's static keys, plus each RetroAchievements target's
+  logged-in and logged-out merges) plus the declared wrapper-owning
+  and all-removals tables. 1721 file states (the loader corpus plus
+  the absent file) x 12 INI and 4 RetroArch tables, run twice per
+  side for flash-wear parity: 34692 comparisons, 3148 declared
+  wrapper divergences skipped, 0 undeclared differences in written
+  bytes, write verdicts, or second-run bytes.
 
 ## 4. Deleting the old layer
 

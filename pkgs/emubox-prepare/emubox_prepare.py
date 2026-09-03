@@ -1138,6 +1138,136 @@ def _read_document_quietly(path: Path, *, ini: bool) -> Document | None:
         return None
 
 
+def _document_places(document: Document, section: str | None) -> list[SectionNode]:
+    """Every place in the document an owned key of `section` can be assigned.
+
+    Each instance of the declared section - a header written twice is a
+    shape a torn or hand-edited file takes - plus the preamble, which holds
+    the region above the file's first header. An assignment there belongs
+    to no section, so no other section's owner can claim it. `section=None`
+    is RetroArch's flat file, whose whole content is the preamble.
+
+    An assignment under a *different* section is not in this list: it
+    genuinely belongs to somebody else.
+    """
+    return [
+        candidate
+        for candidate in document.sections
+        if candidate.raw_header is None
+        or (section is not None and candidate.name == section)
+    ]
+
+
+def _document_write_target(document: Document, section: str | None) -> SectionNode:
+    """The one place an owned key's surviving assignment is left standing.
+
+    The first instance of the declared section, or the preamble for a file
+    with no sections at all. Appends the section when the file has none,
+    which is what seeds a key whose section the emulator has never written.
+    """
+    if section is None:
+        return document.sections[0]
+    for candidate in document.sections:
+        if candidate.name == section:
+            return candidate
+    created = SectionNode(raw_header=f"[{section}]", name=section, children=[])
+    document.sections.append(created)
+    return created
+
+
+def _sweep_key(document: Document, key: str, section: str | None) -> bool:
+    """Delete every assignment of an owned key, everywhere it belongs.
+
+    What `REMOVE` promises, rather than what a single lookup delivers:
+    every copy, in every instance of the section, plus the preamble.
+    """
+    swept = False
+    for place in _document_places(document, section):
+        kept = [
+            child
+            for child in place.children
+            if not (isinstance(child, Assignment) and child.key == key)
+        ]
+        if len(kept) != len(place.children):
+            place.children[:] = kept
+            swept = True
+    return swept
+
+
+def _write_key(document: Document, key: str, value: str, section: str | None) -> bool:
+    """Leave exactly one assignment of an owned key, holding the flake's value.
+
+    A repeat takes three shapes and all three end the same way: across
+    instances of a repeated section header, between the headerless region
+    and the section, and twice inside one section instance. Every reader
+    this box writes for resolves a repeat to one entry, so a copy left
+    holding an older value is the one the emulator obeys - and because the
+    file does carry the flake's value somewhere, the next launch finds
+    nothing to do and the discrepancy never surfaces. For the account name
+    and token that survivor is a bearer credential rather than a
+    preference.
+
+    Deletion iterates to *one* here, never to absence: absence in every
+    place but the one being written, and inside that one down to a single
+    survivor - the last copy, whose bytes are the ones least likely to need
+    rewriting - which then takes the value only if it does not already hold
+    it. Deleting every copy and assigning afterwards would be simpler and
+    wrong: it makes the editor write on every launch, which is the flash
+    wear the comparison below exists to prevent. Only the edited line is
+    ever re-rendered; an untouched assignment keeps its bytes.
+    """
+    target = _document_write_target(document, section)
+    changed = False
+
+    for place in _document_places(document, section):
+        # Identity, not equality: two instances of a repeated header
+        # carrying the same assignments compare equal as dataclasses, and
+        # the twin the sweep exists to clear is exactly the one that would
+        # be skipped.
+        if place is target:
+            continue
+        kept = [
+            child
+            for child in place.children
+            if not (isinstance(child, Assignment) and child.key == key)
+        ]
+        if len(kept) != len(place.children):
+            place.children[:] = kept
+            changed = True
+
+    copies = [
+        child
+        for child in target.children
+        if isinstance(child, Assignment) and child.key == key
+    ]
+    survivor = copies[-1] if copies else None
+    if len(copies) > 1:
+        target.children[:] = [
+            child
+            for child in target.children
+            if not (
+                isinstance(child, Assignment)
+                and child.key == key
+                and child is not survivor
+            )
+        ]
+        changed = True
+
+    if survivor is None:
+        target.children.append(Assignment(raw=f"{key} = {value}", key=key, value=value))
+        return True
+
+    if survivor.value != value:
+        for index, child in enumerate(target.children):
+            if child is survivor:
+                target.children[index] = Assignment(
+                    raw=f"{key} = {value}", key=key, value=value
+                )
+                break
+        changed = True
+    return changed
+
+
 # --- INI with sections ----------------------------------------------------
 
 
@@ -1182,26 +1312,7 @@ def set_ini_settings(
     if not any(sections.values()):
         return False
 
-    if _FLAT_WRAPPER_SECTION in sections:
-        # The synthetic header every file here is read through carries this
-        # name, so a section actually spelled that way cannot be told apart
-        # from the wrapper on the next read - and appending one to a recreated
-        # file raises out of an editor whose whole policy is not to raise.
-        # After the guard above, so a file this program was going to leave
-        # alone is not announced.
-        note(
-            f"the owned values name the section {_FLAT_WRAPPER_SECTION!r} for "
-            f"{path}, which is reserved"
-        )
-        sections = {
-            name: keys
-            for name, keys in sections.items()
-            if name != _FLAT_WRAPPER_SECTION
-        }
-        if not any(sections.values()):
-            return False
-
-    document = _read_flat(path, ini=True)
+    document = _read_document(path, ini=True)
     if document is None:
         fresh = {section: _without_removals(keys) for section, keys in sections.items()}
         if not any(fresh.values()) and not _holds_something(path):
@@ -1214,7 +1325,7 @@ def set_ini_settings(
             # off the disk - and what makes the note about to be printed
             # true rather than a lie repeated before every launch.
             return False
-        # The empty-file note, deferred from the load helper, which stays
+        # The empty-file note, deferred from the parse helper, which stays
         # silent about emptiness for exactly this reason: it is only worth
         # telling the journal once a write is actually about to happen,
         # which the branch above has just confirmed. `_read_quietly`, so
@@ -1223,12 +1334,17 @@ def set_ini_settings(
         probe = _read_quietly(path)
         if probe is not None and not probe.strip():
             note(f"{path} is empty; recreating it")
-        recreated = _empty_flat_document(ini=True)
+        recreated = Document(
+            sections=[SectionNode(raw_header=None, name=None, children=[])]
+        )
         for section, keys in fresh.items():
-            recreated.add_section(section)
+            node = SectionNode(raw_header=f"[{section}]", name=section, children=[])
+            recreated.sections.append(node)
             for key, value in keys.items():
-                recreated[section][key] = value
-        _write(path, _dump_flat(recreated))
+                node.children.append(
+                    Assignment(raw=f"{key} = {value}", key=key, value=value)
+                )
+        _write(path, _render_flat(recreated))
         return True
 
     changed = False
@@ -1239,16 +1355,16 @@ def set_ini_settings(
     # against.
     for section, keys in sections.items():
         for key, value in keys.items():
-            if isinstance(value, Removal) and _sweep_flat_key(document, key, section):
+            if isinstance(value, Removal) and _sweep_key(document, key, section):
                 changed = True
 
     for section, keys in sections.items():
         for key, value in _without_removals(keys).items():
-            if _write_flat_key(document, key, value, section):
+            if _write_key(document, key, value, section):
                 changed = True
 
     if changed:
-        _write(path, _dump_flat(document))
+        _write(path, _render_flat(document))
     return changed
 
 
@@ -1269,7 +1385,7 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
     if not keys:
         return False
 
-    document = _read_flat(path, ini=False)
+    document = _read_document(path, ini=False)
     if document is None:
         fresh = _without_removals(keys)
         if not fresh and not _holds_something(path):
@@ -1280,25 +1396,28 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
             # too, so `fresh` is never empty - but the two editors keep the
             # same rule so a later target cannot inherit the bug back.
             return False
-        recreated = _empty_flat_document(ini=False)
+        preamble = SectionNode(raw_header=None, name=None, children=[])
         for key, value in fresh.items():
-            recreated[_FLAT_WRAPPER_SECTION][key] = f'"{value}"'
-        _write(path, _dump_flat(recreated))
+            quoted = f'"{value}"'
+            preamble.children.append(
+                Assignment(raw=f"{key} = {quoted}", key=key, value=quoted)
+            )
+        _write(path, _render_flat(Document(sections=[preamble])))
         return True
 
     changed = False
     # Removals first and file-wide, the INI editor's rule for the same
     # reasons. `None` for the section because this file has none.
     for key, value in keys.items():
-        if isinstance(value, Removal) and _sweep_flat_key(document, key, None):
+        if isinstance(value, Removal) and _sweep_key(document, key, None):
             changed = True
 
     for key, value in _without_removals(keys).items():
-        if _write_flat_key(document, key, f'"{value}"', None):
+        if _write_key(document, key, f'"{value}"', None):
             changed = True
 
     if changed:
-        _write(path, _dump_flat(document))
+        _write(path, _render_flat(document))
     return changed
 
 
@@ -1763,18 +1882,18 @@ def _current_ini_value(path: Path, section: str, key: str) -> str | None:
     All five read as "the token changed", which on a file about to be
     recreated anyway is the right answer.
     """
-    document = _read_flat_quietly(path, ini=True)
+    document = _read_document_quietly(path, ini=True)
     if document is None:
         return None
-    for place in document.iter_sections():
+    for place in document.sections:
         if place.name != section:
             continue
         # The first instance of the section, which is also the one the
         # editor writes into and leaves a single assignment in.
-        if key not in place:
-            return None
-        value = place[key].value
-        return None if value is None else value.strip()
+        for child in place.children:
+            if isinstance(child, Assignment) and child.key == key:
+                return child.value
+        return None
     return None
 
 

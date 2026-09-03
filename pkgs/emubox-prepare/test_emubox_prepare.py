@@ -4008,7 +4008,7 @@ def test_ini_keeps_an_indented_comment_through_a_write(tmp_path: Path) -> None:
     assert ep.set_ini_settings(path, INI_OWNED) is True
 
     text = path.read_text()
-    assert "# note" in text
+    assert "  # note" in text
     assert "KeepMe = 3" in text
     assert "ConfirmStop = False" in text
 
@@ -4020,22 +4020,22 @@ def test_ini_keeps_an_indented_assignment_through_a_write(tmp_path: Path) -> Non
     assert ep.set_ini_settings(path, INI_OWNED) is True
 
     text = path.read_text()
-    assert "Indented = 9" in text
+    assert "  Indented = 9" in text
     assert "KeepMe = 3" in text
     assert "ConfirmStop = False" in text
 
 
 def test_ini_keeps_an_indented_section_header_through_a_write(tmp_path: Path) -> None:
-    # The header this program's own section grammar already accepts, since it
-    # is anchored `^\s*\[`: the keys below it belong to `Later`, not to the
-    # section above.
+    # The keys below the indented header belong to `Later`, not to the
+    # section above; the indentation itself is presentation the emulator
+    # does not read, and it survives the write untouched.
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nConfirmStop = True\n  [Later]\nKeepMe = 3\n")
 
     assert ep.set_ini_settings(path, INI_OWNED) is True
 
     text = path.read_text()
-    assert "[Later]" in text
+    assert "  [Later]" in text
     assert "KeepMe = 3" in text.split("[Later]", 1)[1]
     assert "ConfirmStop = False" in text
 
@@ -4055,18 +4055,18 @@ def test_flat_documents_read_an_indented_line_as_a_value_continuation() -> None:
 def test_ini_keeps_a_line_indented_by_any_whitespace(
     tmp_path: Path, indent: str
 ) -> None:
-    # Every whitespace character the parser counts as indentation, not just
-    # the two an ASCII file uses. A gap here is not cosmetic: the parser
-    # strips the whole line before deciding whether it is a section header,
-    # so a character stripped there and kept here is one that hides a header
-    # from the checks below while the library still reads one.
+    # Every whitespace character classification strips, not just the two an
+    # ASCII file uses: an indented line is still a line in its own right
+    # under any Unicode whitespace, and the indentation itself survives the
+    # write, because the node keeps the raw line and nothing reads an
+    # indented line as a continuation of the value above it.
     path = tmp_path / "Dolphin.ini"
     path.write_text(f"[Interface]\nConfirmStop = True\n{indent}KeepMe = 3\n")
 
     assert ep.set_ini_settings(path, INI_OWNED) is True
 
     text = path.read_text()
-    assert "KeepMe = 3" in text
+    assert f"{indent}KeepMe = 3" in text
     assert "ConfirmStop = False" in text
 
 
@@ -4098,14 +4098,12 @@ def test_ini_removes_a_token_under_a_header_indented_by_exotic_whitespace(
 RA_SECRET = {"Achievements": {"Token": ep.REMOVE}}
 
 
-def test_ini_normalises_a_header_whose_trailing_comment_carries_a_bracket(
+def test_ini_keeps_a_header_whose_trailing_comment_carries_a_bracket(
     tmp_path: Path,
 ) -> None:
-    # The library's section grammar is greedy to the last `]`, so it names
-    # this section `Achievements] ; was [Cheevos` while this program names it
-    # `Achievements`. Refusing it would recreate a file this program can edit
-    # and cost every unowned setting in it; normalising costs the header's
-    # own trailing comment, which no emulator reads.
+    # A trailing comment is part of the header line's presentation, not of
+    # the section's name: the removal still finds the section, and the
+    # header line - comment, brackets and all - survives the write verbatim.
     path = tmp_path / "secrets.ini"
     path.write_text(
         "[Achievements] ; was [Cheevos]\nToken = TOKENlive\nUserPref = keepme\n"
@@ -4116,9 +4114,10 @@ def test_ini_normalises_a_header_whose_trailing_comment_carries_a_bracket(
     text = path.read_text()
     assert "TOKENlive" not in text
     assert "UserPref = keepme" in text
+    assert "[Achievements] ; was [Cheevos]" in text
 
 
-def test_ini_normalises_a_header_whose_hash_comment_carries_a_bracket(
+def test_ini_keeps_a_header_whose_hash_comment_carries_a_bracket(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "secrets.ini"
@@ -4131,6 +4130,7 @@ def test_ini_normalises_a_header_whose_hash_comment_carries_a_bracket(
     text = path.read_text()
     assert "TOKENlive" not in text
     assert "UserPref = keepme" in text
+    assert "[Achievements] # old [name]" in text
 
 
 @pytest.mark.parametrize(
@@ -4220,11 +4220,11 @@ def test_retroarch_recreates_a_bracketed_line_carrying_an_assignment(
     assert "TOKENlive" not in path.read_text()
 
 
-# A file already carrying the wrapper's own header. Two same-named
-# sections, lookup resolves to the wrapper, the file's real keys go invisible
-# and stripping the leading line leaves the other header standing in what is
-# written. The sentinel cannot be made unspellable - every newline-free
-# string is a legal header name - so refusing is the whole of the defence.
+# A section spelled like the old synthetic wrapper header. No emulator
+# writes that name; it only ever arises from a hand edit, and recreation is
+# reserved for files that cannot be read as the emulator's format - which
+# these can. To the INI editor it is an ordinary section like any other. To
+# the RetroArch editor any header refuses the file, this one included.
 
 SENTINEL_SPELLINGS = [
     f"[{WRAPPER}]",
@@ -4232,19 +4232,41 @@ SENTINEL_SPELLINGS = [
     f"[{WRAPPER}] ; a comment",
     f"[{WRAPPER}] extra",
     f"[{WRAPPER}] = 3",
-    # The spelling only a check that runs *after* the header normalisation
-    # catches: the library's greedy grammar names this `<wrapper>] ; [x` in
-    # the source text, so a check over the raw text passes it, and the
-    # normalisation then mints the exact canonical line this rule exists to
-    # refuse.
     f"[{WRAPPER}] ; [x]",
 ]
 
 
-@pytest.mark.parametrize("spelling", SENTINEL_SPELLINGS)
-def test_ini_recreates_a_file_spelling_the_wrapper_header(
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        f"[{WRAPPER}]",
+        f"  [{WRAPPER}]",
+        f"[{WRAPPER}] ; a comment",
+        f"[{WRAPPER}] ; [x]",
+    ],
+)
+def test_ini_edits_a_file_carrying_a_wrapper_named_section_in_place(
     tmp_path: Path, spelling: str
 ) -> None:
+    # The oddly named section and every key under it are somebody else's
+    # settings, and they survive an edit to the section this program owns.
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{spelling}\nKeepMe = precious\n[Achievements]\nToken = old\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": "fresh"}}) is True
+
+    text = path.read_text()
+    assert spelling in text
+    assert "KeepMe = precious" in text
+    assert "Token = fresh" in text
+
+
+@pytest.mark.parametrize("spelling", [f"[{WRAPPER}] extra", f"[{WRAPPER}] = 3"])
+def test_ini_still_recreates_a_wrapper_named_line_that_is_not_a_header(
+    tmp_path: Path, spelling: str
+) -> None:
+    # Refused for their shape, not their name: trailing junk after the
+    # closing bracket is a line no rule of this program's grammar reads.
     path = tmp_path / "secrets.ini"
     path.write_text(f"{spelling}\nToken = TOKENlive\n")
 
@@ -4427,15 +4449,15 @@ def retroarch_written(path: Path, source: str | None) -> str:
         "[Achievements]\nToken = TOKENlive\nUserPref = keepme\n",
         # Recreated, because the line is not a setting.
         "[Achievements]\ntorn\nToken = TOKENlive\n",
-        # Recreated because the file already carries the wrapper's header...
-        f"[{WRAPPER}]\nToken = TOKENlive\n",
-        # ...including the spelling only the post-normalisation check sees.
-        f"[{WRAPPER}] ; [x]\nToken = TOKENlive\n",
     ],
 )
 def test_no_ini_this_program_writes_carries_the_wrapper_header(
     tmp_path: Path, source: str | None
 ) -> None:
+    # A file that already spells the old wrapper's name is an ordinary
+    # editable file and keeps its own header; what this test pins is that
+    # the editor never introduces that name into a file that did not
+    # carry it.
     assert WRAPPER not in ini_written(tmp_path / "settings.ini", source)
 
 
@@ -5048,12 +5070,11 @@ def test_a_username_with_a_trailing_newline_does_not_end_the_session(
     assert "Username = old" in text
 
 
-def test_ini_refuses_to_own_a_section_named_like_the_wrapper(
+def test_ini_honors_an_owned_table_naming_a_wrapper_like_section(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # A section actually spelled like the synthetic header cannot be told
-    # apart from it on the next read, and appending one to a recreated file
-    # raised out of an editor whose whole policy is not to raise.
+    # No section name is reserved: an owned-values table may claim any
+    # section, and the editor seeds it like any other, with nothing noted.
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nUsername = old\n")
 
@@ -5066,21 +5087,24 @@ def test_ini_refuses_to_own_a_section_named_like_the_wrapper(
     )
 
     text = path.read_text()
-    assert WRAPPER not in text
+    assert f"[{WRAPPER}]" in text
+    assert "Key = value" in text
     assert "Username = correct" in text
-    assert "reserved" in capsys.readouterr().err
+    assert "reserved" not in capsys.readouterr().err
 
 
-def test_ini_recreating_a_file_that_owns_only_a_reserved_section_writes_nothing(
+def test_ini_recreating_a_file_owning_only_a_wrapper_like_section_writes_it(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\ntorn\n")
-    freeze(path)
 
-    assert ep.set_ini_settings(path, {WRAPPER: {"Key": "value"}}) is False
+    assert ep.set_ini_settings(path, {WRAPPER: {"Key": "value"}}) is True
 
-    assert unwritten(path)
+    text = path.read_text()
+    assert f"[{WRAPPER}]" in text
+    assert "Key = value" in text
+    assert "torn" not in text
 
 
 def test_ini_recreating_a_file_never_writes_a_multi_line_value(
@@ -5406,6 +5430,8 @@ ROUND_TRIP_CORPUS: list[tuple[str, bool]] = [
     ("[] = y\nkey = a = b\n", True),
     (AZAHAR, True),
     (SCUMMVM, True),
+    (MIXED, True),
+    (RA_MIXED, False),
     (
         "[Other]\nFullscreen = False\n[Display]\nFullscreen = False\n[Interface]\nConfirmStop = False\n",
         True,

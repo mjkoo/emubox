@@ -49,7 +49,7 @@
 
 ## 2. The differential parity gate
 
-- [ ] 2.1 Build the harness in `.scratch/prepare-flat-cst/`: feed every
+- [x] 2.1 Build the harness in `.scratch/prepare-flat-cst/`: feed every
   flat-file fixture used by the suite plus generated edge shapes
   (indented lines under each Unicode whitespace, header trailing
   comments, `[]`, library-header-shape lines carrying `=` such as
@@ -60,6 +60,11 @@
   reports verdict agreement everywhere except the two declared
   wrapper rows. The editor half of the gate is task 3.7: it needs the
   new editors, which do not exist until group 3 swaps them in.
+  Loader-half run (`.scratch/prepare-flat-cst/differential.py`): every
+  string constant in the test suite plus the generated edge shapes,
+  1714 distinct texts, 3428 verdict pairs, 3344 agreements, 84
+  disagreements all matching the declared wrapper-header row, 0
+  undeclared.
 
 ## 3. Swapping the editors
 

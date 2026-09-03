@@ -16,8 +16,8 @@
   split on `\n` alone, classification on the fully stripped line.
   Verify each rule's test fails when its rule is broken (run the
   broken variant once, record the failing test name in this file).
-  Mutation evidence - each broken variant was run once and made
-  exactly this test fail:
+  Mutation evidence - each broken variant was run once, and the named
+  test was among its failures (for most variants it was the only one):
   - blanks read as comments -> test_classifier_reads_a_blank_line_as_blank
   - comment prefixes not per-format ->
     test_classifier_reads_comment_prefixes_per_format

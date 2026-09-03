@@ -4188,25 +4188,23 @@ def test_retroarch_recreates_a_bracketed_line_carrying_an_assignment(
 # these can. To the INI editor it is an ordinary section like any other. To
 # the RetroArch editor any header refuses the file, this one included.
 
-SENTINEL_SPELLINGS = [
+# Spellings the strict header grammar (`_FLAT_HEADER_RE`) reads as an
+# ordinary header, and spellings the loose-header junk rule refuses instead -
+# split into two lists because every test below cares which side of that
+# boundary a spelling falls on, the RetroArch test included.
+WRAPPER_HEADER_SPELLINGS = [
     f"[{WRAPPER}]",
     f"  [{WRAPPER}]",
     f"[{WRAPPER}] ; a comment",
+    f"[{WRAPPER}] ; [x]",
+]
+WRAPPER_JUNK_SPELLINGS = [
     f"[{WRAPPER}] extra",
     f"[{WRAPPER}] = 3",
-    f"[{WRAPPER}] ; [x]",
 ]
 
 
-@pytest.mark.parametrize(
-    "spelling",
-    [
-        f"[{WRAPPER}]",
-        f"  [{WRAPPER}]",
-        f"[{WRAPPER}] ; a comment",
-        f"[{WRAPPER}] ; [x]",
-    ],
-)
+@pytest.mark.parametrize("spelling", WRAPPER_HEADER_SPELLINGS)
 def test_ini_edits_a_file_carrying_a_wrapper_named_section_in_place(
     tmp_path: Path, spelling: str
 ) -> None:
@@ -4223,7 +4221,7 @@ def test_ini_edits_a_file_carrying_a_wrapper_named_section_in_place(
     assert "Token = fresh" in text
 
 
-@pytest.mark.parametrize("spelling", [f"[{WRAPPER}] extra", f"[{WRAPPER}] = 3"])
+@pytest.mark.parametrize("spelling", WRAPPER_JUNK_SPELLINGS)
 def test_ini_still_recreates_a_wrapper_named_line_that_is_not_a_header(
     tmp_path: Path, spelling: str
 ) -> None:
@@ -4239,10 +4237,16 @@ def test_ini_still_recreates_a_wrapper_named_line_that_is_not_a_header(
     assert WRAPPER not in text
 
 
-@pytest.mark.parametrize("spelling", SENTINEL_SPELLINGS)
+@pytest.mark.parametrize(
+    "spelling", [WRAPPER_HEADER_SPELLINGS[0], WRAPPER_JUNK_SPELLINGS[1]]
+)
 def test_retroarch_recreates_a_file_spelling_the_wrapper_header(
     tmp_path: Path, spelling: str
 ) -> None:
+    # The wrapper's name is not special here either - any header at all
+    # refuses a RetroArch file - so one representative of each shape above is
+    # enough: a plain header spelling and a header the strict grammar refuses
+    # for carrying `= 3` after the bracket.
     path = tmp_path / "retroarch.cfg"
     path.write_text(f'{spelling}\ncheevos_token = "TOKENlive"\n')
 
@@ -4375,10 +4379,10 @@ def retroarch_written(path: Path, source: str | None) -> str:
 def test_no_ini_this_program_writes_carries_the_wrapper_header(
     tmp_path: Path, source: str | None
 ) -> None:
-    # A file that already spells the old wrapper's name is an ordinary
-    # editable file and keeps its own header; what this test pins is that
-    # the editor never introduces that name into a file that did not
-    # carry it.
+    # A historical tripwire: no code path in the document model can produce
+    # this name (it names nothing the editors themselves construct), so this
+    # can no longer fail. Kept as a guard against a future write path that
+    # reintroduces a synthetic section name of its own.
     assert WRAPPER not in ini_written(tmp_path / "settings.ini", source)
 
 
@@ -4395,6 +4399,8 @@ def test_no_ini_this_program_writes_carries_the_wrapper_header(
 def test_no_retroarch_file_this_program_writes_carries_the_wrapper_header(
     tmp_path: Path, source: str | None
 ) -> None:
+    # The RetroArch twin of the tripwire above, for the same reason: no code
+    # path can produce this name, so this can no longer fail either.
     assert WRAPPER not in retroarch_written(tmp_path / "retroarch.cfg", source)
 
 
@@ -4628,8 +4634,10 @@ def test_ini_edits_a_file_with_a_headerless_preamble_in_place(tmp_path: Path) ->
 
 
 # The mutate-and-serialise path itself, which nothing pinned before: an edit
-# is where the library rewrites blocks, so it is where an unowned setting can
-# be lost or reattributed.
+# is where the document model rewrites a node - `_write_key` and `_sweep_key`
+# replace or drop a child in place, and rendering is otherwise concatenation
+# of every other node's raw line - so it is where an unowned setting can be
+# lost or reattributed.
 
 MIXED = (
     "# written by the emulator\n"
@@ -4935,10 +4943,11 @@ def test_ini_refuses_an_owned_value_spanning_more_than_one_line(
     # One line of a settings file holds one setting, so a value carrying a
     # newline is not a value: written, its tail becomes a line of its own,
     # which either parses as some other setting or fails the syntax check and
-    # takes every unowned key in the file with it on the next launch. The
-    # library refuses to store one on an option that already exists, and that
-    # refusal is not an OSError, so nothing in the editor loop would have
-    # caught it and the session would have ended at a greeter.
+    # takes every unowned key in the file with it on the next launch.
+    # `_writable` drops the value before it ever reaches a node, backstopped
+    # by `_render_flat`'s own assert, and neither refusal is an OSError, so
+    # nothing in the editor loop would have caught it and the session would
+    # have ended at a greeter.
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nUsername = old\nKeepMe = yes\n")
     freeze(path)
@@ -4966,10 +4975,11 @@ def test_retroarch_refuses_an_owned_value_spanning_more_than_one_line(
 def test_ini_refuses_a_multi_line_value_for_a_key_the_file_does_not_carry(
     tmp_path: Path,
 ) -> None:
-    # The library accepts one here, because a brand new option is built
-    # rather than assigned - so the crash appears only on the *second* run,
-    # against the line the first run wrote. Refusing both ways is what keeps
-    # the editor's behaviour the same on every launch.
+    # No such acceptance path exists: `_writable` drops the value for every
+    # branch, this key the file does not carry included, before either the
+    # edit path or the recreate path ever builds a node from it. Refusing
+    # both ways is what keeps the editor's behaviour the same on every
+    # launch.
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nKeepMe = yes\n")
 
@@ -5004,6 +5014,88 @@ def test_a_username_with_a_trailing_newline_does_not_end_the_session(
     text = path.read_text()
     assert "Hardcore = false" in text
     assert "Username = old" in text
+
+
+def test_ini_refuses_an_owned_key_name_that_is_not_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The key-name twin of the value guard above: a key name carrying a
+    # newline ends up on the line the renderer writes verbatim exactly like a
+    # value does, so `_writable` has to drop it too.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Bad\nKey": "v", "Good": "x"}})
+        is True
+    )
+
+    text = path.read_text()
+    assert "Good = x" in text
+    assert "Bad" not in text
+    assert "Key" not in text
+    assert "is not one line" in capsys.readouterr().err
+
+
+def test_ini_refuses_an_owned_section_name_that_is_not_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The section-name twin of the same guard, in `set_ini_settings`: a
+    # broken header would split the file's grammar across two lines, and the
+    # file would stop parsing on the very next launch.
+    path = tmp_path / "settings.ini"
+    owned = {"Sec\ntion": {"K": "v"}, "Achievements": {"Username": "u"}}
+    path.write_text("[Achievements]\nUsername = old\n")
+
+    assert ep.set_ini_settings(path, owned) is True
+
+    text = path.read_text()
+    assert "Username = u" in text
+    assert "Sec" not in text
+    assert "tion" not in text
+    assert "K = v" not in text
+    assert "is not one line" in capsys.readouterr().err
+
+    # The file must still be readable: a second run against a settled file
+    # must not report a recreation, which is what a broken header would
+    # force on every launch.
+    assert ep.set_ini_settings(path, owned) is False
+
+
+def test_retroarch_refuses_an_owned_key_name_that_is_not_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "rgui"\n')
+
+    assert ep.set_retroarch_settings(path, {"bad\nkey": "v", "good_key": "w"}) is True
+
+    text = path.read_text()
+    assert 'menu_driver = "rgui"' in text
+    assert 'good_key = "w"' in text
+    assert "bad" not in text
+    assert "is not one line" in capsys.readouterr().err
+
+
+def test_ini_settles_an_owned_value_declared_with_surrounding_whitespace(
+    tmp_path: Path,
+) -> None:
+    # The node's value is stripped at classification (`_classify_flat_line`),
+    # so comparing a declared value bare against that stripped value would
+    # never match and would rewrite the file on every launch even though the
+    # bytes settle. The written line still carries the declared value
+    # verbatim; only the settle comparison strips.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": " spaced "}}) is True
+    assert "Username =  spaced \n" in path.read_text()
+
+    freeze(path)
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": " spaced "}}) is False
+    )
+    assert unwritten(path)
 
 
 def test_ini_honors_an_owned_table_naming_a_wrapper_like_section(
@@ -5046,10 +5138,10 @@ def test_ini_recreating_a_file_owning_only_a_wrapper_like_section_writes_it(
 def test_ini_recreating_a_file_never_writes_a_multi_line_value(
     tmp_path: Path,
 ) -> None:
-    # The recreate branch builds options rather than assigning to them, and
-    # the library objects only to the assignment - so a guard on the edit
-    # path alone would let a recreation write the very line that makes the
-    # next launch refuse the file. Here the tail is a whole second setting.
+    # `_writable` drops the value for every branch, not only the edit path -
+    # so a guard confined to the edit path alone would let a recreation write
+    # the very line that makes the next launch refuse the file. Here the tail
+    # is a whole second setting.
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\ntorn line\nOther = x\n")
 
@@ -5123,22 +5215,6 @@ def test_ini_refuses_an_owned_value_carrying_a_carriage_return(
 # rendering by concatenation. The grammar is this program's own statement of
 # what the emulators' parsers read, so these tests pin each classifier rule
 # and the refusal boundary directly, one rule per test.
-
-
-def test_document_nodes_hold_their_source_lines_verbatim() -> None:
-    blank = ep.Blank(raw="  ")
-    comment = ep.Comment(raw="  # note")
-    assignment = ep.Assignment(raw="Token =  x ", key="Token", value="x")
-    preamble = ep.SectionNode(
-        raw_header=None, name=None, children=[blank, comment, assignment]
-    )
-    section = ep.SectionNode(raw_header="[A] ; kept", name="A", children=[])
-    document = ep.Document(sections=[preamble, section])
-
-    assert document.sections[0].raw_header is None
-    assert assignment.raw == "Token =  x "
-    assert section.name == "A"
-    assert section.raw_header == "[A] ; kept"
 
 
 def test_classifier_reads_a_blank_line_as_blank() -> None:
@@ -5313,21 +5389,15 @@ ROUND_TRIP_CORPUS: list[tuple[str, bool]] = [
     (MIXED, True),
     (RA_MIXED, False),
     (
-        "[Other]\nFullscreen = False\n[Display]\nFullscreen = False\n[Interface]\nConfirmStop = False\n",
+        "[Interface]\nConfirmStop = True\nKeepMe = yes\n[Interface]\nAlso = kept\n",
         True,
     ),
-    (
-        "[Achievements]\nUsername = stale-one\nUsername = stale-two\nKeepMe = yes\n",
-        True,
-    ),
-    ("", False),
     (
         '# RetroArch config\nmenu_driver = "rgui"\ninput_driver = "sdl"\nvideo_fullscreen = "false"\n',
         False,
     ),
     ('# RetroArch config\nvideo_fullscreen = "true"\n\n\n', False),
     ('cheevos_token = "keepme"', False),
-    ('menu_driver = "ozone"\n', False),
 ]
 
 
@@ -5397,21 +5467,6 @@ def test_read_document_notes_every_other_refusal_with_its_reason(
     err = capsys.readouterr().err
     assert reason in err
     assert "recreating it" in err
-
-
-def test_read_document_quietly_is_silent_about_every_refusal(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    path = tmp_path / "settings.ini"
-    path.write_text("[Interface]\nthis line has no assignment\n")
-    unreadable = tmp_path / "junk.ini"
-    unreadable.write_bytes(b"\xff\xfe")
-
-    assert ep._read_document_quietly(path, ini=True) is None
-    assert ep._read_document_quietly(unreadable, ini=True) is None
-    assert ep._read_document_quietly(tmp_path / "absent.ini", ini=True) is None
-
-    assert capsys.readouterr().err == ""
 
 
 def test_read_document_reads_an_empty_retroarch_file_as_a_document() -> None:

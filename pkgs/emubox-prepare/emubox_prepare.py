@@ -95,8 +95,8 @@ The three editors, and what each is built on:
   line is classified as blank, comment, section header or assignment, each
   node keeps its source line verbatim, and rendering is concatenation -
   which keeps comments, ordering, indentation and every key the flake does
-  not own. The grammar is exactly what each emulator's own parser reads,
-  stated once in the per-line classifier.
+  not own. The grammar is this program's own statement of what the
+  emulators' parsers read, stated once in the per-line classifier.
 
 What the flat editors promise is semantic equivalence for the emulator that
 reads the file: every setting it reads keeps its key, its value and its
@@ -336,14 +336,16 @@ def _without_removals(keys: Mapping[str, str | Removal]) -> dict[str, str]:
 def _writable(
     path: Path, keys: Mapping[str, str | Removal]
 ) -> dict[str, str | Removal]:
-    """The owned keys minus any whose value would not be one line on disk.
+    """The owned keys minus any whose name or value would not be one line on disk.
 
-    One line of a settings file holds one setting, so such a value is not a
-    value at all: written, its tail becomes a line of its own, which either
-    parses as some other setting - a token of `"tok\nCheevos_evil = 1"`
-    writes that second setting into the file - or fails the syntax check and
-    takes every unowned key in the file with it through the recreate path on
-    the next launch.
+    One line of a settings file holds one setting, so such a name or value is
+    not a name or value at all: written, its tail becomes a line of its own,
+    which either parses as some other setting - a token of
+    `"tok\nCheevos_evil = 1"` writes that second setting into the file - or
+    fails the syntax check and takes every unowned key in the file with it
+    through the recreate path on the next launch. A key name carries exactly
+    the same hazard as its value: both end up on the line a renderer writes
+    verbatim.
 
     Both `\n` and `\r`, because `_read_text` reads in universal-newline mode:
     a lone carriage return is written to disk verbatim and read back as a
@@ -353,8 +355,8 @@ def _writable(
     `_is_usable_token` rejects the same shape where a token arrives from a
     response body. This is the other end of the same path, and it is wider:
     an account name arrives from a secret file, which yields `"player\n"` for
-    a file whose last line is blank, and an owned value can be declared in
-    the flake as a multi-line string. Neither is validated anywhere else.
+    a file whose last line is blank, and an owned key or value can be
+    declared in the flake carrying one. Neither is validated anywhere else.
 
     Dropped rather than raised, and dropped for *every* branch rather than
     only at the edit path: the recreate branches build fresh assignment
@@ -365,6 +367,12 @@ def _writable(
     """
     writable: dict[str, str | Removal] = {}
     for key, value in keys.items():
+        if "\n" in key or "\r" in key:
+            # repr, not the bare key, because the key is the very thing
+            # carrying the newline: printed bare it would tear across lines
+            # in the journal, and repr's own escaping keeps it on one.
+            note(f"{path}: the key {key!r} is not one line; not writing it")
+            continue
         if isinstance(value, str) and ("\n" in value or "\r" in value):
             # Named with the file: one key name is owned in several files at
             # once, so the key alone does not say which one was left alone.
@@ -585,6 +593,16 @@ class Document:
     sections: list[SectionNode]
 
 
+def _make_assignment(key: str, value: str) -> Assignment:
+    """An edited line, re-rendered as `key = value`."""
+    return Assignment(raw=f"{key} = {value}", key=key, value=value)
+
+
+def _make_section(name: str) -> SectionNode:
+    """A fresh, empty section header for `name`, with no children yet."""
+    return SectionNode(raw_header=f"[{name}]", name=name, children=[])
+
+
 class _Unparseable(Exception):
     """A flat file that has to be recreated rather than edited in place.
 
@@ -608,6 +626,13 @@ class _Unparseable(Exception):
 # recreate path and lose every unowned key in it. `[]` is deliberately not a
 # header: an empty name could never equal an owned section's, so a removal
 # sweeping the declared section would walk past whatever sits below it.
+# Taking the first `]` rather than the last is deliberate, not incidental:
+# the readers this grammar is written for - the Qt-family INI writers and
+# the emulators' own C++ ini parsers - stop at the first closing bracket
+# too, so a section name may never actually contain one either.
+# Applied with `fullmatch`, not `match`: only `fullmatch` makes this a
+# strict end-to-end grammar, since the pattern has no `$` of its own to
+# anchor its end.
 _FLAT_HEADER_RE = re.compile(r"\[(?P<name>[^]]+)\][ \t]*(?:[;#].*)?")
 
 # The permissive header shape configparser-family readers accept: `[`, at
@@ -620,10 +645,13 @@ _FLAT_HEADER_RE = re.compile(r"\[(?P<name>[^]]+)\][ \t]*(?:[;#].*)?")
 # walk past a live token. Such a line refuses the whole file, `=` or not.
 # A line with no `]` past its second column never matches, so `[foo bar =
 # baz` stays an assignment named `[foo bar` and `[] = y` one named `[]`.
+# Applied with `match`, not `fullmatch`: `match` alone is what keeps this
+# anchored to a line that begins with `[`, since the pattern has no `^` of
+# its own to anchor its start.
 _LOOSE_HEADER_RE = re.compile(r"\[.+\]")
 
 
-def _not_a_setting(line: str) -> str:
+def _junk_reason(line: str) -> str:
     """The refusal reason for a line no rule reads, bounded for the journal.
 
     The bound caps how much of the line reaches the journal, not which
@@ -664,14 +692,14 @@ def _classify_flat_line(
             raise _Unparseable(f"has a section header ({header.group('name')!r})")
         return SectionNode(raw_header=raw, name=header.group("name"), children=[])
     if _LOOSE_HEADER_RE.match(line):
-        raise _Unparseable(_not_a_setting(line))
+        raise _Unparseable(_junk_reason(line))
     key, delimiter, value = line.partition("=")
     key = key.rstrip()
     if delimiter and key:
         return Assignment(raw=raw, key=key, value=value.strip())
     # `=` with nothing before it, or no `=` at all: not a setting, so the
     # file is not this format and takes the recreate path.
-    raise _Unparseable(_not_a_setting(line))
+    raise _Unparseable(_junk_reason(line))
 
 
 def _parse_flat(text: str, *, ini: bool) -> Document:
@@ -714,14 +742,28 @@ def _render_flat(document: Document) -> str:
     parts: list[str] = []
     for section in document.sections:
         if section.raw_header is not None:
+            # One line of a settings file holds one section header. `_writable`
+            # is not what guards this one - a section name never reaches it -
+            # so it is `set_ini_settings`'s own section-name filter that
+            # establishes the invariant this asserts; parsing cannot build a
+            # multi-line header either. Not raised: this states an invariant
+            # the module's own code establishes elsewhere, rather than
+            # enforcing one here.
+            assert "\n" not in section.raw_header and "\r" not in section.raw_header, (
+                f"section header is not one line: {section.raw_header!r}"
+            )
             parts.append(section.raw_header)
         for child in section.children:
             if isinstance(child, Assignment):
-                # One line of a settings file holds one setting. Callers
-                # drop owned values carrying a line break before they reach
-                # a node, and parsing cannot build one, so this states an
-                # invariant the module's own code establishes.
-                assert "\n" not in child.raw and "\r" not in child.raw
+                # One line of a settings file holds one setting. `_writable`
+                # is what establishes this invariant for both halves of an
+                # owned assignment - it drops a key name or a value carrying
+                # a line break before either ever reaches a node - and
+                # parsing cannot build a multi-line assignment either. Not
+                # raised, for the same reason as the header assert above.
+                assert "\n" not in child.raw and "\r" not in child.raw, (
+                    f"assignment is not one line: {child.raw!r}"
+                )
             parts.append(child.raw)
     return "".join(part + "\n" for part in parts)
 
@@ -788,7 +830,7 @@ def _document_write_target(document: Document, section: str | None) -> SectionNo
     for candidate in document.sections:
         if candidate.name == section:
             return candidate
-    created = SectionNode(raw_header=f"[{section}]", name=section, children=[])
+    created = _make_section(section)
     document.sections.append(created)
     return created
 
@@ -873,15 +915,23 @@ def _write_key(document: Document, key: str, value: str, section: str | None) ->
         changed = True
 
     if survivor is None:
-        target.children.append(Assignment(raw=f"{key} = {value}", key=key, value=value))
+        target.children.append(_make_assignment(key, value))
         return True
 
-    if survivor.value != value:
+    # Compared stripped: the node's value is stripped at classification
+    # (`_classify_flat_line`), so an owned value declared with leading or
+    # trailing whitespace would otherwise never equal what is read back and
+    # would rewrite the file on every launch even though the bytes settle.
+    # The written `raw` below still keeps `value` verbatim - only this
+    # comparison strips.
+    if survivor.value != value.strip():
         for index, child in enumerate(target.children):
+            # Identity, not equality: a duplicate declaring the same key and
+            # value would compare equal as a dataclass, and the survivor
+            # being replaced here is exactly the one that must not be
+            # confused with such a twin.
             if child is survivor:
-                target.children[index] = Assignment(
-                    raw=f"{key} = {value}", key=key, value=value
-                )
+                target.children[index] = _make_assignment(key, value)
                 break
         changed = True
     return changed
@@ -928,6 +978,19 @@ def set_ini_settings(
     """
     sections = {name: _writable(path, keys) for name, keys in sections.items()}
 
+    # The same one-line guard `_writable` applies to a key name or value,
+    # applied to a section name - dropped here, before the document is even
+    # read, rather than inside either write branch below, because both the
+    # edit path and the recreate path build a `SectionNode` from this same
+    # `sections` mapping and neither may ever see a broken name.
+    writable_sections: dict[str, dict[str, str | Removal]] = {}
+    for name, keys in sections.items():
+        if "\n" in name or "\r" in name:
+            note(f"{path}: the section {name!r} is not one line; not writing it")
+            continue
+        writable_sections[name] = keys
+    sections = writable_sections
+
     if not any(sections.values()):
         return False
 
@@ -957,12 +1020,10 @@ def set_ini_settings(
             sections=[SectionNode(raw_header=None, name=None, children=[])]
         )
         for section, keys in fresh.items():
-            node = SectionNode(raw_header=f"[{section}]", name=section, children=[])
+            node = _make_section(section)
             recreated.sections.append(node)
             for key, value in keys.items():
-                node.children.append(
-                    Assignment(raw=f"{key} = {value}", key=key, value=value)
-                )
+                node.children.append(_make_assignment(key, value))
         _write(path, _render_flat(recreated))
         return True
 
@@ -1018,9 +1079,7 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
         preamble = SectionNode(raw_header=None, name=None, children=[])
         for key, value in fresh.items():
             quoted = f'"{value}"'
-            preamble.children.append(
-                Assignment(raw=f"{key} = {quoted}", key=key, value=quoted)
-            )
+            preamble.children.append(_make_assignment(key, quoted))
         _write(path, _render_flat(Document(sections=[preamble])))
         return True
 
@@ -1489,11 +1548,11 @@ def encrypt_duckstation_token(machine_id: bytes, username: str, token: str) -> s
 def _current_ini_value(path: Path, section: str, key: str) -> str | None:
     """The value already on disk for one INI key, read quietly.
 
-    The quiet variant of the editors' load helper, deliberately: that helper
-    decides whether a file is healthy enough to edit in place, and it notes
-    ("recreating it") whenever it is not. Calling the loud one here - purely
-    to see what a key currently holds - would print a recreation notice
-    before this run had decided to write anything.
+    `_read_document_quietly`, deliberately, rather than its loud pair
+    `_read_document`: the loud one decides whether a file is healthy enough
+    to edit in place, and it notes ("recreating it") whenever it is not.
+    Calling it here - purely to see what a key currently holds - would print
+    a recreation notice before this run had decided to write anything.
 
     Five things mean the same thing here, because none of them gives a value
     to compare against: the file is missing, it is unreadable, it cannot be

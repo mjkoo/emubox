@@ -2,7 +2,7 @@
 
 `emubox-prepare` carries its own INI parser, its own RetroArch flat-file
 parser, and the line-index arithmetic both need: eleven functions, about 159
-lines, hand-maintained. Parsing a settings file is a solved problem, and the
+lines, hand-maintained. All eleven go; the one constant they share stays. Parsing a settings file is a solved problem, and the
 part of it this program actually needs - editing a key in place while leaving
 comments, ordering and every unowned key byte-identical - is solved too, by
 `configupdater`, which is packaged in nixpkgs, pure Python and maintained.
@@ -38,7 +38,23 @@ a hope, and it repairs a spec gap the preceding fix left behind.
 - Delete `_parse_ini`, `_render_ini`, `_ini_section_bounds`,
   `_ini_insert_point`, `_parse_retroarch`, `_render_retroarch`, `_lines`,
   `_split_ini_assignment`, `_sweep_key`, `_ini_key_index` and
-  `_matching_space`.
+  `_matching_space`. `_INI_SECTION_RE` is *retained*: design decision 7
+  rule 3 makes it the INI header guard, because the library's own section
+  grammar reads a header carrying a further `]` under a different name and
+  would leave a `REMOVE`d bearer token on disk.
+- State the preservation contract in one place (design decision 7)
+  rather than leaving it implied, and state it in terms of what an
+  emulator reads rather than what the bytes look like: every setting the
+  flake does not own keeps its key and its value, and every one of its
+  assignments when it repeats. Formatting no consumer can observe is
+  outside the contract, so a spaceless `Key=old` whose owned value
+  changes comes back as `Key = new`, a newly seeded key lands at the end
+  of its section's block, and `_matching_space` goes with the other
+  deleted helpers. What the contract does defend is the recreate path,
+  which rewrites a file with only the owned keys in it and so costs every
+  unowned setting: decision 7's rules stop the library widening that path
+  on an indented comment, and stop it narrowing on a bracketed line it
+  reads as a header under a name today's parser does not give it.
 - Keep every policy the editors carry, because no library supplies it:
   recreate-not-fail, `REMOVE` semantics, the `_holds_something` guard against
   a removal that a parser cannot see into, the "no owned keys means do not
@@ -69,16 +85,33 @@ None.
 
 ## Impact
 
-`pkgs/emubox-prepare/emubox_prepare.py` and its test suite;
-`pkgs/emubox-prepare/package.nix` gains one Python dependency. No NixOS
-module, unit or VM test changes: the program's invocation contract, its exit
-codes and the files it writes are all unchanged.
+`pkgs/emubox-prepare/emubox_prepare.py` and its test suite, which gains
+tests and amends one; `pkgs/emubox-prepare/package.nix` gains one Python
+dependency. No NixOS module changes, and no changes to the module-level
+unit or VM tests: the program's invocation contract, its exit codes and
+the files it writes are all unchanged. One prose note in
+`modules/emulators/default.nix` explains a past Azahar key-spelling
+accident partly by saying "prepare appends new keys after a section's
+last assignment"; that clause becomes a stale account of current
+behaviour, since a seeded key now lands at the end of its section's
+block, but the conclusion it supports - that the backslash spelling is
+what prepare must assert - is unaffected, and the module's declarations
+do not change.
+
+Inside that module the blast radius is wider than the two editors. The
+migration also moves `_current_ini_value`, a third caller of the deleted
+helpers: it calls four of the eleven, and it is the DuckStation
+RetroAchievements probe that decides whether a `login_timestamp` needs
+rewriting. Deleting the eleven without moving it strands it, on a path
+that runs for every duckstation target declaring that key. Design
+decision 6 covers what it needs from the shared load helper.
 
 The risk is concentrated in one place worth naming. This program is the last
 thing that runs before the frontend launches, and its credential-removal path
 is what takes a RetroAchievements bearer token off the box. A regression
 there is silent by nature. The 186 unit tests are what make the change safe
 to attempt, and they run in 26 seconds on the administrator's Mac; three
-library behaviours already found during evaluation - key case folding,
-separator normalisation, and partial deletion of a repeated key - are each a
-way this could regress quietly and are called out in the design.
+library behaviours already found during evaluation - key case folding, partial
+deletion of a repeated key, and a section header read under a name today's
+parser does not give it - are each a way this could regress quietly and are
+called out in the design.

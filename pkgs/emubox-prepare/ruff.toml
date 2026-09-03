@@ -20,11 +20,15 @@ extend-select = ["ARG", "S", "RUF100"]
 
 # S101 is the one bandit rule that does not earn its place here. It exists
 # because `python -O` strips assertions, so an assert must never be the
-# thing validating input - and none of them is: every one narrows a
-# `T | None` the checker cannot narrow on its own, each beside a comment
-# saying why it holds. Nothing runs this under `-O` either; the derivation
-# installs it with a shebang patched to a plain `python3`. Rewriting four
-# invariants as runtime raises would state the opposite of what they mean.
+# thing validating input - and none of them is. Each states an invariant
+# this module's own code establishes and the checker cannot see: one narrows
+# a `T | None`, one records that a document built here carries the header
+# this module put on it. Neither reads a file, an argument or a response
+# body.
+# Every one sits beside a comment saying why it holds. Nothing runs this
+# under `-O` either; the derivation installs it with a shebang patched to a
+# plain `python3`. Rewriting them as runtime raises would state the opposite
+# of what they mean.
 ignore = ["S101"]
 
 [lint.per-file-ignores]

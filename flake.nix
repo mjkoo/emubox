@@ -229,13 +229,17 @@
         let
           pkgs = pkgsFor system;
           # emubox-prepare's own interpreter, carrying pytest to run its
-          # tests by hand and cryptography for the DuckStation token
-          # transform it imports - one environment, not python3 plus a
-          # separately-wrapped python3.pkgs.pytest, so `import cryptography`
-          # works from the same `pytest` this shell puts on PATH.
+          # tests by hand and every library the module imports - one
+          # environment, not python3 plus a separately-wrapped
+          # python3.pkgs.pytest, so those imports resolve from the same
+          # `pytest` this shell puts on PATH. It must carry what
+          # `package.nix` carries: `nix flake check` builds the package with
+          # its own closure, so a library missing only from here breaks
+          # `pytest` and `ty check` by hand while CI stays green.
           preparePython = pkgs.python3.withPackages (ps: [
             ps.pytest
             ps.cryptography
+            ps.configupdater
           ]);
         in
         {

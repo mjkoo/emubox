@@ -15,8 +15,8 @@
 # `python3.withPackages` is a `buildInputs` entry, not a native one: the
 # script runs on the host platform, and the default fixup's
 # `patchShebangs --host` resolves its `#!` against exactly that environment -
-# the one carrying `cryptography` for the DuckStation token transform and
-# `configupdater` for the settings files it edits.
+# the one carrying `cryptography` for the DuckStation token transform. The
+# settings-file editors themselves are standard library only.
 {
   lib,
   stdenvNoCC,
@@ -28,13 +28,8 @@
 let
   # One python closure for both the installed script's shebang and the
   # check phase's pytest, so `import cryptography` works in both places
-  # rather than only at runtime or only under test. `configupdater` is the
-  # comment-preserving INI library both flat-file editors read and write
-  # through; it is pure Python and pulls in nothing else.
-  python = python3.withPackages (ps: [
-    ps.cryptography
-    ps.configupdater
-  ]);
+  # rather than only at runtime or only under test.
+  python = python3.withPackages (ps: [ ps.cryptography ]);
 in
 stdenvNoCC.mkDerivation {
   pname = "emubox-prepare";

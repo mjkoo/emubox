@@ -96,7 +96,14 @@ The three editors, and what each is built on:
   node keeps its source line verbatim, and rendering is concatenation -
   which keeps comments, ordering, indentation and every key the flake does
   not own. The grammar is this program's own statement of what the
-  emulators' parsers read, stated once in the per-line classifier.
+  emulators' parsers read, stated once in the per-line classifier. A file
+  may lead with a UTF-8 byte order mark - PPSSPP's own writer puts one
+  there on every save - and exactly one, at the very start of the file, is
+  set aside before any line is classified and written back first on any
+  write; a file holding only the mark is an empty file. A U+FEFF anywhere
+  else gets no special treatment: it is content like any other codepoint,
+  and the line carrying it keeps whatever behavior these rules already
+  give it.
 
 What the flat editors promise is semantic equivalence for the emulator that
 reads the file: every setting it reads keeps its key, its value and its

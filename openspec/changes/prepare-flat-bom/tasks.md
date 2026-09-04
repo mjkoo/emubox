@@ -52,7 +52,7 @@
 
 ## 3. Spec and prose
 
-- [ ] 3.1 Diff the reproduced requirement text in this change's
+- [x] 3.1 Diff the reproduced requirement text in this change's
   `specs/emulators/spec.md` against the then-current text of the
   modified requirement - `prepare-configupdater`'s delta while that
   change is open, the main emulators spec once it has archived -
@@ -61,7 +61,7 @@
   differ; then confirm the delta matches the implemented behavior
   sentence by sentence, and verify
   `openspec validate prepare-flat-bom --strict` passes.
-- [ ] 3.2 Update the module docstring's flat-file overview to state
+- [x] 3.2 Update the module docstring's flat-file overview to state
   the mark tolerance and its bounds, and verify the docstring makes no
   claim the tests do not pin.
 

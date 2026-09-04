@@ -7,7 +7,7 @@ hold the flake's values and every other key is left exactly as the program
 that owns the file last wrote it, so a preference the family changed in the
 frontend's own menus survives a reboot.
 
-Invocation contract (design D3):
+Invocation contract:
 
     emubox-prepare <owned-values-json> <custom-systems-path>
 
@@ -19,7 +19,7 @@ the frontend itself reads; if it is unset or empty this program writes
 nothing and exits non-zero, because that is a broken call site rather than a
 broken configuration and the session ending at the greeter is the point.
 
-The owned-values JSON is an object with two keys (design D1):
+The owned-values JSON is an object with two keys:
 
     {
         "files": {"settings/es_settings.xml": {"format": "esde-xml", "keys": {...}}},
@@ -33,8 +33,8 @@ later epics reach files outside it. The `keys` shape is the editor's:
 `{name: {"type": ..., "value": ...}}` for `esde-xml`, `{section: {key:
 value}}` for `ini`, `{key: value}` for `retroarch`.
 
-`retroachievements` drives the shared RetroAchievements account (design
-D2). Null - or absent - means this whole namespace is skipped: no login is
+`retroachievements` drives the shared RetroAchievements account. Null -
+or absent - means this whole namespace is skipped: no login is
 attempted and nothing under it - not even a stale credential - is ever
 touched. Non-null, it carries `username_file`, `password_file` and
 `cache_file` (paths, never contents: this JSON is a world-readable store
@@ -42,7 +42,7 @@ path), the `api_url`, the `hardcore` boolean, an `enabled` boolean
 (absent defaults to true, for every call site written before this field
 existed), and a `targets` array with one entry per supporting emulator. A
 target names its `encoding` - `plain`, `duckstation` (the encrypted
-at-rest form of design D3, which also needs a `machine_id_file`) or
+at-rest form DuckStation itself keeps, which also needs a `machine_id_file`) or
 `secret-file` (PPSSPP, whose token is a whole file named by `token_file`
 rather than a key) - the `booleans` spelling that emulator uses for true
 and false, and a `keys` table mapping this program's own vocabulary
@@ -241,7 +241,7 @@ def _write(path: Path, text: str, *, mode: int | None = None) -> None:
     )
     temporary = Path(name)
     try:
-        with os.fdopen(handle, "w") as stream:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
@@ -271,7 +271,7 @@ def _fsync_directory(directory: Path) -> None:
 def _read_text(path: Path) -> str | None:
     """The file's text, or None if it is absent or not readable as text."""
     try:
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError) as error:
@@ -298,7 +298,7 @@ def _read_quietly(path: Path) -> str | None:
     would never get to run.
     """
     try:
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -341,30 +341,99 @@ def _without_removals(keys: Mapping[str, str | Removal]) -> dict[str, str]:
     return {key: value for key, value in keys.items() if isinstance(value, str)}
 
 
+def _read_back(rendered: str) -> str:
+    """`rendered`, as a later read would hand it to a parser - pessimistically.
+
+    `_read_text` reads in universal-newline mode, so a lone carriage
+    return written to disk verbatim comes back as a line break; the
+    round-trip checks below have to model that translation, or a `\r` in
+    an owned name or value would read back fine here and destroy the file
+    one launch later. Every `\r` becomes a break of its own, deliberately
+    *not* collapsing `\r\n` the way universal-newline mode does: a value
+    ending in `\r` folds into this program's line terminator and reads
+    back clean here, but the emulator's own parser may hand that byte to
+    the value instead, so the two readers would disagree about what the
+    file says. A shape the readers can disagree over is refused outright
+    rather than modeled away.
+    """
+    return rendered.replace("\r", "\n")
+
+
+def _reads_back_alone(key: str, value: str, *, ini: bool) -> bool:
+    """Whether `key = value` parses back as exactly that single assignment.
+
+    The rule every owned name and value has to satisfy: the line the
+    renderer would write, pushed back through this program's own parser,
+    must come back as one assignment carrying the declared key and value.
+    Anything else means the next launch reads the file differently than
+    this one wrote it, and every such divergence is a standing failure: a
+    key carrying `=` reads back as a shorter key, so the probe never finds
+    it and appends a fresh copy before every launch, forever; a name with a
+    comment prefix or a header shape, or either half carrying a line break,
+    makes a line some later classification refuses, which sends the whole
+    file - every unowned key in it - through the recreate path instead.
+    """
+    try:
+        document = _parse_flat(_read_back(f"{key} = {value}\n"), ini=ini)
+    except _Unparseable:
+        return False
+    if len(document.sections) != 1:
+        return False
+    children = document.sections[0].children
+    if len(children) != 1:
+        return False
+    node = children[0]
+    return (
+        isinstance(node, Assignment) and node.key == key and node.value == value.strip()
+    )
+
+
+def _header_reads_back(name: str) -> bool:
+    """Whether `[name]` parses back as exactly that one empty section.
+
+    The section-name half of `_reads_back_alone`'s rule. A name carrying
+    `]` is the standing case: the header grammar stops at the first closing
+    bracket, so the rendered header reads back under a shorter name - or
+    refuses outright as a header two plausible readers would name
+    differently - and either way the next launch sends the whole file
+    through the recreate path, forever.
+    """
+    try:
+        document = _parse_flat(_read_back(f"[{name}]\n"), ini=True)
+    except _Unparseable:
+        return False
+    return (
+        len(document.sections) == 2
+        and not document.sections[0].children
+        and document.sections[1].name == name
+        and not document.sections[1].children
+    )
+
+
 def _writable(
-    path: Path, keys: Mapping[str, str | Removal]
+    path: Path, keys: Mapping[str, str | Removal], *, ini: bool
 ) -> dict[str, str | Removal]:
-    """The owned keys minus any whose name or value would not be one line on disk.
+    """The owned keys minus any whose name or value would not read back as itself.
 
-    One line of a settings file holds one setting, so such a name or value is
-    not a name or value at all: written, its tail becomes a line of its own,
-    which either parses as some other setting - a token of
-    `"tok\nCheevos_evil = 1"` writes that second setting into the file - or
-    fails the syntax check and takes every unowned key in the file with it
-    through the recreate path on the next launch. A key name carries exactly
-    the same hazard as its value: both end up on the line a renderer writes
-    verbatim.
+    `_reads_back_alone` states the rule; this applies it and owns the note.
+    A multi-line value is the sharpest instance - a token of
+    `"tok\nCheevos_evil = 1"` writes that second setting into the file -
+    but a key name carries every hazard its value does and more, because
+    the classifier reads the front of the line first: a `=`, a comment
+    prefix, a bracket or surrounding whitespace in the name all make a line
+    that reads back as something other than the declared setting.
 
-    Both `\n` and `\r`, because `_read_text` reads in universal-newline mode:
-    a lone carriage return is written to disk verbatim and read back as a
-    line break by this program's own reader, so it destroys a file exactly
-    as a newline does, one launch later.
+    Both `\n` and `\r` break a name or value, because `_read_text` reads in
+    universal-newline mode: a lone carriage return is written to disk
+    verbatim and read back as a line break by this program's own reader, so
+    it destroys a file exactly as a newline does, one launch later.
 
-    `_is_usable_token` rejects the same shape where a token arrives from a
-    response body. This is the other end of the same path, and it is wider:
-    an account name arrives from a secret file, which yields `"player\n"` for
-    a file whose last line is blank, and an owned key or value can be
-    declared in the flake carrying one. Neither is validated anywhere else.
+    `_is_usable_token` rejects the multi-line shape where a token arrives
+    from a response body. This is the other end of the same path, and it is
+    wider: an account name arrives from a secret file, which yields
+    `"player\n"` for a file whose last line is blank, and an owned key or
+    value can be declared in the flake carrying anything at all. Neither is
+    validated anywhere else.
 
     Dropped rather than raised, and dropped for *every* branch rather than
     only at the edit path: the recreate branches build fresh assignment
@@ -375,16 +444,23 @@ def _writable(
     """
     writable: dict[str, str | Removal] = {}
     for key, value in keys.items():
-        if "\n" in key or "\r" in key:
-            # repr, not the bare key, because the key is the very thing
-            # carrying the newline: printed bare it would tear across lines
-            # in the journal, and repr's own escaping keeps it on one.
-            note(f"{path}: the key {key!r} is not one line; not writing it")
+        # A fixed probe value first, so a broken key is named as the key's
+        # fault even when the declared value is a removal or broken too.
+        # repr, not the bare key, because the key may be the very thing
+        # carrying a line break: printed bare it would tear across lines
+        # in the journal, and repr's own escaping keeps it on one.
+        if not _reads_back_alone(key, "probe", ini=ini):
+            note(
+                f"{path}: the key {key!r} does not read back as itself; not writing it"
+            )
             continue
-        if isinstance(value, str) and ("\n" in value or "\r" in value):
+        if isinstance(value, str) and not _reads_back_alone(key, value, ini=ini):
             # Named with the file: one key name is owned in several files at
             # once, so the key alone does not say which one was left alone.
-            note(f"{path}: the value for {key} is not one line; not writing it")
+            note(
+                f"{path}: the value for {key} does not read back as one setting;"
+                " not writing it"
+            )
             continue
         writable[key] = value
     return writable
@@ -794,11 +870,11 @@ def _render_flat(document: Document) -> str:
         if section.raw_header is not None:
             # One line of a settings file holds one section header. `_writable`
             # is not what guards this one - a section name never reaches it -
-            # so it is `set_ini_settings`'s own section-name filter that
-            # establishes the invariant this asserts; parsing cannot build a
-            # multi-line header either. Not raised: this states an invariant
-            # the module's own code establishes elsewhere, rather than
-            # enforcing one here.
+            # so it is `_header_reads_back`, applied by `set_ini_settings`,
+            # that establishes the invariant this asserts; parsing cannot
+            # build a multi-line header either. Not raised: this states an
+            # invariant the module's own code establishes elsewhere, rather
+            # than enforcing one here.
             assert "\n" not in section.raw_header and "\r" not in section.raw_header, (
                 f"section header is not one line: {section.raw_header!r}"
             )
@@ -807,10 +883,11 @@ def _render_flat(document: Document) -> str:
             if isinstance(child, Assignment):
                 # One line of a settings file holds one setting. `_writable`
                 # is what establishes this invariant for both halves of an
-                # owned assignment - it drops a key name or a value carrying
-                # a line break before either ever reaches a node - and
-                # parsing cannot build a multi-line assignment either. Not
-                # raised, for the same reason as the header assert above.
+                # owned assignment - it drops a key name or a value that
+                # does not read back as itself before either ever reaches a
+                # node - and parsing cannot build a multi-line assignment
+                # either. Not raised, for the same reason as the header
+                # assert above.
                 assert "\n" not in child.raw and "\r" not in child.raw, (
                     f"assignment is not one line: {child.raw!r}"
                 )
@@ -1015,7 +1092,7 @@ def set_ini_settings(
     A file in which nothing at all is owned is left alone entirely - not
     parsed, not recreated, not mentioned. PCSX2 declares `secrets.ini` with
     no keys of its own, so a document carrying no retroachievements
-    namespace (design D1's null) never touches that file. Without this guard
+    namespace (the JSON's null) never touches that file. Without this guard
     the recreation below wrote a lone newline, which came back as an empty
     file, so the box rewrote it and logged "is empty; recreating it" before
     every single launch, forever.
@@ -1027,17 +1104,22 @@ def set_ini_settings(
     recreation is the only way a removal can be kept against a file no
     parser can see into. See `_holds_something`.
     """
-    sections = {name: _writable(path, keys) for name, keys in sections.items()}
+    sections = {
+        name: _writable(path, keys, ini=True) for name, keys in sections.items()
+    }
 
-    # The same one-line guard `_writable` applies to a key name or value,
+    # The same read-back rule `_writable` applies to a key name or value,
     # applied to a section name - dropped here, before the document is even
     # read, rather than inside either write branch below, because both the
     # edit path and the recreate path build a `SectionNode` from this same
     # `sections` mapping and neither may ever see a broken name.
     writable_sections: dict[str, dict[str, str | Removal]] = {}
     for name, keys in sections.items():
-        if "\n" in name or "\r" in name:
-            note(f"{path}: the section {name!r} is not one line; not writing it")
+        if not _header_reads_back(name):
+            note(
+                f"{path}: the section {name!r} does not read back as itself;"
+                " not writing it"
+            )
             continue
         writable_sections[name] = keys
     sections = writable_sections
@@ -1115,7 +1197,7 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
     owned keys is left alone. The whole file is one section here, so a
     repeated owned key repeats outright rather than under a second header.
     """
-    keys = _writable(path, keys)
+    keys = _writable(path, keys, ini=False)
     if not keys:
         return False
 
@@ -1153,7 +1235,7 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
     return changed
 
 
-# --- RetroAchievements: login and the token cache (design D2) ------------
+# --- RetroAchievements: login and the token cache -------------------------
 
 # Bound on the in-path login2 call. A module-level constant rather than a
 # JSON field: the JSON already carries the API URL, and a slow-or-flaky
@@ -1218,7 +1300,7 @@ def _write_credential(path: Path, content: str) -> bool:
 
     An `OSError` is noted and swallowed: a cache that cannot be refreshed
     must not cost the caller the token it just obtained, and nothing under
-    this namespace may cost the session (design D2).
+    this namespace may cost the session.
     """
     try:
         if _read_quietly(path) == content:
@@ -1312,7 +1394,7 @@ def _read_secret(path: Path) -> str | None:
     is simply skipped; the program does not fail and does not exit non-zero.
     """
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         note(f"{path} could not be read ({error})")
         return None
@@ -1331,7 +1413,7 @@ def _read_cached_token(path: Path) -> str | None:
     have been usable and was not.
     """
     try:
-        cached = path.read_text().strip()
+        cached = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError) as error:
@@ -1360,8 +1442,8 @@ def _login2(
     it at all, so a blackholed DNS server costs the resolver's own budget -
     tens of seconds - before the timeout is even armed. Either one strands
     the box on a black screen, which is exactly what the spec's "the
-    network never blocks the session" and design D2's "worst case adds 5 s
-    before the frontend" forbid. Only a deadline around the whole call
+    network never blocks the session" and this subsystem's own "worst case
+    adds 5 s before the frontend" promise forbid. Only a deadline around the whole call
     delivers them.
 
     A daemon thread joined with the timeout, rather than
@@ -1384,7 +1466,7 @@ def _login2(
             # A thread that dies with an exception would otherwise print a
             # bare traceback through threading's excepthook and leave the
             # caller to infer the failure from an empty list. The RA step
-            # costs the achievements and nothing else (design D2), so it
+            # costs the achievements and nothing else, so it
             # gets a journal line and the catch-all outcome.
             #
             # The type's name rather than `{error!r}`: this is the one
@@ -1414,8 +1496,8 @@ def _login2_request(
 ) -> tuple[LoginOutcome, str | None]:
     """POST RetroAchievements' login2 API, form-encoded per the RA docs.
 
-    Returns exactly one of three outcomes, matching design D2's
-    three-way classification:
+    Returns exactly one of three outcomes - the three-way classification
+    the caller's cache-fallback policy is built on:
 
     - ("success", token): the service answered with valid JSON,
       `Success: true` and a token.
@@ -1518,7 +1600,7 @@ def resolve_retroachievements_token(
     A reachable API is always consulted first - the cache is an
     offline-only fallback, never a shortcut that pre-empts a working
     network - which is what lets a token revoked by a password change heal
-    on the next boot with no manual step (design D2).
+    on the next boot with no manual step.
     """
     username_file = _resolve_path(root, str(ra["username_file"]))
     password_file = _resolve_path(root, str(ra["password_file"]))
@@ -1559,16 +1641,16 @@ def resolve_retroachievements_token(
     return None
 
 
-# --- DuckStation's encrypted token (design D3) ----------------------------
+# --- DuckStation's encrypted token -----------------------------------------
 
 
 def _duckstation_key_iv(machine_id: bytes, username: str) -> tuple[bytes, bytes]:
     """The AES-128-CBC key and IV DuckStation v0.1-11752 derives for one account.
 
     SHA-256 over the machine id file's raw bytes followed by the username's
-    UTF-8 bytes gives a seed digest; "100 further rounds" (design D3, and
-    the Context section's verified reading of `achievements.cpp`) then
-    re-hashes that seed 100 more times. That is 101 SHA-256 calls in total,
+    UTF-8 bytes gives a seed digest; "100 further rounds", as verified
+    against `achievements.cpp` itself, then re-hash that seed 100 more
+    times. That is 101 SHA-256 calls in total,
     not 100 - the seed digest is the *result* of the first call, and the
     100 further rounds start from it rather than being counted from zero.
     Getting this off by one silently produces a token DuckStation rejects,
@@ -1637,7 +1719,7 @@ def duckstation_login_values(
     Returns "username" and "token" (already encrypted, ready to write
     verbatim) unconditionally, and "login_timestamp" only when the target
     declares that key and the newly encrypted token differs from what the
-    ini file already holds - design D3's change-gating, without which an
+    ini file already holds - change-gating, without which an
     unchanged token would still rewrite the file, and its timestamp, on
     every single run. An unreadable machine-id file notes the failure and
     returns an empty mapping, so the caller folds in no username or token
@@ -1675,7 +1757,7 @@ def duckstation_login_values(
     return values
 
 
-# --- RetroAchievements: the owned-table merge (design D1, D2) -------------
+# --- RetroAchievements: the owned-table merge ------------------------------
 #
 # The only emulator-specific spelling this program tolerates is the
 # `encoding` discriminator below - which at-rest form a target's token
@@ -1707,7 +1789,7 @@ def _target_validation_error(
     if not isinstance(keys, dict):
         return f"retroachievements target {name!r}: expected 'keys' to be an object"
 
-    # enabled/hardcore/username are written for every encoding (design D2);
+    # enabled/hardcore/username are written for every encoding;
     # token is only for the two encodings that keep it in a `files` key at
     # all - secret-file's token lives in `token_file` instead, checked below.
     required = {"enabled", "hardcore", "username"}
@@ -1786,7 +1868,7 @@ def _target_validation_error(
             return f"retroachievements target {name!r}: {encoding} must not carry 'token_file'"
         if encoding == "duckstation" and not target.get("machine_id_file"):
             # `duckstation_login_values` subscripts it bare, and the whole
-            # scheme is derived from that file (design D3), so a target
+            # scheme is derived from that file, so a target
             # declaring the encoding without it is a broken call site.
             return f"retroachievements target {name!r}: duckstation needs 'machine_id_file'"
     else:
@@ -1890,7 +1972,7 @@ def apply_retroachievements(
     (network, credentials, a missing machine id) are never call-site
     failures: they degrade to fewer keys written - enabled and hardcore
     always, username and token only when a login actually resolved one -
-    never a non-zero return (design D2's whole point).
+    never a non-zero return - the subsystem's whole point.
 
     The namespace's own `enabled` field (default true, for every call site
     that predates it) picks which of two things happens once every target
@@ -1977,7 +2059,7 @@ def apply_retroachievements(
     # in this loop is reachably capable of raising once validation has
     # passed, so that partial state is not a real failure mode to guard
     # against - and `main`'s own blanket `except Exception` around this
-    # whole call exists for the unforeseen case anyway (design D2: any
+    # whole call exists for the unforeseen case anyway (any
     # runtime failure here costs the achievements and nothing else).
     for target in validated:
         booleans = cast("Mapping[str, object]", target["booleans"])
@@ -2023,7 +2105,7 @@ def apply_retroachievements(
             # exactly this treatment; the other four now match it.
             #
             # `login_timestamp` is only ever *written* by the duckstation
-            # encoding, and only when the token changed (design D3), so it
+            # encoding, and only when the token changed, so it
             # is removed here rather than in that branch: removing a key
             # that is not there is a no-op, so one set serves every shape,
             # and an unchanged token still leaves the file untouched.
@@ -2084,7 +2166,7 @@ def install_custom_systems(target: Path, source: str) -> bool:
     if wanted is None:
         # The source is a store path the module rendered, so this is a broken
         # call site rather than a broken configuration - the one case the
-        # recreate policy deliberately does not cover (design D3).
+        # recreate policy deliberately does not cover.
         note(f"{source} is unreadable; refusing to install custom systems")
         raise SystemExit(1)
     if _read_text(target) == wanted:
@@ -2179,7 +2261,7 @@ def main(argv: Sequence[str]) -> int:
     # end at the greeter. It still ends with a line in the journal rather
     # than a stack trace, which is what an admin reading `journalctl` needs.
     try:
-        document = json.loads(Path(owned_values).read_text())
+        document = json.loads(Path(owned_values).read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError) as error:
         # RecursionError joins the two obvious ones because `json.loads`
         # raises it rather than a ValueError on a deeply nested document,
@@ -2202,8 +2284,7 @@ def main(argv: Sequence[str]) -> int:
         return 1
     # Shape only, here: the namespace's own fields and every target are
     # validated by `apply_retroachievements` below, which owns them. A
-    # missing key is equivalent to null (design D1) and disables the
-    # feature.
+    # missing key is equivalent to null and disables the feature.
     retroachievements = document.get("retroachievements")
     if retroachievements is not None and not isinstance(retroachievements, dict):
         note(
@@ -2225,12 +2306,12 @@ def main(argv: Sequence[str]) -> int:
 
     # Folded into `tables` before any editor runs, so the editors themselves
     # stay unaware that a key came from the retroachievements namespace
-    # rather than the module that declared the file (design D1).
+    # rather than the module that declared the file.
     if retroachievements is not None:
         try:
             status = apply_retroachievements(tables, retroachievements, root)
         except Exception as error:
-            # The subsystem's entire contract (design D2) is that any
+            # The subsystem's entire contract is that any
             # failure costs the achievements and nothing else: this program
             # runs before every launch, so an exception escaping here ends
             # the session at a greeter and nobody in the family can play.
@@ -2260,7 +2341,7 @@ def main(argv: Sequence[str]) -> int:
             # read-only after a power cut, or a directory that cannot be
             # written are runtime conditions, not broken call sites: a file
             # that cannot be written costs that file's keys, not the
-            # family's evening at the greeter (design D2).
+            # family's evening at the greeter.
             #
             # This loop is where the RetroAchievements credential removals
             # actually reach the disk - `apply_retroachievements` only
@@ -2284,11 +2365,10 @@ def main(argv: Sequence[str]) -> int:
         # and so meets the very same runtime conditions: `/data` full, or
         # remounted read-only after a power cut - which is what btrfs does
         # on ENOSPC. A custom systems file that cannot be written costs the
-        # extra systems it declares, not the family's evening at the greeter
-        # (design D2).
+        # extra systems it declares, not the family's evening at the greeter.
         #
         # Live only since the box began shipping a real custom systems
-        # document (design D5): with an empty source this call takes the
+        # document: with an empty source this call takes the
         # removal branch and never writes, which is why the editor loop got
         # its guard first.
         #

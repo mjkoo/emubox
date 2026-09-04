@@ -1,6 +1,6 @@
 # emubox-check-bios: the report-only tool an admin runs over SSH to see
-# whether /data/bios holds the firmware the flake's inventory declares
-# (design D6). Deliberately not sharing code with emubox-prepare even
+# whether /data/bios holds the firmware the flake's inventory declares.
+# Deliberately not sharing code with emubox-prepare even
 # though both are small Python programs this project ships beside each
 # other: prepare's error policy is "recreate, never fail" because a family
 # staring at a dead frontend is the worst outcome it can produce, while this

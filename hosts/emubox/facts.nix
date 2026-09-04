@@ -1,5 +1,5 @@
 # Facts about this host. Hardware placeholders are marked TODO(bring-up)
-# and are filled in from the hardware checklist (design 13).
+# and are filled in from the hardware bring-up checklist.
 {
   emubox.facts = {
     # The emubox cache on app.cachix.org (see the flake's cache-roots).

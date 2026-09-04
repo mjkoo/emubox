@@ -1,4 +1,4 @@
-# One disk, btrfs, subvolume per lifecycle (design section 3).
+# One disk, btrfs, subvolume per lifecycle.
 #   @root    /            wiped every boot (persistence module)
 #   @nix     /nix
 #   @persist /persist     OS state that must survive

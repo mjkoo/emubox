@@ -13,6 +13,6 @@
 
   environment.systemPackages = [ pkgs.skyscraper ];
 
-  # TODO(design 8): path unit + daily timer for scrape pass 1 (cache fill),
+  # TODO: path unit + daily timer for scrape pass 1 (cache fill),
   # pass 2 inside emubox-prepare, emubox-library report.
 }

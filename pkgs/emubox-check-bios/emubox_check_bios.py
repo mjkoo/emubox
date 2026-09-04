@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Report whether `/data/bios` holds the firmware the flake declares.
 
-Invocation contract (design D6):
+Invocation contract:
 
     emubox-check-bios <inventory-json> <bios-directory>
 
 Exactly two positional arguments, mirroring `emubox-prepare`'s own shape
-(design D3) rather than a `--flag` style: this is a report-only tool with
+rather than a `--flag` style: this is a report-only tool with
 nothing to configure beyond which inventory and which directory to read, so
 there is no option parser to keep in sync with anything. Both arguments are
 always required - the second is what lets a unit test point the checker at a
@@ -27,7 +27,7 @@ The algorithm is a field, not inferred from the digest's length: a 32-hex
 MD5 and a 32-hex hash from some other algorithm are indistinguishable by
 length alone, so guessing would silently misread one as the other. This is
 also why the field exists at all rather than the format being fixed at one
-algorithm - design D6's first draft fixed it at sha256 and had to be
+algorithm - an early draft of this format fixed it at sha256 and had to be
 corrected, because nobody publishes a sha256 for these files: DuckStation's
 own table is MD5, libretro's documented requirements are MD5, and CRC32
 comes up too. `md5` and `sha256` both hash through `hashlib`; `crc32` does

@@ -12,18 +12,18 @@
     isNormalUser = true;
     extraGroups = [
       "wheel"
-      # Write access to the group-owned /data layout for ROM ingest (design 8).
+      # Write access to the group-owned /data layout for ROM ingest.
       "player"
     ];
     # The hash lives in the secrets file and is decrypted before users are
     # created (modules/secrets), so a fresh root gets the password at boot.
     hashedPasswordFile = config.sops.secrets.admin_password_hash.path;
-    # TODO(design 12): the admin's SSH public key for the tunnel.
+    # TODO: the admin's SSH public key for the tunnel.
     openssh.authorizedKeys.keys = [ ];
   };
   security.sudo.wheelNeedsPassword = false;
 
-  # TODO(design 11): `emubox-mode {kiosk|desktop}` writing /run/emubox/mode.
+  # TODO: `emubox-mode {kiosk|desktop}` writing /run/emubox/mode.
   environment.systemPackages = with pkgs; [
     kdePackages.konsole
     kdePackages.dolphin

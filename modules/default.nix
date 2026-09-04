@@ -1,4 +1,4 @@
-# The emubox software stack, one directory per design section. Each module
+# The emubox software stack, one directory per concern. Each module
 # is self-contained and reads shared facts from `config.emubox`.
 {
   imports = [

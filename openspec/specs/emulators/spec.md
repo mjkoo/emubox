@@ -44,6 +44,17 @@ fullscreen and the per-emulator performance choices the design settles
 (Wii dual core off in Dolphin, native internal resolution in PCSX2,
 geometry correction and upscaling in DuckStation).
 
+An emulator's own writer may prefix its flat configuration file with a
+UTF-8 byte order mark - PPSSPP's does, on every save. A flat
+configuration file that differs from a readable file only by that
+leading mark SHALL be read as its format, with the mark counted as part
+of neither the first line nor any key, and a write SHALL leave the mark
+leading the file exactly as the emulator put it. A file containing only
+the mark SHALL be treated as an empty file. The mark anywhere other
+than the very start of the file receives nothing from this rule: it is
+content like any other codepoint, and whichever rule already applies to
+the line carrying it governs.
+
 In a file with sections, an owned key is a key together with the section
 the flake declares it under; the same key name under a different section
 is a different key and is not owned. The places that belong to it are
@@ -120,6 +131,22 @@ governs and the replacement carries only the owned values.
   readable
 - **THEN** the changed value is still there at the next launch of the
   frontend
+
+#### Scenario: Emulator writes a leading byte order mark
+- **WHEN** an emulator's flat configuration file leads with a UTF-8
+  byte order mark and is otherwise readable as that emulator's format,
+  and an owned key in it needs updating at the next launch of the
+  frontend
+- **THEN** the file still carries every unowned key with the value the
+  emulator wrote, rather than being replaced by one carrying only the
+  owned values, and the mark still leads the file afterwards
+
+#### Scenario: A settled file with a byte order mark stays untouched
+- **WHEN** an emulator's flat configuration file leads with a UTF-8
+  byte order mark, is otherwise readable, and already carries every
+  owned value
+- **THEN** the file is not written at the next launch of the frontend,
+  on that launch and every launch after it
 
 #### Scenario: Emulator config unreadable
 - **WHEN** the frontend is about to launch and an emulator's

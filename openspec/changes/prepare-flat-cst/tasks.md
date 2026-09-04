@@ -183,5 +183,8 @@
   clean on both platforms at the same head.
 - [x] 5.2 Build the derivation's check phase for x86_64-linux on the
   remote builder, and verify it passes.
-- [ ] 5.3 Verify `just kiosk-test` passes in CI once the branch is
+- [x] 5.3 Verify `just kiosk-test` passes in CI once the branch is
   pushed; this box closes only against a CI run that exists.
+  The branch was rebased onto main and pushed; the pull request's Nix
+  workflow run (github.com/mjkoo/emubox/actions/runs/33849845563)
+  completed with conclusion success, kiosk VM test included.

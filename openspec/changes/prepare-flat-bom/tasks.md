@@ -76,5 +76,9 @@
   `881ea94`: `nix build .#checks.aarch64-darwin.emubox-prepare` and
   `nix build .#checks.x86_64-linux.emubox-prepare` (on the remote
   builder) both built clean.
-- [ ] 4.3 Verify `just kiosk-test` passes in CI once the branch is
-  pushed; this box closes only against a CI run that exists.
+- [x] 4.3 Verify `just kiosk-test` passes in CI once the branch is
+  pushed; this box closes only against a CI run that exists. Verified
+  2026-09-04: CI run 33880290742 on this branch (PR #8) succeeded; its
+  `nix flake check -L` step runs with KVM enabled and covers
+  `checks.x86_64-linux.kiosk`, the same derivation `just kiosk-test`
+  builds.

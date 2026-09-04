@@ -5244,7 +5244,15 @@ def test_ini_keeps_every_setting_of_a_file_in_scummvms_own_shape(
     assert unwritten(path)
 
 
-# --- An owned value that is not one line -----------------------------------
+# --- An owned name or value that does not read back as itself ---------------
+#
+# The rule is `_reads_back_alone` (and `_header_reads_back` for a section
+# name): the line the renderer would write, pushed back through this
+# program's own parser, must come back as exactly the declared setting or
+# header. A multi-line value is the sharpest way to fail it, but not the
+# only one; each failing shape below was a standing per-launch failure
+# before the guard - a duplicate appended forever, or the whole file
+# recreated forever - never a one-off.
 
 
 @pytest.mark.parametrize(
@@ -5269,7 +5277,7 @@ def test_ini_refuses_an_owned_value_spanning_more_than_one_line(
 
     assert unwritten(path)
     assert "Username = old" in path.read_text()
-    assert "is not one line" in capsys.readouterr().err
+    assert "does not read back as" in capsys.readouterr().err
 
 
 def test_retroarch_refuses_an_owned_value_spanning_more_than_one_line(
@@ -5282,7 +5290,7 @@ def test_retroarch_refuses_an_owned_value_spanning_more_than_one_line(
     assert ep.set_retroarch_settings(path, {"cheevos_username": "a\nb"}) is False
 
     assert unwritten(path)
-    assert "is not one line" in capsys.readouterr().err
+    assert "does not read back as" in capsys.readouterr().err
 
 
 def test_ini_refuses_a_multi_line_value_for_a_key_the_file_does_not_carry(
@@ -5347,7 +5355,7 @@ def test_ini_refuses_an_owned_key_name_that_is_not_one_line(
     assert "Good = x" in text
     assert "Bad" not in text
     assert "Key" not in text
-    assert "is not one line" in capsys.readouterr().err
+    assert "does not read back as" in capsys.readouterr().err
 
 
 def test_ini_refuses_an_owned_section_name_that_is_not_one_line(
@@ -5367,7 +5375,7 @@ def test_ini_refuses_an_owned_section_name_that_is_not_one_line(
     assert "Sec" not in text
     assert "tion" not in text
     assert "K = v" not in text
-    assert "is not one line" in capsys.readouterr().err
+    assert "does not read back as" in capsys.readouterr().err
 
     # The file must still be readable: a second run against a settled file
     # must not report a recreation, which is what a broken header would
@@ -5387,7 +5395,7 @@ def test_retroarch_refuses_an_owned_key_name_that_is_not_one_line(
     assert 'menu_driver = "rgui"' in text
     assert 'good_key = "w"' in text
     assert "bad" not in text
-    assert "is not one line" in capsys.readouterr().err
+    assert "does not read back as" in capsys.readouterr().err
 
 
 def test_ini_settles_an_owned_value_declared_with_surrounding_whitespace(
@@ -5519,6 +5527,139 @@ def test_ini_refuses_an_owned_value_carrying_a_carriage_return(
     settings = ini_settings(path)
     assert ("Achievements", "KeepMe", "precious") in settings
     assert ("Achievements", "Username", "old") in settings
+
+
+def test_ini_refuses_an_owned_key_name_carrying_a_delimiter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A key name carrying `=` writes a line that reads back as a shorter key
+    # holding a longer value, so the probe never finds the declared key and,
+    # unguarded, appends a fresh copy before every launch - unbounded file
+    # growth for a mis-authored owned name.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+    owned: dict[str, dict[str, str | ep.Removal]] = {
+        "Achievements": {"a=b": "v", "Username": "u"}
+    }
+
+    assert ep.set_ini_settings(path, owned) is True
+
+    text = path.read_text()
+    assert "Username = u" in text
+    assert "a=b" not in text
+    assert "does not read back as" in capsys.readouterr().err
+
+    # Settled: the second run must find nothing to do, where the unguarded
+    # editor appended another copy here.
+    freeze(path)
+    assert ep.set_ini_settings(path, owned) is False
+    assert unwritten(path)
+
+
+def test_retroarch_refuses_an_owned_key_name_carrying_a_delimiter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "rgui"\n')
+    owned: dict[str, str | ep.Removal] = {"bad=key": "v", "good_key": "w"}
+
+    assert ep.set_retroarch_settings(path, owned) is True
+
+    text = path.read_text()
+    assert 'good_key = "w"' in text
+    assert "bad=key" not in text
+    assert "does not read back as" in capsys.readouterr().err
+
+    freeze(path)
+    assert ep.set_retroarch_settings(path, owned) is False
+    assert unwritten(path)
+
+
+def test_ini_refuses_an_owned_section_name_carrying_a_closing_bracket(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The header grammar stops at the first `]`, so a section name carrying
+    # one writes a header the next launch's parse refuses - and, unguarded,
+    # the whole file went through the recreate path before every launch,
+    # dropping every unowned key it held.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+    owned: dict[str, dict[str, str | ep.Removal]] = {
+        "Sec]tion": {"K": "v"},
+        "Achievements": {"Username": "u"},
+    }
+
+    assert ep.set_ini_settings(path, owned) is True
+
+    text = path.read_text()
+    assert "Username = u" in text
+    assert "Sec]tion" not in text
+    assert "K = v" not in text
+    assert "does not read back as" in capsys.readouterr().err
+
+    # The file must still parse: a second run against a settled file must
+    # not report a write, which a refused header would force forever.
+    freeze(path)
+    assert ep.set_ini_settings(path, owned) is False
+    assert unwritten(path)
+
+
+@pytest.mark.parametrize("key", ["#hash", ";semi", " padded ", "", "[Header]"])
+def test_ini_refuses_an_owned_key_name_that_reads_back_as_something_else(
+    tmp_path: Path, key: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Each of these writes a line the classifier reads as something other
+    # than the declared assignment: a comment (both prefixes are comments in
+    # an INI file), a stripped key that no longer equals the padded one, no
+    # key at all, or a section header that partitions the file.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {key: "v", "Username": "u"}}) is True
+    )
+
+    text = path.read_text()
+    assert "Username = u" in text
+    assert " = v" not in text
+    assert "does not read back as" in capsys.readouterr().err
+
+
+def test_retroarch_keeps_a_semicolon_prefixed_key_and_refuses_a_hash_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The per-format comment prefixes are data, not code paths: RetroArch's
+    # own parser gives `;` no special meaning, so `;key` is a genuine key
+    # there and round-trips, while `#key` reads back as a comment and is
+    # refused - and in an INI file both are comments.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "rgui"\n')
+
+    assert ep.set_retroarch_settings(path, {";semi": "s", "#hash": "h"}) is True
+
+    text = path.read_text()
+    assert ';semi = "s"' in text
+    assert "#hash" not in text
+    assert "does not read back as" in capsys.readouterr().err
+
+    freeze(path)
+    assert ep.set_retroarch_settings(path, {";semi": "s", "#hash": "h"}) is False
+    assert unwritten(path)
+
+
+def test_ini_drops_a_removal_under_a_key_name_that_does_not_read_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A key that can never be written can never exist on disk in that form
+    # either, so there is nothing a removal under it could sweep; it is
+    # dropped with the same note rather than reported as a write.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"a=b": ep.REMOVE}}) is False
+
+    assert "Username = old" in path.read_text()
+    assert "does not read back as" in capsys.readouterr().err
 
 
 # --- A flat file as a line-oriented document --------------------------------

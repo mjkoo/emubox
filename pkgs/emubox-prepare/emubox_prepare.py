@@ -341,30 +341,99 @@ def _without_removals(keys: Mapping[str, str | Removal]) -> dict[str, str]:
     return {key: value for key, value in keys.items() if isinstance(value, str)}
 
 
+def _read_back(rendered: str) -> str:
+    """`rendered`, as a later read would hand it to a parser - pessimistically.
+
+    `_read_text` reads in universal-newline mode, so a lone carriage
+    return written to disk verbatim comes back as a line break; the
+    round-trip checks below have to model that translation, or a `\r` in
+    an owned name or value would read back fine here and destroy the file
+    one launch later. Every `\r` becomes a break of its own, deliberately
+    *not* collapsing `\r\n` the way universal-newline mode does: a value
+    ending in `\r` folds into this program's line terminator and reads
+    back clean here, but the emulator's own parser may hand that byte to
+    the value instead, so the two readers would disagree about what the
+    file says. A shape the readers can disagree over is refused outright
+    rather than modeled away.
+    """
+    return rendered.replace("\r", "\n")
+
+
+def _reads_back_alone(key: str, value: str, *, ini: bool) -> bool:
+    """Whether `key = value` parses back as exactly that single assignment.
+
+    The rule every owned name and value has to satisfy: the line the
+    renderer would write, pushed back through this program's own parser,
+    must come back as one assignment carrying the declared key and value.
+    Anything else means the next launch reads the file differently than
+    this one wrote it, and every such divergence is a standing failure: a
+    key carrying `=` reads back as a shorter key, so the probe never finds
+    it and appends a fresh copy before every launch, forever; a name with a
+    comment prefix or a header shape, or either half carrying a line break,
+    makes a line some later classification refuses, which sends the whole
+    file - every unowned key in it - through the recreate path instead.
+    """
+    try:
+        document = _parse_flat(_read_back(f"{key} = {value}\n"), ini=ini)
+    except _Unparseable:
+        return False
+    if len(document.sections) != 1:
+        return False
+    children = document.sections[0].children
+    if len(children) != 1:
+        return False
+    node = children[0]
+    return (
+        isinstance(node, Assignment) and node.key == key and node.value == value.strip()
+    )
+
+
+def _header_reads_back(name: str) -> bool:
+    """Whether `[name]` parses back as exactly that one empty section.
+
+    The section-name half of `_reads_back_alone`'s rule. A name carrying
+    `]` is the standing case: the header grammar stops at the first closing
+    bracket, so the rendered header reads back under a shorter name - or
+    refuses outright as a header two plausible readers would name
+    differently - and either way the next launch sends the whole file
+    through the recreate path, forever.
+    """
+    try:
+        document = _parse_flat(_read_back(f"[{name}]\n"), ini=True)
+    except _Unparseable:
+        return False
+    return (
+        len(document.sections) == 2
+        and not document.sections[0].children
+        and document.sections[1].name == name
+        and not document.sections[1].children
+    )
+
+
 def _writable(
-    path: Path, keys: Mapping[str, str | Removal]
+    path: Path, keys: Mapping[str, str | Removal], *, ini: bool
 ) -> dict[str, str | Removal]:
-    """The owned keys minus any whose name or value would not be one line on disk.
+    """The owned keys minus any whose name or value would not read back as itself.
 
-    One line of a settings file holds one setting, so such a name or value is
-    not a name or value at all: written, its tail becomes a line of its own,
-    which either parses as some other setting - a token of
-    `"tok\nCheevos_evil = 1"` writes that second setting into the file - or
-    fails the syntax check and takes every unowned key in the file with it
-    through the recreate path on the next launch. A key name carries exactly
-    the same hazard as its value: both end up on the line a renderer writes
-    verbatim.
+    `_reads_back_alone` states the rule; this applies it and owns the note.
+    A multi-line value is the sharpest instance - a token of
+    `"tok\nCheevos_evil = 1"` writes that second setting into the file -
+    but a key name carries every hazard its value does and more, because
+    the classifier reads the front of the line first: a `=`, a comment
+    prefix, a bracket or surrounding whitespace in the name all make a line
+    that reads back as something other than the declared setting.
 
-    Both `\n` and `\r`, because `_read_text` reads in universal-newline mode:
-    a lone carriage return is written to disk verbatim and read back as a
-    line break by this program's own reader, so it destroys a file exactly
-    as a newline does, one launch later.
+    Both `\n` and `\r` break a name or value, because `_read_text` reads in
+    universal-newline mode: a lone carriage return is written to disk
+    verbatim and read back as a line break by this program's own reader, so
+    it destroys a file exactly as a newline does, one launch later.
 
-    `_is_usable_token` rejects the same shape where a token arrives from a
-    response body. This is the other end of the same path, and it is wider:
-    an account name arrives from a secret file, which yields `"player\n"` for
-    a file whose last line is blank, and an owned key or value can be
-    declared in the flake carrying one. Neither is validated anywhere else.
+    `_is_usable_token` rejects the multi-line shape where a token arrives
+    from a response body. This is the other end of the same path, and it is
+    wider: an account name arrives from a secret file, which yields
+    `"player\n"` for a file whose last line is blank, and an owned key or
+    value can be declared in the flake carrying anything at all. Neither is
+    validated anywhere else.
 
     Dropped rather than raised, and dropped for *every* branch rather than
     only at the edit path: the recreate branches build fresh assignment
@@ -375,16 +444,23 @@ def _writable(
     """
     writable: dict[str, str | Removal] = {}
     for key, value in keys.items():
-        if "\n" in key or "\r" in key:
-            # repr, not the bare key, because the key is the very thing
-            # carrying the newline: printed bare it would tear across lines
-            # in the journal, and repr's own escaping keeps it on one.
-            note(f"{path}: the key {key!r} is not one line; not writing it")
+        # A fixed probe value first, so a broken key is named as the key's
+        # fault even when the declared value is a removal or broken too.
+        # repr, not the bare key, because the key may be the very thing
+        # carrying a line break: printed bare it would tear across lines
+        # in the journal, and repr's own escaping keeps it on one.
+        if not _reads_back_alone(key, "probe", ini=ini):
+            note(
+                f"{path}: the key {key!r} does not read back as itself; not writing it"
+            )
             continue
-        if isinstance(value, str) and ("\n" in value or "\r" in value):
+        if isinstance(value, str) and not _reads_back_alone(key, value, ini=ini):
             # Named with the file: one key name is owned in several files at
             # once, so the key alone does not say which one was left alone.
-            note(f"{path}: the value for {key} is not one line; not writing it")
+            note(
+                f"{path}: the value for {key} does not read back as one setting;"
+                " not writing it"
+            )
             continue
         writable[key] = value
     return writable
@@ -794,11 +870,11 @@ def _render_flat(document: Document) -> str:
         if section.raw_header is not None:
             # One line of a settings file holds one section header. `_writable`
             # is not what guards this one - a section name never reaches it -
-            # so it is `set_ini_settings`'s own section-name filter that
-            # establishes the invariant this asserts; parsing cannot build a
-            # multi-line header either. Not raised: this states an invariant
-            # the module's own code establishes elsewhere, rather than
-            # enforcing one here.
+            # so it is `_header_reads_back`, applied by `set_ini_settings`,
+            # that establishes the invariant this asserts; parsing cannot
+            # build a multi-line header either. Not raised: this states an
+            # invariant the module's own code establishes elsewhere, rather
+            # than enforcing one here.
             assert "\n" not in section.raw_header and "\r" not in section.raw_header, (
                 f"section header is not one line: {section.raw_header!r}"
             )
@@ -807,10 +883,11 @@ def _render_flat(document: Document) -> str:
             if isinstance(child, Assignment):
                 # One line of a settings file holds one setting. `_writable`
                 # is what establishes this invariant for both halves of an
-                # owned assignment - it drops a key name or a value carrying
-                # a line break before either ever reaches a node - and
-                # parsing cannot build a multi-line assignment either. Not
-                # raised, for the same reason as the header assert above.
+                # owned assignment - it drops a key name or a value that
+                # does not read back as itself before either ever reaches a
+                # node - and parsing cannot build a multi-line assignment
+                # either. Not raised, for the same reason as the header
+                # assert above.
                 assert "\n" not in child.raw and "\r" not in child.raw, (
                     f"assignment is not one line: {child.raw!r}"
                 )
@@ -1027,17 +1104,22 @@ def set_ini_settings(
     recreation is the only way a removal can be kept against a file no
     parser can see into. See `_holds_something`.
     """
-    sections = {name: _writable(path, keys) for name, keys in sections.items()}
+    sections = {
+        name: _writable(path, keys, ini=True) for name, keys in sections.items()
+    }
 
-    # The same one-line guard `_writable` applies to a key name or value,
+    # The same read-back rule `_writable` applies to a key name or value,
     # applied to a section name - dropped here, before the document is even
     # read, rather than inside either write branch below, because both the
     # edit path and the recreate path build a `SectionNode` from this same
     # `sections` mapping and neither may ever see a broken name.
     writable_sections: dict[str, dict[str, str | Removal]] = {}
     for name, keys in sections.items():
-        if "\n" in name or "\r" in name:
-            note(f"{path}: the section {name!r} is not one line; not writing it")
+        if not _header_reads_back(name):
+            note(
+                f"{path}: the section {name!r} does not read back as itself;"
+                " not writing it"
+            )
             continue
         writable_sections[name] = keys
     sections = writable_sections
@@ -1115,7 +1197,7 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
     owned keys is left alone. The whole file is one section here, so a
     repeated owned key repeats outright rather than under a second header.
     """
-    keys = _writable(path, keys)
+    keys = _writable(path, keys, ini=False)
     if not keys:
         return False
 

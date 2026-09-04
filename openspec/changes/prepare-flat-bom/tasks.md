@@ -2,14 +2,14 @@
 
 ## 1. The prefix rule
 
-- [ ] 1.1 Teach the flat-file read path to set aside exactly one
+- [x] 1.1 Teach the flat-file read path to set aside exactly one
   leading U+FEFF before any other rule runs, in both formats, and
   verify a marked but otherwise readable file loads as a document
   whose first line is the line after the mark.
-- [ ] 1.2 Remember the mark on the loaded document and re-emit it
+- [x] 1.2 Remember the mark on the loaded document and re-emit it
   first on write, and verify an edit to a marked file writes the mark
   back byte-for-byte at position zero.
-- [ ] 1.3 Keep every other behavior untouched: verify tests that a
+- [x] 1.3 Keep every other behavior untouched: verify tests that a
   mark before a section header - or on any other line without an
   assignment - still fails to parse and recreates as today, that a
   doubled leading mark before a header recreates as today, that a

@@ -67,9 +67,13 @@
 
 ## 4. Evidence
 
-- [ ] 4.1 Run the full suite and `just check-all`, and verify both
-  exit clean.
-- [ ] 4.2 Build the derivation's check phase for aarch64-darwin and
-  x86_64-linux, and verify both pass.
+- [x] 4.1 Run the full suite and `just check-all`, and verify both
+  exit clean. Verified 2026-09-04: 354 tests pass and `just check-all`
+  exits 0 on the final revision.
+- [x] 4.2 Build the derivation's check phase for aarch64-darwin and
+  x86_64-linux, and verify both pass. Verified 2026-09-04:
+  `nix build .#checks.aarch64-darwin.emubox-prepare` and
+  `nix build .#checks.x86_64-linux.emubox-prepare` (on the remote
+  builder) both built clean.
 - [ ] 4.3 Verify `just kiosk-test` passes in CI once the branch is
   pushed; this box closes only against a CI run that exists.

@@ -1,5 +1,39 @@
-# Defaults plus ARG: an unused argument in an editor signature is almost
-# always a key table or a path that stopped being threaded through.
+# Defaults plus three groups.
+#
+# ARG: an unused argument in an editor signature is almost always a key
+# table or a path that stopped being threaded through.
+#
+# S (flake8-bandit): this program holds the family's RetroAchievements
+# password in memory, writes the bearer token derived from it into several
+# emulator configs, and parses a document off `/data`. The rules were
+# already assumed to be on before they were - the `noqa: S310` on the
+# login2 call sat there suppressing nothing for as long as it existed - so
+# they are on now rather than assumed again.
+#
+# RUF100: what makes the sentence above stay true. A noqa naming a rule
+# nobody selected is worse than no noqa at all: it reads like a considered
+# suppression and silences nothing.
+#
 # Under `[lint]` rather than at the top level, which this ruff deprecates.
 [lint]
-extend-select = ["ARG"]
+extend-select = ["ARG", "S", "RUF100"]
+
+# S101 is the one bandit rule that does not earn its place here. It exists
+# because `python -O` strips assertions, so an assert must never be the
+# thing validating input - and none of them is. Each states an invariant
+# this module's own code establishes and the checker cannot see: one narrows
+# a `T | None`, one records that a document built here carries the header
+# this module put on it. Neither reads a file, an argument or a response
+# body.
+# Every one sits beside a comment saying why it holds. Nothing runs this
+# under `-O` either; the derivation installs it with a shebang patched to a
+# plain `python3`. Rewriting them as runtime raises would state the opposite
+# of what they mean.
+ignore = ["S101"]
+
+[lint.per-file-ignores]
+# A test file builds tokens and passwords that are fake but look hardcoded
+# (S105), runs the installed script as a subprocess (S603), and parses the
+# XML the editors just wrote (S314). Each is the test suite being a test
+# suite, not a finding.
+"test_*.py" = ["S105", "S603", "S314"]

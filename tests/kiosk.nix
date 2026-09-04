@@ -735,7 +735,7 @@ assert lib.assertMsg
           `section=None` reads a sectionless file (RetroArch's flat config)
           by never leaving the "in section" state; otherwise only lines
           under the matching `[section]` header count, mirroring
-          emubox-prepare's own `_ini_section_bounds` shape without importing
+          emubox-prepare's own section matching without importing
           it - this is a plain reader, not the independent-implementation
           concern (that is the DuckStation decrypt below).
           """
@@ -761,11 +761,11 @@ assert lib.assertMsg
       def owned_file_value(fmt, text, section, key):
           """The on-disk value for one owned key of an emulator config file
           in the same string form the rendered
-          owned-values JSON carries for it: `ini`'s writer never quotes
-          (`emubox_prepare.py`'s `_render_ini`, `f"{k} = {v}"`), so the
+          owned-values JSON carries for it: the `ini` format is written
+          unquoted, `k = v`, so the
           value read back needs no unwrapping there, but `retroarch`'s own
-          flat format always quotes (`_render_retroarch`, `f'{key} =
-          "{value}"'`), the same quoting `read_target_value` above already
+          flat format always quotes, `key = "value"`,
+          the same quoting `read_target_value` above already
           strips for the retroachievements namespace's plain-encoded
           targets.
           """

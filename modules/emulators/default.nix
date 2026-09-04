@@ -1211,8 +1211,8 @@ in
         # inside `beginGroup("UI")` writes the line `fullscreen\default=...`
         # to the file, not `fullscreen/default=...`. Writing the forward-
         # slash spelling here only worked by accident - QSettings' *reader*
-        # accepts either separator, and prepare appends new keys after a
-        # section's last assignment, so on a box where Azahar has never
+        # accepts either separator, and prepare seeds a missing key into the
+        # section it belongs to, so on a box where Azahar has never
         # itself saved the file this module's `key/default` line came
         # first and was the only one; the moment Azahar wrote its own
         # `key\default` line, both existed and the later one (Azahar's,

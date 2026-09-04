@@ -84,8 +84,9 @@ nixpkgs no longer carries them; the fourth is the project's own.
   reports; nothing else in the file changes.
 - `emubox-prepare` is not vendored: it is this project's own program, the
   config editor the kiosk session runs before every launch of the frontend
-  (see below). One stdlib-only Python file, whose unit tests, lint and type
-  check run in its build.
+  (see below). One Python file over a small pinned closure - `cryptography`
+  for the DuckStation token transform, `configupdater` for the settings
+  files it edits - whose unit tests, lint and type check run in its build.
 
 The repository itself is MIT licensed (`LICENSE`), which is what the
 programs it writes carry onto the public cache. The vendored packages keep

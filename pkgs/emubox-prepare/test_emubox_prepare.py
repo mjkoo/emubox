@@ -9,7 +9,9 @@ calling and assert it is still 0 afterwards, so a rewrite that happens to
 produce identical bytes is still a failure.
 """
 
+import ast
 import base64
+import builtins
 import contextlib
 import hashlib
 import http.server
@@ -298,10 +300,16 @@ def test_ini_recreates_a_file_with_a_line_that_is_not_a_setting(
     assert "not a setting" in capsys.readouterr().err
 
 
-def test_ini_appends_a_key_before_a_trailing_comment(tmp_path: Path) -> None:
-    # A new key goes after the section's last setting rather than at the end
-    # of its block, so a comment written under the last setting keeps sitting
-    # under it instead of being pushed away from what it annotates.
+def test_ini_appends_a_key_into_a_section_ending_in_a_comment(
+    tmp_path: Path,
+) -> None:
+    # A section whose last line is a comment is the shape that used to decide
+    # where a seeded key went: it was inserted after the section's last
+    # assignment so the comment kept sitting under what it annotated. Where
+    # the key lands within its section is not something an emulator can
+    # observe, so it is not promised; what is promised is that the key is
+    # under its own section, that the comment is still in the file, and that
+    # no setting has moved to another section.
     path = tmp_path / "Dolphin.ini"
     path.write_text(
         "[Interface]\nConfirmStop = False\n[Display]\nRenderToMain = True\n; about the display\n"
@@ -309,12 +317,12 @@ def test_ini_appends_a_key_before_a_trailing_comment(tmp_path: Path) -> None:
 
     assert ep.set_ini_settings(path, INI_OWNED) is True
 
-    lines = path.read_text().splitlines()
-    assert lines[-3:] == [
-        "RenderToMain = True",
-        "Fullscreen = True",
-        "; about the display",
-    ]
+    text = path.read_text()
+    assert "; about the display" in text
+    display = text.split("[Display]\n", 1)[1]
+    assert "Fullscreen = True" in display
+    assert "RenderToMain = True" in display
+    assert "ConfirmStop = False" in text.split("[Display]\n", 1)[0]
 
 
 # --- RetroArch flat file --------------------------------------------------
@@ -3000,6 +3008,166 @@ def test_retroarch_removal_sweeps_every_occurrence(tmp_path: Path) -> None:
     assert 'video_fullscreen = "true"' in text
 
 
+# --- A written key leaves exactly one assignment behind --------------------
+#
+# The mirror of the removal sweeps above, and it was missing. Removals were
+# careful about a repeated key from the start; writes were not, so they
+# edited the first assignment and left every later one saying whatever it
+# said. Both readers this box writes for resolve a repeat to the *last*
+# assignment, so the file held the flake's value while the emulator went on
+# reading the stale one - and since the writing pass then found its own
+# value already in place, it reported nothing to do on every launch after.
+# For `username` and `token` that is a stale account surviving in exactly
+# the place the removal sweep exists to clear it from.
+#
+# The invariant all three editors now share: after a write, exactly one
+# assignment of an owned key is in the file and it holds the flake's value.
+# What each editor may never do is touch a key it does not own, including a
+# same-named one under somebody else's section.
+
+
+def test_ini_write_leaves_no_stale_twin_in_a_duplicated_section(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text(
+        "[Achievements]\nUsername = stale-first\nKeepMe = yes\n"
+        "[Other]\nUsername = not-ours\n"
+        "[Achievements]\nUsername = stale-second\n"
+    )
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+
+    text = path.read_text()
+    assert text.count("Username = correct") == 1
+    assert "stale-first" not in text
+    assert "stale-second" not in text
+    # Neither an unowned key nor a same-named key under a section this
+    # program does not own is its to rewrite or remove.
+    assert "KeepMe = yes" in text
+    assert "Username = not-ours" in text
+
+
+def test_ini_write_sweeps_a_stray_assignment_above_every_section_header(
+    tmp_path: Path,
+) -> None:
+    # The write side of `..._removal_sweeps_a_key_written_above_every_section_header`:
+    # an orphan assignment belongs to no section, so it is claimed by the
+    # same owner - and it sorts *before* the section, which is why the
+    # pruning pass recomputes the section bounds after every deletion.
+    path = tmp_path / "settings.ini"
+    path.write_text("Username = stray\n[Achievements]\nUsername = stale\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+
+    text = path.read_text()
+    assert "stray" not in text
+    assert text.count("Username = correct") == 1
+
+
+def test_ini_write_is_idempotent_after_collapsing_a_duplicate(tmp_path: Path) -> None:
+    # The property that made the bug invisible: a second run must agree the
+    # file is already right, and must not report a write it did not make.
+    path = tmp_path / "settings.ini"
+    path.write_text(
+        "[Achievements]\nUsername = stale-first\n[Achievements]\nUsername = stale-second\n"
+    )
+    ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}})
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+
+    assert unwritten(path)
+
+
+def test_retroarch_write_leaves_no_stale_twin(tmp_path: Path) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(
+        'cheevos_username = "stale-first"\nvideo_fullscreen = "true"\n'
+        'cheevos_username = "stale-last"\n'
+    )
+
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is True
+
+    text = path.read_text()
+    assert text.count('cheevos_username = "correct"') == 1
+    assert "stale" not in text
+    assert 'video_fullscreen = "true"' in text
+
+
+def test_retroarch_write_is_idempotent_after_collapsing_a_duplicate(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('cheevos_username = "one"\ncheevos_username = "two"\n')
+    ep.set_retroarch_settings(path, {"cheevos_username": "correct"})
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is False
+
+    assert unwritten(path)
+
+
+def test_esde_write_collapses_a_repeated_owned_element(tmp_path: Path) -> None:
+    # ES-DE had the same defect inverted: a dict comprehension over the
+    # parsed elements kept the *last* repeat, so the write landed there and
+    # the earlier element stayed behind holding the old value.
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<string name="Theme" value="stale-first" />\n'
+        '<string name="Other" value="keep" />\n'
+        '<string name="Theme" value="stale-last" />\n'
+    )
+
+    assert (
+        ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+        is True
+    )
+
+    names = [(n, v) for _, n, v in esde_elements(path)]
+    assert names.count(("Theme", "correct")) == 1
+    assert len([n for n, _ in names if n == "Theme"]) == 1
+    assert ("Other", "keep") in names
+
+
+def test_esde_write_leaves_a_repeated_unowned_element_alone(tmp_path: Path) -> None:
+    # Collapsing is only ever applied to a name the flake owns. Two
+    # elements the frontend wrote under one unowned name are the frontend's
+    # business, and this program does not get to pick one.
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<string name="Unowned" value="one" />\n'
+        '<string name="Unowned" value="two" />\n'
+        '<string name="Theme" value="stale" />\n'
+    )
+
+    ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+
+    names = [(n, v) for _, n, v in esde_elements(path)]
+    assert ("Unowned", "one") in names
+    assert ("Unowned", "two") in names
+
+
+def test_esde_write_is_idempotent_after_collapsing_a_duplicate(tmp_path: Path) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<string name="Theme" value="one" />\n'
+        '<string name="Theme" value="two" />\n'
+    )
+    ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+    freeze(path)
+
+    assert (
+        ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+        is False
+    )
+
+    assert unwritten(path)
+
+
 # --- Final wave: an unparseable file is not an absent one -----------------
 #
 # The all-removals branch of both flat-file editors used to read "the parser
@@ -3020,8 +3188,8 @@ def test_ini_a_torn_file_owning_only_a_removal_is_recreated_without_the_token(
     assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
 
     assert "TOKENabc123DEADBEEF" not in path.read_text()
-    # The note `_parse_ini` already printed is now true: the recreation it
-    # promises is the very thing that drops the credential.
+    # The note the load helper already printed is now true: the recreation
+    # it promises is the very thing that drops the credential.
     assert "recreating it" in capsys.readouterr().err
 
 
@@ -3047,8 +3215,8 @@ def test_ini_recreating_a_torn_removal_only_file_reaches_a_steady_state(
 def test_ini_an_unreadable_file_owning_only_a_removal_is_recreated(
     tmp_path: Path,
 ) -> None:
-    # The other ways `_parse_ini` answers None for a file that is very much
-    # present: a non-UTF-8 byte, and a mode that forbids reading it. Both
+    # The other ways a file that is very much present reads as unusable: a
+    # non-UTF-8 byte, and a mode that forbids reading it. Both
     # have to reach the same recreation, because both may be hiding a live
     # token from a parser that cannot see it.
     undecodable = tmp_path / "undecodable.ini"
@@ -3745,3 +3913,1389 @@ def test_main_enabled_then_disabled_removes_every_credential_and_stays_idempoten
         assert unwritten(appdata / name), name
     assert not token_file.exists()
     assert not cache_file.exists()
+
+
+# --- Reading a flat file through one INI library ---------------------------
+#
+# Both flat editors read every file through a synthetic section header that
+# the dump strips again, so a headerless RetroArch config and an INI file
+# whose first assignment sits above every header are both editable by a
+# sectioned-INI library. The library's idea of an unparseable file is not
+# this program's, and the gap goes both ways: a shape it accepts where this
+# program recreated costs nothing, but a shape it *names differently* narrows
+# the recreate path and strands a live bearer token on disk. The tests below
+# pin each of those seams to the mechanism that closes it.
+
+WRAPPER = ep._FLAT_WRAPPER_SECTION
+
+
+def load(text: str, *, ini: bool = True) -> ep.ConfigUpdater:
+    return ep._load_flat(text, ini=ini)
+
+
+def round_trip(text: str, *, ini: bool = True) -> str:
+    return ep._dump_flat(load(text, ini=ini))
+
+
+def test_flat_round_trip_is_byte_identical_for_a_file_starting_with_a_header() -> None:
+    # An unedited round trip is not the contract - an edited file promises
+    # only that no unowned setting changed - but it is free, and it is what
+    # says the synthetic header leaves no blank line where it stood.
+    text = "# written by the emulator\n[Interface]\nLanguage = 0\n\n[Display]\nFullscreen = False\n"
+
+    assert round_trip(text) == text
+
+
+def test_flat_round_trip_is_byte_identical_for_a_file_with_a_preamble() -> None:
+    # The shape the library rejects outright with MissingSectionHeaderError,
+    # and the reason the wrapper exists at all for an INI file.
+    text = "Token = stray\n; a comment\n[Achievements]\nUsername = alice\n"
+
+    assert round_trip(text) == text
+
+
+def test_flat_round_trip_keeps_a_trailing_run_of_blank_lines() -> None:
+    text = '# RetroArch config\nvideo_fullscreen = "true"\n\n\n'
+
+    assert round_trip(text, ini=False) == text
+
+
+# A final line with no terminating newline.
+
+
+def test_ini_appending_a_key_to_an_unterminated_file_keeps_the_last_line(
+    tmp_path: Path,
+) -> None:
+    # The library stores each block's raw text including its terminator, so
+    # an unterminated last option has none and a new option is written
+    # straight onto the end of it: `Token = xNew = y`, which destroys the
+    # unowned assignment and the owned key together and which the next run
+    # reads back as a healthy setting. An unterminated last line is what a
+    # power cut leaves.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nToken = keepme")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "alice"}}) is True
+
+    lines = path.read_text().split("\n")
+    assert "Token = keepme" in lines
+    assert "Username = alice" in lines
+
+
+def test_retroarch_appending_a_key_to_an_unterminated_file_keeps_the_last_line(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('cheevos_token = "keepme"')
+
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "alice"}) is True
+
+    lines = path.read_text().split("\n")
+    assert 'cheevos_token = "keepme"' in lines
+    assert 'cheevos_username = "alice"' in lines
+
+
+# An indented line, which a configparser-family parser reads as a
+# continuation of the option above it and which therefore disappears on the
+# next write. Each case changes an owned value in the same run, since that is
+# when an unstripped helper destroys the line.
+
+
+def test_ini_keeps_an_indented_comment_through_a_write(tmp_path: Path) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n  # note\nKeepMe = 3\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "# note" in text
+    assert "KeepMe = 3" in text
+    assert "ConfirmStop = False" in text
+
+
+def test_ini_keeps_an_indented_assignment_through_a_write(tmp_path: Path) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n  Indented = 9\nKeepMe = 3\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "Indented = 9" in text
+    assert "KeepMe = 3" in text
+    assert "ConfirmStop = False" in text
+
+
+def test_ini_keeps_an_indented_section_header_through_a_write(tmp_path: Path) -> None:
+    # The header this program's own section grammar already accepts, since it
+    # is anchored `^\s*\[`: the keys below it belong to `Later`, not to the
+    # section above.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n  [Later]\nKeepMe = 3\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "[Later]" in text
+    assert "KeepMe = 3" in text.split("[Later]", 1)[1]
+    assert "ConfirmStop = False" in text
+
+
+def test_flat_documents_read_an_indented_line_as_a_value_continuation() -> None:
+    # Why the stripping above exists, stated against the library rather than
+    # against a file: left indented, this line is not a line at all but the
+    # tail of the value above it, and writing that option renders the file
+    # without it.
+    document = ep._flat_document(ini=True)
+    document.read_string(f"[{WRAPPER}]\n[A]\nkey = 1\n    continued\n")
+
+    assert document["A"]["key"].value == "1\ncontinued"
+
+
+@pytest.mark.parametrize("indent", [" ", "\t", "\x0b", "\x0c", "\xa0", "\u3000"])
+def test_ini_keeps_a_line_indented_by_any_whitespace(
+    tmp_path: Path, indent: str
+) -> None:
+    # Every whitespace character the parser counts as indentation, not just
+    # the two an ASCII file uses. A gap here is not cosmetic: the parser
+    # strips the whole line before deciding whether it is a section header,
+    # so a character stripped there and kept here is one that hides a header
+    # from the checks below while the library still reads one.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(f"[Interface]\nConfirmStop = True\n{indent}KeepMe = 3\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "KeepMe = 3" in text
+    assert "ConfirmStop = False" in text
+
+
+@pytest.mark.parametrize("indent", ["\x0c", "\xa0", "\u3000"])
+def test_ini_removes_a_token_under_a_header_indented_by_exotic_whitespace(
+    tmp_path: Path, indent: str
+) -> None:
+    # The credential path, through the same gap. The parser strips the whole
+    # line before matching a section header, so a header indented by anything
+    # this program does not strip is still a section to the library while the
+    # bracket test never examines it - the removal sweeps a section the file
+    # does not appear to have, the document parses cleanly so nothing is
+    # recreated, and the token stays on disk on this launch and every launch
+    # after it.
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{indent}[Achievements] ; was [Cheevos]\nToken = TOKENlive\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    assert "TOKENlive" not in path.read_text()
+
+
+# A bracketed line the library names differently than this program
+# does. This is the credential path: where the two grammars disagree about a
+# section's *name*, a removal loop over the declared section finds nothing,
+# the document parses cleanly so no recreation fires, and a live token
+# survives every launch after.
+
+RA_SECRET = {"Achievements": {"Token": ep.REMOVE}}
+
+
+def test_ini_normalises_a_header_whose_trailing_comment_carries_a_bracket(
+    tmp_path: Path,
+) -> None:
+    # The library's section grammar is greedy to the last `]`, so it names
+    # this section `Achievements] ; was [Cheevos` while this program names it
+    # `Achievements`. Refusing it would recreate a file this program can edit
+    # and cost every unowned setting in it; normalising costs the header's
+    # own trailing comment, which no emulator reads.
+    path = tmp_path / "secrets.ini"
+    path.write_text(
+        "[Achievements] ; was [Cheevos]\nToken = TOKENlive\nUserPref = keepme\n"
+    )
+
+    assert ep.set_ini_settings(path, RA_SECRET) is True
+
+    text = path.read_text()
+    assert "TOKENlive" not in text
+    assert "UserPref = keepme" in text
+
+
+def test_ini_normalises_a_header_whose_hash_comment_carries_a_bracket(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "secrets.ini"
+    path.write_text(
+        "[Achievements] # old [name]\nToken = TOKENlive\nUserPref = keepme\n"
+    )
+
+    assert ep.set_ini_settings(path, RA_SECRET) is True
+
+    text = path.read_text()
+    assert "TOKENlive" not in text
+    assert "UserPref = keepme" in text
+
+
+@pytest.mark.parametrize(
+    "header", ["[Achievements] [was Cheevos]", "[Achievements][x]"]
+)
+def test_ini_recreates_a_header_only_the_library_reads(
+    tmp_path: Path, header: str
+) -> None:
+    # Both grammars read a header here, under names that cannot be reconciled
+    # by normalising, so the file takes the recreate path - which is what it
+    # does today, and which is what takes the token off the disk.
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{header}\nToken = TOKENlive\n")
+
+    assert ep.set_ini_settings(path, RA_SECRET) is True
+
+    assert "TOKENlive" not in path.read_text()
+
+
+@pytest.mark.parametrize("header", ["[]", "[] ; c"])
+def test_ini_recreates_a_file_with_an_empty_section_name(
+    tmp_path: Path, header: str
+) -> None:
+    # The library reads no header here, so the line reaches the parser and
+    # raises. Better than it used to fare: this program's own grammar matched
+    # `[]` with an empty name that never equalled the owned section, so the
+    # token stranded on disk through every launch.
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{header}\nToken = TOKENlive\n")
+
+    assert ep.set_ini_settings(path, RA_SECRET) is True
+
+    assert "TOKENlive" not in path.read_text()
+
+
+def test_ini_keeps_a_bracketed_line_neither_grammar_reads_as_a_header(
+    tmp_path: Path,
+) -> None:
+    # `[foo bar = baz` is an ordinary option named `[foo bar` to the library
+    # and to this program alike, and it stays one. A guard that refused every
+    # bracketed line would destroy a file this program preserves.
+    path = tmp_path / "secrets.ini"
+    path.write_text("[Achievements]\nToken = TOKENlive\n[foo bar = baz\n")
+
+    assert ep.set_ini_settings(path, RA_SECRET) is True
+
+    text = path.read_text()
+    assert "TOKENlive" not in text
+    assert "[foo bar = baz" in text
+
+
+@pytest.mark.parametrize("header", ["[Achievements]", "[Achievements] ; plain comment"])
+def test_ini_edits_an_ordinary_header_in_place(tmp_path: Path, header: str) -> None:
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{header}\nToken = TOKENlive\nUserPref = keepme\n")
+
+    assert ep.set_ini_settings(path, RA_SECRET) is True
+
+    text = path.read_text()
+    assert "TOKENlive" not in text
+    assert "UserPref = keepme" in text
+    assert header in text
+
+
+def test_retroarch_recreates_a_file_carrying_a_section_header(tmp_path: Path) -> None:
+    # RetroArch's own parser rejects every line without an `=`, so its files
+    # have no headers at all. Left alone, a bracketed line would partition
+    # the file and make everything below it invisible to both the removal and
+    # the write sweeps, so a stale token would survive while the editor
+    # reported the file correct.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('video_fullscreen = "true"\n[Foo]\ncheevos_token = "TOKENlive"\n')
+
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+
+    assert "TOKENlive" not in path.read_text()
+
+
+def test_retroarch_recreates_a_bracketed_line_carrying_an_assignment(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('[something] = "x"\ncheevos_token = "TOKENlive"\n')
+
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+
+    assert "TOKENlive" not in path.read_text()
+
+
+# A file already carrying the wrapper's own header. Two same-named
+# sections, lookup resolves to the wrapper, the file's real keys go invisible
+# and stripping the leading line leaves the other header standing in what is
+# written. The sentinel cannot be made unspellable - every newline-free
+# string is a legal header name - so refusing is the whole of the defence.
+
+SENTINEL_SPELLINGS = [
+    f"[{WRAPPER}]",
+    f"  [{WRAPPER}]",
+    f"[{WRAPPER}] ; a comment",
+    f"[{WRAPPER}] extra",
+    f"[{WRAPPER}] = 3",
+    # The spelling only a check that runs *after* the header normalisation
+    # catches: the library's greedy grammar names this `<wrapper>] ; [x` in
+    # the source text, so a check over the raw text passes it, and the
+    # normalisation then mints the exact canonical line this rule exists to
+    # refuse.
+    f"[{WRAPPER}] ; [x]",
+]
+
+
+@pytest.mark.parametrize("spelling", SENTINEL_SPELLINGS)
+def test_ini_recreates_a_file_spelling_the_wrapper_header(
+    tmp_path: Path, spelling: str
+) -> None:
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{spelling}\nToken = TOKENlive\n")
+
+    assert ep.set_ini_settings(path, RA_SECRET) is True
+
+    text = path.read_text()
+    assert "TOKENlive" not in text
+    assert WRAPPER not in text
+
+
+@pytest.mark.parametrize("spelling", SENTINEL_SPELLINGS)
+def test_retroarch_recreates_a_file_spelling_the_wrapper_header(
+    tmp_path: Path, spelling: str
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(f'{spelling}\ncheevos_token = "TOKENlive"\n')
+
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+
+    text = path.read_text()
+    assert "TOKENlive" not in text
+    assert WRAPPER not in text
+
+
+def test_a_naive_substring_check_would_not_catch_the_normalised_spelling() -> None:
+    # What makes the ordering load-bearing rather than incidental: the
+    # canonical wrapper line is absent from this source text and present
+    # after the header normalisation runs.
+    source = f"[{WRAPPER}] ; [x]\nToken = live\n"
+
+    assert f"[{WRAPPER}]\n" not in source
+    with pytest.raises(ep._Unparseable):
+        load(source)
+
+
+# An empty or whitespace-only file. INI only, matching RetroArch's
+# own parser, which has never had an emptiness check. Reported *silently*, so
+# `set_ini_settings` keeps its own deferred note and emits it only once a
+# write is confirmed.
+
+
+@pytest.mark.parametrize("text", ["", "\n", "   \n"])
+def test_flat_reports_an_empty_ini_unparseable_without_a_word(
+    text: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(ep._Unparseable) as refused:
+        load(text)
+
+    assert refused.value.reason is None
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("text", ["", "\n", "   \n"])
+def test_ini_recreates_a_whitespace_only_file_with_its_own_note(
+    tmp_path: Path, text: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text(text)
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    assert "Fullscreen = True" in path.read_text()
+    assert "is empty; recreating it" in capsys.readouterr().err
+
+
+def test_flat_reads_an_empty_retroarch_file_as_a_document() -> None:
+    assert ep._dump_flat(load("", ini=False)) == ""
+
+
+# The library's own parse failures. `main`'s editor loop guards
+# `except OSError` only and the kiosk session runs this program unguarded
+# under `set -e` with an EXIT trap that ends at the greeter, so an escaping
+# parse error would end the family's evening rather than recreate a file.
+# Each case asserts the editor recreates the file carrying every owned value,
+# not merely that it returned - a helper that swallowed the exception and
+# gave up would satisfy the weaker claim while leaving the file valueless.
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # A `key: value` line, which the library's default delimiters would
+        # have made an ordinary option.
+        "Time: 12",
+        "barekeywithnoassignment",
+        "= value",
+    ],
+)
+def test_ini_recreates_a_file_the_library_cannot_parse(
+    tmp_path: Path, line: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(f"[Interface]\nConfirmStop = True\n{line}\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "ConfirmStop = False" in text
+    assert "Fullscreen = True" in text
+    assert line not in text
+    assert "not a setting" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("line", ["Time: 12", "barekeywithnoassignment", "= value"])
+def test_retroarch_recreates_a_file_the_library_cannot_parse(
+    tmp_path: Path, line: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(f'menu_driver = "rgui"\n{line}\n')
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+
+    text = path.read_text()
+    assert 'menu_driver = "ozone"' in text
+    assert 'video_fullscreen = "true"' in text
+    assert line not in text
+    assert "not a setting" in capsys.readouterr().err
+
+
+# --- The two library behaviours the editors are built around ---------------
+
+
+def test_flat_lookup_does_not_fold_a_key_to_lower_case() -> None:
+    # Left at the library's default, option names are lower-cased, and every
+    # key this program owns is spelled with capitals. The consequence is a
+    # lookup one: `"Username" in section` would be False for a file spelling
+    # the key `Username` while `section["Username"]` resolved to the folded
+    # option, so a sweep written as `while key in section` would never run
+    # and the editor would append a second credential beside the stale one.
+    # A written key's declared case is preserved either way, so rendering
+    # pins nothing and is deliberately not the criterion here.
+    section = load("[Achievements]\nUsername = capital\nusername = lower\n")[
+        "Achievements"
+    ]
+
+    assert "Username" in section
+    assert section["Username"].value == "capital"
+    assert section["username"].value == "lower"
+    assert section.options() == ["Username", "username"]
+
+
+def test_flat_deleting_a_repeated_key_leaves_the_second_assignment() -> None:
+    # Why both sweeps are loops. It reads as though it should be idempotent
+    # and is not.
+    section = load("[Achievements]\ntoken = one\ntoken = two\n")["Achievements"]
+
+    del section["token"]
+
+    assert "token" in section
+    assert section["token"].value == "two"
+
+
+# --- The wrapper header never reaches a file this program writes -----------
+
+
+def ini_written(path: Path, source: str | None) -> str:
+    if source is not None:
+        path.write_text(source)
+    ep.set_ini_settings(
+        path, {"Achievements": {"Username": "alice", "Token": ep.REMOVE}}
+    )
+    return path.read_text()
+
+
+def retroarch_written(path: Path, source: str | None) -> str:
+    if source is not None:
+        path.write_text(source)
+    ep.set_retroarch_settings(
+        path, {"cheevos_username": "alice", "cheevos_token": ep.REMOVE}
+    )
+    return path.read_text()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # Fresh: no file at all.
+        None,
+        # Edited in place.
+        "[Achievements]\nToken = TOKENlive\nUserPref = keepme\n",
+        # Recreated, because the line is not a setting.
+        "[Achievements]\ntorn\nToken = TOKENlive\n",
+        # Recreated because the file already carries the wrapper's header...
+        f"[{WRAPPER}]\nToken = TOKENlive\n",
+        # ...including the spelling only the post-normalisation check sees.
+        f"[{WRAPPER}] ; [x]\nToken = TOKENlive\n",
+    ],
+)
+def test_no_ini_this_program_writes_carries_the_wrapper_header(
+    tmp_path: Path, source: str | None
+) -> None:
+    assert WRAPPER not in ini_written(tmp_path / "settings.ini", source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        None,
+        'cheevos_token = "TOKENlive"\nvideo_fullscreen = "true"\n',
+        'torn line with no separator\ncheevos_token = "TOKENlive"\n',
+        f'[{WRAPPER}]\ncheevos_token = "TOKENlive"\n',
+        f'[{WRAPPER}] ; [x]\ncheevos_token = "TOKENlive"\n',
+    ],
+)
+def test_no_retroarch_file_this_program_writes_carries_the_wrapper_header(
+    tmp_path: Path, source: str | None
+) -> None:
+    assert WRAPPER not in retroarch_written(tmp_path / "retroarch.cfg", source)
+
+
+def test_an_all_removals_pass_writes_no_wrapper_header(tmp_path: Path) -> None:
+    # The branch the parameterisations above cannot reach: every owned key is
+    # a removal, so the recreation writes a file with nothing in it.
+    path = tmp_path / "secrets.ini"
+    path.write_text("[Achievements]\ntorn\nToken = TOKENlive\n")
+
+    assert ep.set_ini_settings(path, RA_SECRET) is True
+
+    text = path.read_text()
+    assert "TOKENlive" not in text
+    assert WRAPPER not in text
+
+
+# --- What the editors promise about a file they did not write --------------
+#
+# The contract is semantic equivalence for the emulator that reads the file:
+# every setting it reads keeps its key, its value and its section, and every
+# one of its assignments where it repeats, except the keys the flake owns.
+# Presentation the emulator cannot observe - the spacing around a delimiter,
+# where a line sits within its section, whether a comment survives an edit to
+# the line it trails - is deliberately not asserted below, because it is not
+# promised and pinning it would buy back the line arithmetic these editors
+# were written to stop carrying. Line terminators are not asserted either:
+# `Path.read_text` folds CRLF to LF before any of this runs.
+
+
+def ini_settings(path: Path) -> list[tuple[str | None, str, str]]:
+    """Every (section, key, value) an INI reader sees, in file order."""
+    section: str | None = None
+    found: list[tuple[str | None, str, str]] = []
+    for line in path.read_text().split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1]
+            continue
+        key, separator, value = line.partition("=")
+        if separator:
+            found.append((section, key.strip(), value.strip()))
+    return found
+
+
+def retroarch_settings(path: Path) -> list[tuple[str, str]]:
+    """Every (key, value) a RetroArch reader sees, in file order."""
+    found: list[tuple[str, str]] = []
+    for line in path.read_text().split("\n"):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if separator:
+            found.append((key.strip(), value.strip()))
+    return found
+
+
+def unowned_ini(
+    path: Path, owned: set[tuple[str, str]]
+) -> list[tuple[str | None, str, str]]:
+    return [entry for entry in ini_settings(path) if entry[:2] not in owned]
+
+
+# The shape of Azahar's `qt-config.ini`: the one genuinely QSettings-written
+# file among the eight ini targets, so the only one whose spaceless
+# assignments a rewrite would visibly renormalise - and QSettings rewrites
+# the whole file whenever Azahar saves, so an unconditional assignment would
+# mean the two of them taking turns before every launch, forever.
+AZAHAR = (
+    "[UI]\n"
+    "firstStart=false\n"
+    "fullscreen\\default=true\n"
+    "confirmClose=true\n"
+    "[Renderer]\n"
+    "resolution_factor=1\n"
+)
+AZAHAR_OWNED: dict[str, dict[str, str | ep.Removal]] = {
+    "UI": {"firstStart": "false", "fullscreen\\default": "true"}
+}
+
+# The shape of `scummvm.ini`, the other spaceless writer among the eight,
+# transcribed from a file ScummVM itself wrote: a blank line between section
+# blocks, spaceless assignments, no comments anywhere, and a value carrying
+# trailing spaces, which the editor may not tidy away any more than it may
+# tidy away the value itself.
+SCUMMVM = (
+    "[scummvm]\n"
+    "versioninfo=2026.1.0\n"
+    "gui_theme=scummmodern\n"
+    "fullscreen=true\n"
+    "\n"
+    "[monkey2]\n"
+    "gameid=monkey2\n"
+    "description=Monkey Island 2: LeChuck's Revenge\n"
+    "path=/data/roms/scummvm/monkey2\n"
+    "guioptions=sndNoSpeech ega midiPCSpk midiAdLib vga  \n"
+)
+SCUMMVM_OWNED: dict[str, dict[str, str | ep.Removal]] = {
+    "scummvm": {"fullscreen": "true"}
+}
+
+
+@pytest.mark.parametrize(
+    ("source", "owned"), [(AZAHAR, AZAHAR_OWNED), (SCUMMVM, SCUMMVM_OWNED)]
+)
+def test_ini_leaves_a_spaceless_file_holding_the_flake_values_unwritten(
+    tmp_path: Path,
+    source: str,
+    owned: dict[str, dict[str, str | ep.Removal]],
+) -> None:
+    # The flash-write guard, not a formatting one. Both runs must be silent:
+    # a first run that rewrote the file to respace it would leave the second
+    # with nothing to do and pass a weaker version of this test.
+    path = tmp_path / "qt-config.ini"
+    path.write_text(source)
+    freeze(path)
+
+    assert ep.set_ini_settings(path, owned) is False
+    assert unwritten(path)
+
+    assert ep.set_ini_settings(path, owned) is False
+    assert unwritten(path)
+
+
+def test_ini_reduces_a_key_repeated_inside_one_section_instance(
+    tmp_path: Path,
+) -> None:
+    # The third shape a repeat takes, and the one the line arithmetic never
+    # handled: assigning to a section that already carries the key twice
+    # edits the first line and leaves the second standing, so the file held
+    # the flake's value while the emulator read the stale copy below it.
+    path = tmp_path / "settings.ini"
+    path.write_text(
+        "[Achievements]\nUsername = stale-one\nUsername = stale-two\nKeepMe = yes\n"
+    )
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+
+    settings = ini_settings(path)
+    assert [e for e in settings if e[1] == "Username"] == [
+        ("Achievements", "Username", "correct")
+    ]
+    assert ("Achievements", "KeepMe", "yes") in settings
+
+    freeze(path)
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+    assert unwritten(path)
+
+
+def test_ini_reduces_a_preamble_twin_when_the_section_is_absent(
+    tmp_path: Path,
+) -> None:
+    # The live edge in the shape between the headerless region and a section:
+    # with the owned section absent from the file entirely, the old sweep
+    # found no bounds and stopped, so a write appended the fresh section and
+    # left the preamble twin standing. The emulator read the stale value for
+    # one launch, and the next run swept the twin and wrote again.
+    path = tmp_path / "settings.ini"
+    path.write_text("Username = stale\nUnowned = keepme\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+
+    settings = ini_settings(path)
+    assert [entry for entry in settings if entry[1] == "Username"] == [
+        ("Achievements", "Username", "correct")
+    ]
+    assert (None, "Unowned", "keepme") in settings
+
+    freeze(path)
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+    assert unwritten(path)
+
+
+def test_ini_keeps_every_assignment_of_a_key_the_flake_does_not_own(
+    tmp_path: Path,
+) -> None:
+    # Which of a repeated unowned key's assignments the emulator obeys is not
+    # this program's to decide; losing one of them is a setting disappearing,
+    # which the contract does not permit. The owned-key sweeps are duplicate
+    # aware by design, so the hazard is one of them reaching too far.
+    path = tmp_path / "settings.ini"
+    path.write_text(
+        "[Achievements]\n"
+        "Username = stale\n"
+        "Unowned = first\n"
+        "Unowned = second\n"
+        "[Elsewhere]\n"
+        "Unowned = third\n"
+    )
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+
+    settings = ini_settings(path)
+    assert [entry for entry in settings if entry[1] == "Unowned"] == [
+        ("Achievements", "Unowned", "first"),
+        ("Achievements", "Unowned", "second"),
+        ("Elsewhere", "Unowned", "third"),
+    ]
+
+
+# A file that is merely awkward is still edited in place rather than
+# recreated: recreation rewrites the file with only the owned keys in it, so
+# it costs every unowned setting the emulator was reading.
+
+
+def test_ini_edits_a_file_with_a_duplicated_section_header_in_place(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(
+        "[Interface]\nConfirmStop = True\nKeepMe = yes\n[Interface]\nAlso = kept\n"
+    )
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "KeepMe = yes" in text
+    assert "Also = kept" in text
+
+
+def test_ini_edits_a_file_with_a_headerless_preamble_in_place(tmp_path: Path) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("Orphan = kept\n[Interface]\nConfirmStop = True\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "Orphan = kept" in text
+    assert "ConfirmStop = False" in text
+
+
+# The mutate-and-serialise path itself, which nothing pinned before: an edit
+# is where the library rewrites blocks, so it is where an unowned setting can
+# be lost or reattributed.
+
+MIXED = (
+    "# written by the emulator\n"
+    "Preamble = above\n"
+    "[Interface]\n"
+    "Language = 0\n"
+    "ConfirmStop = True\n"
+    "Repeated = one\n"
+    "Repeated = two\n"
+    "; a trailing comment\n"
+    "[Display]\n"
+    "RenderToMain = True\n"
+    "[Other]\n"
+    "Fullscreen = someone-elses\n"
+)
+MIXED_OWNED_NAMES = {("Interface", "ConfirmStop"), ("Display", "Fullscreen")}
+
+
+@pytest.mark.parametrize(
+    ("owned", "wrote"),
+    [
+        # Changing a value that is already in the file.
+        ({"Interface": {"ConfirmStop": "False"}}, True),
+        # Appending an owned key its section does not carry yet.
+        ({"Display": {"Fullscreen": "True"}}, True),
+        # The removal path, which runs the same machinery and is where a
+        # credential comes off the box.
+        ({"Interface": {"ConfirmStop": ep.REMOVE}}, True),
+    ],
+)
+def test_ini_keeps_every_unowned_setting_through_an_edit(
+    tmp_path: Path,
+    owned: dict[str, dict[str, str | ep.Removal]],
+    wrote: bool,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(MIXED)
+    before = unowned_ini(path, MIXED_OWNED_NAMES)
+
+    assert ep.set_ini_settings(path, owned) is wrote
+
+    assert unowned_ini(path, MIXED_OWNED_NAMES) == before
+
+
+def test_ini_keeps_the_previous_line_intact_when_seeding_into_an_unterminated_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = False\n[Display]\nRenderToMain = True")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    settings = ini_settings(path)
+    assert ("Display", "RenderToMain", "True") in settings
+    assert ("Display", "Fullscreen", "True") in settings
+
+
+# --- The probe behind DuckStation's login timestamp ------------------------
+#
+# Not an editor: it reads one key to decide whether a newly encrypted token
+# differs from the one on disk, so that an unchanged token does not rewrite
+# `login_timestamp` on every launch. It runs before this program has decided
+# to write anything, so every way it can fail to find a value has to be
+# silent - a recreation notice here would announce something that is not
+# happening.
+
+
+def test_the_ini_probe_is_silent_about_a_missing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert (
+        ep._current_ini_value(tmp_path / "absent.ini", "Achievements", "Token") is None
+    )
+    assert capsys.readouterr().err == ""
+
+
+def test_the_ini_probe_is_silent_about_an_unreadable_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_bytes(b"[Achievements]\nToken = \xff\xfe\n")
+
+    assert ep._current_ini_value(path, "Achievements", "Token") is None
+    assert capsys.readouterr().err == ""
+
+
+def test_the_ini_probe_is_silent_about_an_unparseable_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The fifth answer of None, gained because the shared load helper
+    # validates where the old quiet read did not. It reads as "the token
+    # changed" and rewrites `login_timestamp` once, which is right for a file
+    # the editor is about to recreate anyway.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\ntorn\nToken = live\n")
+
+    assert ep._current_ini_value(path, "Achievements", "Token") is None
+    assert capsys.readouterr().err == ""
+
+
+def test_the_ini_probe_is_silent_about_a_missing_section(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("[Elsewhere]\nToken = not-ours\n")
+
+    assert ep._current_ini_value(path, "Achievements", "Token") is None
+    assert capsys.readouterr().err == ""
+
+
+def test_the_ini_probe_is_silent_about_a_missing_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = alice\n")
+
+    assert ep._current_ini_value(path, "Achievements", "Token") is None
+    assert capsys.readouterr().err == ""
+
+
+def test_the_ini_probe_reads_the_value_that_is_there(tmp_path: Path) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nToken=  spaced  \n")
+
+    assert ep._current_ini_value(path, "Achievements", "Token") == "spaced"
+
+
+# --- RetroArch's flat file, under the same contract ------------------------
+
+RA_MIXED = (
+    "# RetroArch config\n"
+    'input_driver = "sdl"\n'
+    'menu_driver = "rgui"\n'
+    'repeated = "one"\n'
+    'repeated = "two"\n'
+)
+RA_MIXED_OWNED_NAMES = {"menu_driver", "video_fullscreen"}
+
+
+def test_retroarch_reduces_a_key_repeated_in_the_flat_file(tmp_path: Path) -> None:
+    # The whole file is one section here, so there is no second instance and
+    # no separate headerless region: a repeat is a repeated line and nothing
+    # else. Iterating to absence would delete every copy and append one back,
+    # leaving the bytes identical but the change flag set, so `retroarch.cfg`
+    # would be written to flash before every launch, forever.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(
+        'cheevos_username = "one"\nkeepme = "yes"\ncheevos_username = "two"\n'
+    )
+
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is True
+
+    settings = retroarch_settings(path)
+    assert [v for k, v in settings if k == "cheevos_username"] == ['"correct"']
+    assert ("keepme", '"yes"') in settings
+
+    freeze(path)
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is False
+    assert unwritten(path)
+
+
+def test_retroarch_leaves_a_file_holding_the_flake_values_unwritten(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "ozone"\nvideo_fullscreen = "true"\nkeep = "me"\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert unwritten(path)
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert unwritten(path)
+
+
+@pytest.mark.parametrize(
+    ("owned", "wrote"),
+    [
+        ({"menu_driver": "ozone"}, True),
+        ({"video_fullscreen": "true"}, True),
+        ({"menu_driver": ep.REMOVE}, True),
+    ],
+)
+def test_retroarch_keeps_every_unowned_setting_through_an_edit(
+    tmp_path: Path, owned: dict[str, str | ep.Removal], wrote: bool
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(RA_MIXED)
+    before = [
+        entry
+        for entry in retroarch_settings(path)
+        if entry[0] not in RA_MIXED_OWNED_NAMES
+    ]
+
+    assert ep.set_retroarch_settings(path, owned) is wrote
+
+    after = [
+        entry
+        for entry in retroarch_settings(path)
+        if entry[0] not in RA_MIXED_OWNED_NAMES
+    ]
+    assert after == before
+
+
+def test_retroarch_keeps_the_previous_line_intact_when_appending_a_key(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "ozone"\ninput_driver = "sdl"')
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+
+    settings = retroarch_settings(path)
+    assert ("input_driver", '"sdl"') in settings
+    assert ("video_fullscreen", '"true"') in settings
+
+
+def test_retroarch_recreates_a_file_with_a_semicolon_line_that_is_not_a_setting(
+    tmp_path: Path,
+) -> None:
+    # RetroArch's own parser gives `;` no special meaning, so a `;`-prefixed
+    # line carrying no `=` is not a comment in one of its files - it is a
+    # line that is not a setting, and the file is not that format. Spelled
+    # without an `=` deliberately: `;key = "v"` parses as an option named
+    # `;key`, which is what this program has always done with it, so it would
+    # pin nothing.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "rgui"\n; a note with no assignment\n')
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+
+    text = path.read_text()
+    assert "a note with no assignment" not in text
+    assert 'menu_driver = "ozone"' in text
+    assert 'video_fullscreen = "true"' in text
+
+
+def test_ini_keeps_a_semicolon_comment_because_ini_has_them(tmp_path: Path) -> None:
+    # The other half of the per-format comment prefixes: `;` *is* a comment
+    # in an INI file, so the same line there is not a reason to recreate.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n; a note with no assignment\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    assert "; a note with no assignment" in path.read_text()
+
+
+def test_ini_keeps_every_setting_of_a_file_in_scummvms_own_shape(
+    tmp_path: Path,
+) -> None:
+    # The survey that says the recreate path is not reachable for this file:
+    # ScummVM's own writer emits canonical headers, no duplicates, no
+    # headerless preamble, no indentation, no comments, no line that is not
+    # an assignment, and no `:` delimiter, so the only awkward shapes this
+    # program handles do not arise there at all. What is left to prove is
+    # that an edit keeps every setting the emulator wrote, trailing spaces on
+    # a value included.
+    path = tmp_path / "scummvm.ini"
+    path.write_text(SCUMMVM)
+    before = unowned_ini(path, {("scummvm", "fullscreen")})
+
+    assert ep.set_ini_settings(path, {"scummvm": {"fullscreen": "false"}}) is True
+
+    assert unowned_ini(path, {("scummvm", "fullscreen")}) == before
+    assert [e for e in ini_settings(path) if e[1] == "fullscreen"] == [
+        ("scummvm", "fullscreen", "false")
+    ]
+    # Read raw rather than through the helper, which strips: an untouched
+    # line keeps its bytes, trailing spaces included, and the helper's own
+    # stripping would hide it if it did not.
+    assert "vga  \n" in path.read_text()
+
+    freeze(path)
+    assert ep.set_ini_settings(path, {"scummvm": {"fullscreen": "false"}}) is False
+    assert unwritten(path)
+
+
+# --- An owned value that is not one line -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "value", ["player\n", "player\ninjected = 1", "a\nb\nc", "a\rb", "player\r"]
+)
+def test_ini_refuses_an_owned_value_spanning_more_than_one_line(
+    tmp_path: Path, value: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # One line of a settings file holds one setting, so a value carrying a
+    # newline is not a value: written, its tail becomes a line of its own,
+    # which either parses as some other setting or fails the syntax check and
+    # takes every unowned key in the file with it on the next launch. The
+    # library refuses to store one on an option that already exists, and that
+    # refusal is not an OSError, so nothing in the editor loop would have
+    # caught it and the session would have ended at a greeter.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\nKeepMe = yes\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": value}}) is False
+
+    assert unwritten(path)
+    assert "Username = old" in path.read_text()
+    assert "is not one line" in capsys.readouterr().err
+
+
+def test_retroarch_refuses_an_owned_value_spanning_more_than_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('cheevos_username = "old"\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "a\nb"}) is False
+
+    assert unwritten(path)
+    assert "is not one line" in capsys.readouterr().err
+
+
+def test_ini_refuses_a_multi_line_value_for_a_key_the_file_does_not_carry(
+    tmp_path: Path,
+) -> None:
+    # The library accepts one here, because a brand new option is built
+    # rather than assigned - so the crash appears only on the *second* run,
+    # against the line the first run wrote. Refusing both ways is what keeps
+    # the editor's behaviour the same on every launch.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nKeepMe = yes\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "a\nb"}}) is False
+
+    assert "a\nb" not in path.read_text()
+
+
+def test_a_username_with_a_trailing_newline_does_not_end_the_session(
+    tmp_path: Path,
+) -> None:
+    # How such a value actually reaches an editor: a secret file whose last
+    # line is blank. `_read_secret` strips exactly one trailing newline, so
+    # two of them leave one behind, and nothing validates the account name
+    # the way the token is validated.
+    secret = tmp_path / "username"
+    secret.write_text("player\n\n")
+    assert ep._read_secret(secret) == "player\n"
+
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\nHardcore = true\n")
+
+    assert (
+        ep.set_ini_settings(
+            path, {"Achievements": {"Username": "player\n", "Hardcore": "false"}}
+        )
+        is True
+    )
+
+    # The bad value is skipped and the rest of the file's owned keys are
+    # still asserted, which is the whole point of not raising.
+    text = path.read_text()
+    assert "Hardcore = false" in text
+    assert "Username = old" in text
+
+
+def test_ini_refuses_to_own_a_section_named_like_the_wrapper(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A section actually spelled like the synthetic header cannot be told
+    # apart from it on the next read, and appending one to a recreated file
+    # raised out of an editor whose whole policy is not to raise.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {WRAPPER: {"Key": "value"}, "Achievements": {"Username": "correct"}},
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert WRAPPER not in text
+    assert "Username = correct" in text
+    assert "reserved" in capsys.readouterr().err
+
+
+def test_ini_recreating_a_file_that_owns_only_a_reserved_section_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\ntorn\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {WRAPPER: {"Key": "value"}}) is False
+
+    assert unwritten(path)
+
+
+def test_ini_recreating_a_file_never_writes_a_multi_line_value(
+    tmp_path: Path,
+) -> None:
+    # The recreate branch builds options rather than assigning to them, and
+    # the library objects only to the assignment - so a guard on the edit
+    # path alone would let a recreation write the very line that makes the
+    # next launch refuse the file. Here the tail is a whole second setting.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\ntorn line\nOther = x\n")
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {
+                "Achievements": {
+                    "Username": "player\nCheevos_evil = 1",
+                    "Hardcore": "true",
+                }
+            },
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert "Cheevos_evil" not in text
+    assert "Username" not in text
+    assert "Hardcore = true" in text
+
+
+def test_ini_collapses_a_repeat_whose_live_assignment_is_already_right(
+    tmp_path: Path,
+) -> None:
+    # The emulator was already reading the flake's value here, because every
+    # reader resolves a repeat to the last assignment - but the file still
+    # carries a stale line above it, and a later hand edit or torn write that
+    # reordered them would put the stale value back in charge. So this run
+    # does write, to collapse the repeat, and only the run after it is quiet.
+    # Which of the two copies is the one left standing is not promised.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = stale\nUsername = correct\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+
+    assert ini_settings(path) == [("Achievements", "Username", "correct")]
+
+    freeze(path)
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+    assert unwritten(path)
+
+
+def test_a_library_failure_the_parser_does_not_own_still_recreates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `configupdater` raises four exceptions that are not `configparser.Error`
+    # and its parser raises one of them from its own "cannot happen" branches.
+    # Catching the `configparser` base alone would let those escape, and the
+    # session runs this program unguarded: the editor loop above it guards
+    # `OSError`, so an escaping library exception ends the evening at a
+    # greeter instead of replacing one file. Driven through a patched parse
+    # because the branches that raise it are unreachable by construction.
+    real = ep.ConfigUpdater.read_string
+
+    def explode(self: ep.ConfigUpdater, source: str) -> None:
+        # Only the file's own text: the fresh document the recreation builds
+        # parses a constant of this module's own and must still work.
+        if source.strip() != ep._FLAT_WRAPPER_HEADER:
+            raise ep.InconsistentStateError("simulated library failure")
+        real(self, source)
+
+    monkeypatch.setattr(ep.ConfigUpdater, "read_string", explode)
+
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\nKeepMe = yes\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "ConfirmStop = False" in text
+    assert "Fullscreen = True" in text
+
+
+def test_ini_refuses_an_owned_value_carrying_a_carriage_return(
+    tmp_path: Path,
+) -> None:
+    # A lone carriage return is written to disk verbatim but read back as a
+    # line break, because this program reads in universal-newline mode. So it
+    # destroys a file exactly as a newline does, just one launch later: the
+    # first run writes it, and from the second the file no longer parses and
+    # every unowned key in it is gone through the recreate path, forever.
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\nKeepMe = precious\n")
+    owned: dict[str, dict[str, str | ep.Removal]] = {
+        "Achievements": {"Username": "a\rb"}
+    }
+
+    assert ep.set_ini_settings(path, owned) is False
+    assert ep.set_ini_settings(path, owned) is False
+
+    settings = ini_settings(path)
+    assert ("Achievements", "KeepMe", "precious") in settings
+    assert ("Achievements", "Username", "old") in settings
+
+
+def test_flat_refuses_a_value_the_parser_still_read_as_a_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The backstop behind stripping every line's indentation. It is
+    # unreachable while the strip and the parser agree on what whitespace is,
+    # which they do today - so it is driven through a strip that has been
+    # made to disagree, which is exactly the drift it exists to absorb. What
+    # it must deliver is the recreate path, not a swallowed line.
+    real = ep._flat_source
+
+    def leaves_an_indent(text: str) -> str:
+        # Indentation put back *after* the real stripping, which is what a
+        # strip and a parser that disagreed about one whitespace character
+        # would leave behind.
+        return real(text).replace("\ncontinued", "\n continued")
+
+    monkeypatch.setattr(ep, "_flat_source", leaves_an_indent)
+
+    with pytest.raises(ep._Unparseable) as refused:
+        ep._load_flat("[A]\nkey = 1\ncontinued\n", ini=True)
+
+    assert refused.value.reason is not None
+    assert "more than one line" in refused.value.reason
+
+
+# --- Nothing stranded, in either direction ---------------------------------
+#
+# Replacing a parser leaves two kinds of wreckage and lint sees neither: a
+# definition whose last caller went away, and a survivor still calling
+# something that went away. Ruff does not flag an unused module-level
+# assignment, so an orphaned constant is invisible to it, and a function
+# reachable only from dead code looks used to any single-direction check.
+
+
+def module_names() -> tuple[dict[str, int], dict[str, int], set[str]]:
+    """What the module defines at its top level, what it loads, and what binds."""
+    tree = ast.parse(Path(ep.__file__).read_text())
+
+    defined: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            defined[node.name] = node.lineno
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defined[target.id] = node.lineno
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defined[node.target.id] = node.lineno
+
+    loaded: dict[str, int] = {}
+    bound: set[str] = set(dir(builtins)) | {"__name__", "__file__", "__doc__"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            loaded.setdefault(node.id, node.lineno)
+        elif isinstance(node, ast.Name):
+            bound.add(node.id)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            bound.add(node.name)
+            spec = node.args
+            for arg in [
+                *spec.posonlyargs,
+                *spec.args,
+                *spec.kwonlyargs,
+                *([spec.vararg] if spec.vararg else []),
+                *([spec.kwarg] if spec.kwarg else []),
+            ]:
+                bound.add(arg.arg)
+        elif isinstance(node, ast.ClassDef):
+            bound.add(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            for alias in node.names:
+                bound.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.Global | ast.Nonlocal):
+            bound.update(node.names)
+
+    return defined, loaded, bound
+
+
+def test_the_module_leaves_no_definition_unreferenced() -> None:
+    defined, loaded, _ = module_names()
+
+    orphans = sorted(
+        (line, name) for name, line in defined.items() if name not in loaded
+    )
+
+    assert orphans == []
+
+
+def test_the_module_loads_no_name_that_nothing_binds() -> None:
+    # Not the same check as the one above, and the reason both are here: a
+    # function can be referenced only by a caller that is itself dead, which
+    # leaves the pair invisible to the orphan pass and visible to this one.
+    _, loaded, bound = module_names()
+
+    dangling = sorted(
+        (line, name) for name, line in loaded.items() if name not in bound
+    )
+
+    assert dangling == []
+
+
+def test_the_section_regex_is_what_the_header_guard_compares_against() -> None:
+    # The one module-level constant the rewrite kept rather than deleted, and
+    # it is kept for one reason: it supplies the name the library's own
+    # section grammar is reconciled against. If nothing loads it, that
+    # reconciliation is not implemented and a header the two grammars name
+    # differently would strand a live credential.
+    _, loaded, _ = module_names()
+
+    assert "_INI_SECTION_RE" in loaded

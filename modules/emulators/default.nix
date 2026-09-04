@@ -769,7 +769,13 @@ let
     # through `token_file` below instead of an ini key; prepare's own
     # validation forbids a `token` entry under `keys` for this encoding, so
     # there is none here on purpose. Enabled/hardcore/username are ordinary
-    # ini keys - only the token needs the raw file.
+    # ini keys - only the token needs the raw file. At the locked
+    # pkgs.ppsspp.version 1.20.4 the key is also never written: it is
+    # declared with `ConfigSetting("AchievementsToken", ..., CfgFlag::DONT_SAVE)`
+    # (Core/Config.cpp:383), and Core/Config.h:677 comments that setting
+    # "Not saved" - so PPSSPP's own writer never persists a token line into
+    # ppsspp.ini. Nothing accumulates there now that unowned keys survive
+    # edits, and no removal needs declaring for it.
     ppsspp = {
       encoding = "secret-file";
       booleans = {

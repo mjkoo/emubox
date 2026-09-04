@@ -713,6 +713,319 @@ def test_ini_an_empty_file_owning_a_real_value_still_notes_the_recreation(
     assert "is empty; recreating it" in capsys.readouterr().err
 
 
+# --- A leading byte order mark ---------------------------------------------
+# PPSSPP's own writer (IniFile::Save) prefixes its file with a UTF-8 byte
+# order mark on every save. Both flat editors read such a file as its format
+# with the mark set aside, and a write puts the mark back byte-for-byte at
+# position zero - preservation, not stripping, because the mark is a byte
+# the emulator wrote like any other this program does not own. Exactly one
+# mark, at the very start of the file, is set aside; a U+FEFF anywhere else
+# is ordinary content and keeps whatever behavior the line carrying it
+# already has.
+
+BOM = "\ufeff"
+BOM_BYTES = b"\xef\xbb\xbf"
+
+
+def test_ini_reads_a_marked_file_and_keeps_the_mark_leading(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Header-first, because that is the shape PPSSPP writes and the shape
+    # that used to recreate: the mark glued to the header left a first line
+    # no rule could read. The file must be edited, not recreated.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(
+        f"{BOM}[Interface]\nLanguage = 0\nConfirmStop = True\n[Display]\nFullscreen = False\n"
+    )
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    text = path.read_text()
+    assert "Language = 0" in text
+    assert "ConfirmStop = False" in text
+    assert "Fullscreen = True" in text
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert BOM not in text.removeprefix(BOM)
+    assert capsys.readouterr().err == ""
+
+
+def test_retroarch_reads_a_marked_file_and_keeps_the_mark_leading(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Assignment-first: without the set-aside the mark glues into the first
+    # key's name, so the owned key below it reads as a different, unowned
+    # key and the flake's value is appended as a duplicate. The first line
+    # must be the line after the mark, edited in its place.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(f'{BOM}menu_driver = "rgui"\ninput_driver = "sdl"\n')
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+
+    text = path.read_text()
+    lines = text.removeprefix(BOM).splitlines()
+    assert lines[0] == 'menu_driver = "ozone"'
+    assert lines[1] == 'input_driver = "sdl"'
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert BOM not in text.removeprefix(BOM)
+    assert capsys.readouterr().err == ""
+
+
+def test_retroarch_marked_settled_file_reports_no_write_twice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The sectionless half of the settled-file promise: once the marked file
+    # carries every owned value, the mark alone must never make the next
+    # launch write it again.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(
+        f'{BOM}menu_driver = "ozone"\ninput_driver = "sdl"\nvideo_fullscreen = "true"\n'
+    )
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+
+    assert unwritten(path)
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert capsys.readouterr().err == ""
+
+
+def test_ini_recreates_a_file_with_a_mark_before_a_mid_file_header(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Only the mark at the very start of the file is set aside. A mark
+    # leading any later line leaves a line that is neither header, comment,
+    # blank nor assignment, so the file is not this format and recreates.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(f"[Interface]\nConfirmStop = True\n{BOM}[Display]\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    assert BOM not in path.read_text()
+    assert "not a setting" in capsys.readouterr().err
+
+
+def test_ini_recreates_a_file_with_a_mark_alone_on_a_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # U+FEFF is not whitespace, so a line holding only a mark is not blank;
+    # no rule reads it and the file recreates, as it always has.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(f"[Interface]\nConfirmStop = True\n{BOM}\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    assert BOM not in path.read_text()
+    assert "not a setting" in capsys.readouterr().err
+
+
+def test_ini_recreates_a_doubly_marked_file_leading_with_a_header(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Exactly one leading mark is set aside. After the set-aside this file's
+    # first line is a second mark glued to a header - a line no rule reads -
+    # so it recreates, exactly as the same residual text always has.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(f"{BOM}{BOM}[Interface]\nConfirmStop = True\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    assert BOM not in path.read_text()
+    assert "not a setting" in capsys.readouterr().err
+
+
+def test_ini_keeps_a_mark_embedded_in_an_unowned_assignment(
+    tmp_path: Path,
+) -> None:
+    # A mark inside an assignment line is ordinary content - part of the
+    # value here - and survives an edit elsewhere in the file untouched.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text(f"[Interface]\nKeepMe = a{BOM}b\nConfirmStop = True\n")
+
+    assert ep.set_ini_settings(path, INI_OWNED) is True
+
+    assert f"KeepMe = a{BOM}b" in path.read_text()
+
+
+def test_ini_a_mark_only_file_owning_a_real_value_recreates_with_the_note(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A file containing only the mark is an empty file: the INI format
+    # refuses an empty file, so it recreates - markless, since the recreate
+    # path writes only the owned values - and the deferred emptiness note
+    # must fire even though the file held three bytes.
+    path = tmp_path / "settings.ini"
+    path.write_text(BOM)
+
+    assert (
+        ep.set_ini_settings(
+            path, {"Achievements": {"Enabled": "true", "Token": ep.REMOVE}}
+        )
+        is True
+    )
+
+    assert "Enabled = true" in path.read_text()
+    assert BOM not in path.read_text()
+    assert "is empty; recreating it" in capsys.readouterr().err
+
+
+def test_ini_a_mark_only_file_owning_only_removals_is_left_unwritten(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The other half of "a mark-only file is an empty file": when every
+    # owned key is a removal there is nothing on disk a recreation would
+    # keep - the file holds nothing but the mark - so it is left unwritten
+    # and unannounced, exactly as an empty file is.
+    path = tmp_path / "secrets.ini"
+    path.write_text(BOM)
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+
+    assert unwritten(path)
+    assert capsys.readouterr().err == ""
+
+
+def test_ini_a_removal_only_write_keeps_the_mark_and_settles(
+    tmp_path: Path,
+) -> None:
+    # The mark survives a write whose only edit is a removal, and the swept
+    # file then settles.
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{BOM}[Achievements]\nKeepMe = yes\nToken = LIVE\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    text = path.read_text()
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert "KeepMe = yes" in text
+    assert "Token" not in text
+
+    freeze(path)
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+    assert unwritten(path)
+
+
+def test_ini_a_marked_unparseable_file_still_recreates_on_the_all_removals_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The mark set-aside must not let a mark-plus-junk file slip past the
+    # recreation that removes a live token.
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{BOM}[Achievements]\nTok\nToken = LIVE\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    assert "LIVE" not in path.read_text()
+    assert "not a setting" in capsys.readouterr().err
+
+
+def test_retroarch_a_mark_only_file_gains_the_owned_keys_after_the_mark(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # RetroArch's format has no emptiness refusal: an empty file is a
+    # readable empty document, so a mark-only file loads, the owned keys
+    # are appended after the mark, the mark still leads, and the file is
+    # settled - the next run reports no write.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(BOM)
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+
+    text = path.read_text()
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert 'menu_driver = "ozone"' in text
+    assert 'video_fullscreen = "true"' in text
+    assert capsys.readouterr().err == ""
+
+    freeze(path)
+    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert unwritten(path)
+
+
+def test_retroarch_migrates_a_file_a_glued_key_reader_left_duplicated(
+    tmp_path: Path,
+) -> None:
+    # A reader that once glued the mark into the first key left files shaped
+    # like this: the owned key below was appended as a duplicate rather than
+    # edited in place, since the glued name never matched. Real boxes hold
+    # that shape now. It is deduplicated to the flake's value with the mark
+    # intact, then settles.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(f'{BOM}menu_driver = "rgui"\nmenu_driver = "ozone"\n')
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+
+    text = path.read_text()
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert text.count("menu_driver") == 1
+    assert 'menu_driver = "ozone"' in text
+
+    freeze(path)
+    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert unwritten(path)
+
+
+# A `ppsspp.ini` in the shape PPSSPP's own writer saves it: the mark first,
+# then its sections. The owned key mirrors what the flake owns in the real
+# file; everything else is a preference the family set inside PPSSPP.
+PPSSPP_OWNED = {"Graphics": {"FullScreen": "True"}}
+
+
+def ppsspp_file(fullscreen: str) -> str:
+    return (
+        f"{BOM}[General]\n"
+        "FirstRun = False\n"
+        "CheckForNewVersion = True\n"
+        "[CPU]\n"
+        "CPUCore = 1\n"
+        "[Graphics]\n"
+        f"FullScreen = {fullscreen}\n"
+        "InternalResolution = 2\n"
+        "[Sound]\n"
+        "Enable = True\n"
+    )
+
+
+def test_a_marked_ppsspp_file_is_edited_not_recreated(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The defect this section exists to kill, in the file's real shape:
+    # the mark made the file unreadable, so it was recreated carrying only
+    # the owned values and every preference set inside PPSSPP was lost on
+    # the very next launch. Every unowned key must survive with the value
+    # PPSSPP wrote, only the owned value may change, and the mark must
+    # still lead.
+    path = tmp_path / "ppsspp.ini"
+    path.write_text(ppsspp_file("False"))
+
+    assert ep.set_ini_settings(path, PPSSPP_OWNED) is True
+
+    text = path.read_text()
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert text == ppsspp_file("True")
+    assert capsys.readouterr().err == ""
+
+
+def test_a_settled_marked_ppsspp_file_reports_no_write_twice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The loop itself: a settled file that leads with the mark used to be
+    # recreated on every launch - the recreation was markless, PPSSPP's
+    # next save put the mark back, and the recreation repeated forever.
+    # Settled must mean settled, on this launch and every one after it.
+    path = tmp_path / "ppsspp.ini"
+    path.write_text(ppsspp_file("True"))
+    freeze(path)
+
+    assert ep.set_ini_settings(path, PPSSPP_OWNED) is False
+    assert ep.set_ini_settings(path, PPSSPP_OWNED) is False
+
+    assert unwritten(path)
+    assert path.read_text() == ppsspp_file("True")
+    assert capsys.readouterr().err == ""
+
+
 # --- Robustness of the custom systems step --------------------------------
 
 

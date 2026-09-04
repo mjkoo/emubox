@@ -96,7 +96,15 @@ The three editors, and what each is built on:
   node keeps its source line verbatim, and rendering is concatenation -
   which keeps comments, ordering, indentation and every key the flake does
   not own. The grammar is this program's own statement of what the
-  emulators' parsers read, stated once in the per-line classifier.
+  emulators' parsers read, stated once in the per-line classifier. A file
+  may lead with a UTF-8 byte order mark - PPSSPP's own writer puts one
+  there on every save - and exactly one, at the very start of the file, is
+  set aside before any line is classified and written back first whenever
+  the loaded document is written; a recreated file carries no mark, and a
+  file holding only the mark is an empty file. A U+FEFF anywhere
+  else gets no special treatment: it is content like any other codepoint,
+  and the line carrying it keeps whatever behavior these rules already
+  give it.
 
 What the flat editors promise is semantic equivalence for the emulator that
 reads the file: every setting it reads keeps its key, its value and its
@@ -410,11 +418,24 @@ def _holds_something(path: Path) -> bool:
     extra - a parent that cannot be searched is a parent the recreation
     could not have written into either - but it means "cannot tell", not
     "not there".
+
+    A file holding nothing but a leading byte order mark holds nothing a
+    recreation would drop - the flat readers set that mark aside, so it is
+    an empty file to them - which is why size alone is not the answer for
+    a non-empty file: the content has to be read. A read that fails on a
+    file that is there keeps the generous answer, True, for the same
+    fail-direction reason as above: only the recreation can take a
+    credential off a disk no parser can see into.
     """
     try:
-        return path.stat().st_size > 0
+        if path.stat().st_size == 0:
+            return False
     except OSError:
         return path.exists()
+    text = _read_quietly(path)
+    if text is None:
+        return True
+    return bool(text.removeprefix(_BOM))
 
 
 # --- ES-DE settings XML ---------------------------------------------------
@@ -539,6 +560,13 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
 # index arithmetic anywhere: an edit replaces a node, sections own their
 # children, and deletion invalidates nothing.
 
+# The one leading byte order mark a flat file may carry (module docstring).
+# Every site that judges a flat file's emptiness or leading content - the
+# set-aside in `_parse_flat`, the re-emission in `_render_flat`, the probe
+# in `set_ini_settings`, and `_holds_something` - has to agree on exactly
+# one, leading, and this constant is what keeps them agreeing.
+_BOM = "\ufeff"
+
 
 @dataclass
 class Blank:
@@ -588,9 +616,17 @@ class SectionNode:
 
 @dataclass
 class Document:
-    """The whole file; `sections[0]` is always the preamble."""
+    """The whole file; `sections[0]` is always the preamble.
+
+    `bom` remembers whether the file led with a UTF-8 byte order mark, set
+    aside before any line was classified; rendering re-emits it first, so
+    the byte the emulator wrote survives a write like every other byte the
+    flake does not own. Recreated documents leave it False: the recreate
+    path writes only the owned values.
+    """
 
     sections: list[SectionNode]
+    bom: bool = False
 
 
 def _make_assignment(key: str, value: str) -> Assignment:
@@ -715,7 +751,17 @@ def _parse_flat(text: str, *, ini: bool) -> Document:
     note and emits it only once it knows a write follows. INI only,
     matching RetroArch's own parser, which has never had an emptiness
     check.
+
+    Exactly one leading U+FEFF is set aside before any other rule runs -
+    PPSSPP's own writer prefixes its file with a UTF-8 byte order mark on
+    every save, and decoded to the first line's content it made the file
+    unreadable and recreated on every launch. After the set-aside the
+    residual text takes these rules verbatim: a mark-only file is an empty
+    file, a second mark leads the residual's first line and that line's
+    shape decides, and a mark anywhere later is ordinary content.
     """
+    bom = text.startswith(_BOM)
+    text = text.removeprefix(_BOM)
     if ini and not text.strip():
         raise _Unparseable(None)
     lines = text.split("\n")
@@ -725,7 +771,7 @@ def _parse_flat(text: str, *, ini: bool) -> Document:
         # line arrives as two pieces and keeps its node.
         lines.pop()
     preamble = SectionNode(raw_header=None, name=None, children=[])
-    document = Document(sections=[preamble])
+    document = Document(sections=[preamble], bom=bom)
     current = preamble
     for raw in lines:
         node = _classify_flat_line(raw, ini=ini)
@@ -738,7 +784,11 @@ def _parse_flat(text: str, *, ini: bool) -> Document:
 
 
 def _render_flat(document: Document) -> str:
-    """The document's text: every node's raw line, terminated."""
+    """The document's text: every node's raw line, terminated.
+
+    A remembered byte order mark is re-emitted first, before any line, so
+    it lands byte-for-byte where the emulator put it: position zero.
+    """
     parts: list[str] = []
     for section in document.sections:
         if section.raw_header is not None:
@@ -765,7 +815,8 @@ def _render_flat(document: Document) -> str:
                     f"assignment is not one line: {child.raw!r}"
                 )
             parts.append(child.raw)
-    return "".join(part + "\n" for part in parts)
+    mark = _BOM if document.bom else ""
+    return mark + "".join(part + "\n" for part in parts)
 
 
 def _read_document(path: Path, *, ini: bool) -> Document | None:
@@ -1013,8 +1064,11 @@ def set_ini_settings(
         # which the branch above has just confirmed. `_read_quietly`, so
         # this probe stays silent about anything other than emptiness - an
         # unreadable or malformed file has already noted its own reason.
+        # A leading byte order mark is set aside first, the same set-aside
+        # the parser applies: a mark-only file is an empty file, and the
+        # note has to fire for it too.
         probe = _read_quietly(path)
-        if probe is not None and not probe.strip():
+        if probe is not None and not probe.removeprefix(_BOM).strip():
             note(f"{path} is empty; recreating it")
         recreated = Document(
             sections=[SectionNode(raw_header=None, name=None, children=[])]

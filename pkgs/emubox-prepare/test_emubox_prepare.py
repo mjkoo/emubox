@@ -907,6 +907,72 @@ def test_retroarch_a_mark_only_file_gains_the_owned_keys_after_the_mark(
     assert unwritten(path)
 
 
+# A `ppsspp.ini` in the shape PPSSPP's own writer saves it: the mark first,
+# then its sections. The owned key mirrors what the flake owns in the real
+# file; everything else is a preference the family set inside PPSSPP.
+PPSSPP_OWNED = {"Graphics": {"FullScreen": "True"}}
+
+
+def ppsspp_file(fullscreen: str) -> str:
+    return (
+        f"{BOM}[General]\n"
+        "FirstRun = False\n"
+        "CheckForNewVersion = True\n"
+        "[CPU]\n"
+        "CPUCore = 1\n"
+        "[Graphics]\n"
+        f"FullScreen = {fullscreen}\n"
+        "InternalResolution = 2\n"
+        "[Sound]\n"
+        "Enable = True\n"
+    )
+
+
+def test_a_marked_ppsspp_file_is_edited_not_recreated(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The defect this section exists to kill, in the file's real shape:
+    # the mark made the file unreadable, so it was recreated carrying only
+    # the owned values and every preference set inside PPSSPP was lost on
+    # the very next launch. Every unowned key must survive with the value
+    # PPSSPP wrote, only the owned value may change, and the mark must
+    # still lead.
+    path = tmp_path / "ppsspp.ini"
+    path.write_text(ppsspp_file("False"))
+
+    assert ep.set_ini_settings(path, PPSSPP_OWNED) is True
+
+    text = path.read_text()
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert "FirstRun = False" in text
+    assert "CheckForNewVersion = True" in text
+    assert "CPUCore = 1" in text
+    assert "InternalResolution = 2" in text
+    assert "Enable = True" in text
+    assert "FullScreen = True" in text
+    assert "FullScreen = False" not in text
+    assert capsys.readouterr().err == ""
+
+
+def test_a_settled_marked_ppsspp_file_reports_no_write_twice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The loop itself: a settled file that leads with the mark used to be
+    # recreated on every launch - the recreation was markless, PPSSPP's
+    # next save put the mark back, and the recreation repeated forever.
+    # Settled must mean settled, on this launch and every one after it.
+    path = tmp_path / "ppsspp.ini"
+    path.write_text(ppsspp_file("True"))
+    freeze(path)
+
+    assert ep.set_ini_settings(path, PPSSPP_OWNED) is False
+    assert ep.set_ini_settings(path, PPSSPP_OWNED) is False
+
+    assert unwritten(path)
+    assert path.read_text() == ppsspp_file("True")
+    assert capsys.readouterr().err == ""
+
+
 # --- Robustness of the custom systems step --------------------------------
 
 

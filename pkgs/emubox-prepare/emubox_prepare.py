@@ -241,7 +241,7 @@ def _write(path: Path, text: str, *, mode: int | None = None) -> None:
     )
     temporary = Path(name)
     try:
-        with os.fdopen(handle, "w") as stream:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
@@ -271,7 +271,7 @@ def _fsync_directory(directory: Path) -> None:
 def _read_text(path: Path) -> str | None:
     """The file's text, or None if it is absent or not readable as text."""
     try:
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError) as error:
@@ -298,7 +298,7 @@ def _read_quietly(path: Path) -> str | None:
     would never get to run.
     """
     try:
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -1394,7 +1394,7 @@ def _read_secret(path: Path) -> str | None:
     is simply skipped; the program does not fail and does not exit non-zero.
     """
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         note(f"{path} could not be read ({error})")
         return None
@@ -1413,7 +1413,7 @@ def _read_cached_token(path: Path) -> str | None:
     have been usable and was not.
     """
     try:
-        cached = path.read_text().strip()
+        cached = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return None
     except (OSError, UnicodeDecodeError) as error:
@@ -2261,7 +2261,7 @@ def main(argv: Sequence[str]) -> int:
     # end at the greeter. It still ends with a line in the journal rather
     # than a stack trace, which is what an admin reading `journalctl` needs.
     try:
-        document = json.loads(Path(owned_values).read_text())
+        document = json.loads(Path(owned_values).read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError) as error:
         # RecursionError joins the two obvious ones because `json.loads`
         # raises it rather than a ValueError on a deeply nested document,

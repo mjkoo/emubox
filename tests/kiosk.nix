@@ -636,6 +636,10 @@ assert lib.assertMsg
         ;
       inherit (nodes.machine.emubox.retroachievements) apiUrl;
       inherit (nodes.machine.users.users.player) home;
+      saveRoutes = nodes.machine.emubox.saves.saveRoutes;
+      saveBindMappings = nodes.machine.emubox.saves.bindMappings;
+      saveRoutesJson = builtins.toJSON saveRoutes;
+      saveBindMappingsJson = builtins.toJSON saveBindMappings;
       py = builtins.toJSON;
 
       # The store path `modules/kiosk`'s own `customSystemsPath` computes
@@ -894,6 +898,21 @@ assert lib.assertMsg
           # absence: an active `player` session on seat0 is what "autologin
           # happened" actually means.
           retry(lambda _: session_on_seat("player"), timeout_seconds=120)
+
+      with subtest("All declared save routes, including ScummVM, activate before kiosk play"):
+          # The route data comes from the module under test, while the minimum
+          # cardinality and ScummVM name are independent capability promises.
+          save_routes = json.loads(${py saveRoutesJson})
+          save_bind_mappings = json.loads(${py saveBindMappingsJson})
+          assert len(save_routes) == 14
+          assert any(route["store"] == "ScummVM saves" for route in save_routes)
+          assert machine.succeed("systemctl is-active emubox-save-routes.target").strip() == "active"
+          for route in save_routes:
+              destination = route["destination"]
+              machine.succeed(f"test -d {destination}")
+              machine.succeed(f"su player -s /bin/sh -c 'printf kiosk > {destination}/kiosk-route-fixture'")
+          for mapping in save_bind_mappings:
+              machine.succeed(f"mountpoint -q {mapping['where']}")
 
       with subtest("es-de runs inside the cage compositor"):
           # 120 s is this test's budget, chosen with headroom for ES-DE
@@ -1313,6 +1332,18 @@ assert lib.assertMsg
           retry(lambda _: session_on_seat("player"), timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)
 
+          # Every route's fixture was written through the emulator's own save
+          # path before the reboot; each must still read back from beneath
+          # `/data/saves`. Checked here rather than in a subtest of its own so
+          # that it is genuinely across the boot the greeter triggered, and
+          # over every route rather than the single one tests/default.nix
+          # carries across its crash.
+          for route in save_routes:
+              fixture = f"{route['destination']}/kiosk-route-fixture"
+              assert machine.succeed(f"cat {fixture}").strip() == "kiosk", fixture
+          for mapping in save_bind_mappings:
+              machine.succeed(f"mountpoint -q {mapping['where']}")
+
       # --- emulators/retroachievements: design D7 ---------------------------
       #
       # Everything below runs after the kiosk session mechanism above is
@@ -1641,6 +1672,10 @@ assert lib.assertMsg
           # way. SNES is exempt above too, but for an unrelated reason - the
           # fixture launch hangs rather than exiting, confirmed in CI rather
           # than by this mechanism.
+          # Achievements are disabled only for these offline core launches.
+          # The preceding tests cover their configuration and login behavior;
+          # letting this unrelated smoke test contact the public API makes its
+          # exit timing depend on network failure and retry behavior.
           override = "/tmp/emubox-retroarch-headless-override.cfg"
           machine.succeed(
               "printf '%s\\n' "
@@ -1650,6 +1685,7 @@ assert lib.assertMsg
               "'input_joypad_driver = \"null\"' "
               "'menu_driver = \"null\"' "
               "'midi_driver = \"null\"' "
+              "'cheevos_enable = \"false\"' "
               f"> {override}"
           )
 

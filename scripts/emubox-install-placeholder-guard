@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Refuse unresolved install placeholders. Backup credentials are optional when
+# off-site backups are disabled, so only those three placeholders are exempt
+# in that mode; every other unresolved value remains an installation error.
+set -euo pipefail
+
+if [ "$#" -ne 1 ] || { [ "$1" != true ] && [ "$1" != false ]; }; then
+  echo "usage: emubox-install-placeholder-guard <true|false>" >&2
+  exit 2
+fi
+
+if [ "$1" = false ]; then
+  if awk -F: '$1 != "b2_key_id" && $1 != "b2_application_key" && $1 != "restic_password"' \
+    | grep -q 'REPLACE-BEFORE-INSTALL'; then
+    exit 1
+  fi
+else
+  if grep -q 'REPLACE-BEFORE-INSTALL'; then
+    exit 1
+  fi
+fi

@@ -274,7 +274,7 @@ placeholders, stages `persist/etc/ssh/ssh_host_ed25519_key{,.pub}` from
 the host key and runs
 `nixos-anywhere --flake .#emubox --extra-files <staging> root@<box>`:
 the disk named in `hosts/emubox/facts.nix` is partitioned to the disko
-layout (`@root @nix @persist @data @cache` on btrfs), the closure is
+layout (`@root @nix @persist @data @cache @snapshots` on btrfs), the closure is
 installed, the host key lands on `@persist`, and the box reboots into the
 configuration with no further prompts. Further arguments are passed to
 `nixos-anywhere`. Always install through the recipe: a box installed
@@ -311,7 +311,7 @@ rest, slow but correct.
 Not provided by this layer: nothing on the box listens on the LAN, so
 there is no address to push to. The tunnel and the `deploy` recipe arrive
 with the remote-administration change. Until then a changed configuration
-reaches the box by reinstalling (below, restoring `/data`), or by hand at
+reaches the box by reinstalling (below, restoring protected data), or by hand at
 the recovery desktop: as `admin`, clone the repository somewhere that
 survives a reboot (`/home/admin` is on the ephemeral root; `sudo mkdir
 /data/admin && sudo chown admin /data/admin` makes a place that lasts),
@@ -319,14 +319,97 @@ copy in your edited `secrets/secrets.yaml` (a fresh clone has the
 placeholders), and run `sudo nixos-rebuild switch --flake .#emubox` (sudo
 needs no password).
 
+### Off-site backup setup and recovery
+
+Off-site backup is deliberately a conventional restic repository in a
+Backblaze B2 S3-compatible bucket, not restic's native `b2:` backend. Set
+`emubox.backups.enable = true` and declare the B2 regional S3 endpoint,
+dedicated private bucket, and optional repository prefix in the host
+configuration. Then use `just secrets-edit` to set `b2_key_id`,
+`b2_application_key`, and `restic_password` before installing.
+
+Create a standard B2 `Read and Write` application key limited to this one
+bucket. It needs the list, read, write, and delete access normal restic
+operations use; do not use the account-wide master key. Deletion is necessary
+because lock cleanup, `forget`, and `prune` remove repository objects.
+Configure B2 lifecycle handling to retain previous file versions for 30 days.
+Those versions are only a last-resort provider aid, not the normal restore path.
+
+Each backup and maintenance activation begins by opening the repository,
+initializing it only when restic identifies it as absent. An authentication,
+network, or other repository error fails that activation without creating or
+replacing anything, and `emubox-status` reports the layer unhealthy rather than
+its last success. The backup timer starts 10 minutes
+after boot and every four hours thereafter. Weekly maintenance runs restic
+retention, prune, and `check --read-data-subset=10%`; that percentage is a
+random subset chosen by restic for that run, not a rotating coverage guarantee.
+
+All emulator save-like data has a declared route beneath `/data/saves`. On an
+upgrade, its conflict-safe migration runs before the emulator setting or bind
+mount becomes active. Equal existing files are accepted; a differing same-path
+file stops activation and names both paths instead of overwriting either one.
+The complete route declaration is rendered on the box as
+`/etc/emubox/save-routes.json`.
+
+Local history is independent of B2. btrbk creates root-only read-only hourly
+snapshots beneath `/data/.snapshots`, retaining all real points from the latest
+48 hours and one representative from each populated daily bucket in the prior
+14 days. It neither fabricates downtime points nor captures the separate cache
+or snapshot subvolumes.
+
+Use `sudo emubox-status` first. It reports the authoritative outcome of the
+latest local snapshot, backup, and maintenance invocation, with a journal
+query when one needs attention. `sudo restic-emubox` is restic itself with the
+same repository and root-only credentials automation uses, so `snapshots`,
+`stats`, `ls` and `find` all work as documented upstream. It is restricted to
+root by the permissions on the credentials file it reads, not by a command
+allowlist.
+
+For a normal recovery, restore to a new directory and verify while restoring:
+
+```
+sudo install -d -m 0700 /data/recovery/restic-restore
+sudo restic-emubox snapshots
+sudo restic-emubox restore --verify <snapshot-id> --target /data/recovery/restic-restore
+```
+
+Inspect the recovered data before replacing anything live. The restored tree
+contains the four protected roots as `saves`, `es-de`, `bios`, and
+`home/player`. Do not restore over a running `/data`; use the recovery
+specialisation or otherwise stop the kiosk and relevant services before
+promoting recovered files.
+
+Restic uses its own native repository locks. Backups retry a compatible lock
+for up to 3 hours 15 minutes; weekly maintenance has a 3-hour bound. A lock
+that outlasts the retry window produces a visible failed activation, while
+future timer activations remain enabled. There is no project-specific remote
+lock or job queue to repair.
+
+This is recovery, not immutability. A root compromise or this bucket-scoped
+read/write/delete key can alter or delete repository objects. The 30-day B2
+prior-version window can sometimes help, but it is not Object Lock and is not
+an automated historical-object recovery procedure. Keep the restic password
+and B2 credentials separately recoverable.
+
+The install VM uses a local test repository and test-only credentials. It
+exercises migration and the declared routes including ScummVM, local retention
+windows, snapshot-consistent backup, exclusions and default home inclusion,
+native-lock failure behavior, cleanup, status, and verified fixture restore.
+It never contacts B2. `just vm-test` and `just kiosk-test` require a Linux KVM
+builder and are CI evidence; `just check-all`, `just session-check`, and
+`just closure-check` are the local gates described above.
+
 ### Reinstall and disk swap
 
 Run `just install` again. With the same host key the secrets decrypt on
 first boot with no change to `secrets/secrets.yaml` and existing
-`known_hosts` entries stay valid. Then either restore `/data` from backup
-or start with the empty, correctly laid out `/data` the first boot
-creates. Nothing on the old disk is needed; a replacement disk only has to
-appear at the path `hosts/emubox/facts.nix` names (a probe-order
+`known_hosts` entries stay valid. Then either restore the four protected roots
+from a verified restic restore - `/data/saves`, `/data/es-de`, `/data/bios`,
+and `/data/home/player` - or start with their empty, correctly laid out
+directories. Recreate ROMs, scraped media, caches, and local snapshot history
+separately; they are intentionally outside the off-site backup set. Nothing
+on the old disk is needed; a replacement disk only has to appear at the path
+`hosts/emubox/facts.nix` names (a probe-order
 `by-diskseq` path today, which holds for a single M.2; a stable `by-id`
 path is a bring-up item once the real disk is known).
 
@@ -402,3 +485,29 @@ this list stays the one place to read what is unproven.
   either holds frame rate on this box's iGPU. A system that disappoints
   here is settled by changing its values in `modules/emulators`, not by
   anything CI can catch first.
+- E12 off-site backup acceptance, recorded below after one normal real-B2
+  backup and a verified restore. This is a rollout check, not a corruption
+  drill or historical-object recovery drill.
+
+### E12 off-site backup acceptance record
+
+Run this once after the real bucket, key, and secrets are provisioned. Use a
+known non-sensitive fixture inside one protected root. Record only identifiers,
+timestamps, commands, and byte-comparison results - never the B2 application
+key, restic password, or fixture contents.
+
+| Field | Record |
+|---|---|
+| Date and operator | `TODO(E12)` |
+| B2 bucket and regional S3 endpoint | `TODO(E12)` |
+| Repository ID and restic snapshot ID | `TODO(E12)` |
+| Protected-root fixture path | `TODO(E12)` |
+| Normal backup unit invocation and successful marker | `TODO(E12)` |
+| Restore command with `--verify` | `TODO(E12)` |
+| Restored fixture byte comparison | `TODO(E12)` |
+| `emubox-status` after the run | `TODO(E12)` |
+
+The acceptance succeeds only when the normal scheduled or manually started
+backup reaches B2, `restic-emubox restore --verify` succeeds into a fresh
+directory, and the recovered fixture bytes match. Do not delete, corrupt, or
+recover historical B2 objects for this check.

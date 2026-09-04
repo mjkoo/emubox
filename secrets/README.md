@@ -29,6 +29,9 @@ Keys this layer consumes:
 | `admin_password_hash`           | `users.users.admin.hashedPasswordFile`, decrypted before users are created          |
 | `retroachievements_username`    | `modules/emulators`'s RetroAchievements namespace (`emubox.kiosk.retroachievementsNamespace.username_file`), read by `emubox-prepare` at every launch of the frontend |
 | `retroachievements_password`    | same namespace's `password_file`; never written to any emulator's configuration - only the session token the login exchanges it for is |
+| `b2_key_id`                     | `sops.templates."restic.env"` as `AWS_ACCESS_KEY_ID`, used only by enabled restic services |
+| `b2_application_key`            | same template as `AWS_SECRET_ACCESS_KEY`; restricted to the dedicated backup bucket |
+| `restic_password`               | root-only `RESTIC_PASSWORD_FILE` in the same template |
 
 **WiFi values.** `wifi_ssid` and `wifi_psk` reach NetworkManager through a
 systemd `EnvironmentFile`, which unquotes like a shell: a value containing
@@ -37,17 +40,17 @@ and the box never joins. Every other printable character is fine. If the
 family's passphrase has one of those, change the passphrase on the router.
 
 Later changes add their own keys here: Cloudflare tunnel credentials,
-Backblaze B2 key pair, restic password, ScreenScraper credentials, GitHub
-deploy key.
+ScreenScraper credentials, and a GitHub deploy key.
 
 **Placeholders.** The committed file holds `REPLACE-BEFORE-INSTALL-*`
-values so the flake evaluates from a fresh clone. Replace all five with
+values so the flake evaluates from a fresh clone. Replace all eight with
 `just secrets-edit` before the first install; the box would otherwise boot
 with an unusable admin password, a WiFi profile that cannot join anything,
-and a RetroAchievements login that never succeeds (harmless on its own -
-see the RetroAchievements section of the top-level README - but worth
-setting alongside the other two while the file is already open). Generate
-the password hash with
+an unusable off-site backup configuration when enabled, and a
+RetroAchievements login that never succeeds (harmless on its own - see the
+RetroAchievements section of the top-level README - but worth setting
+alongside the other entries while the file is already open). Generate the
+password hash with
 `nix shell nixpkgs#mkpasswd -c mkpasswd -m yescrypt`.
 
 Re-key after changing a recipient: `just secrets-rekey`.

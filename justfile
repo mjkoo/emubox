@@ -74,7 +74,13 @@ lint-actions:
 
 # Everything that can run on this machine: what CI runs (formatting, flake
 # check, evaluation) plus the workflow lint
-check-all: fmt-check flake-check eval lint-actions
+check-all: fmt-check flake-check eval lint-actions install-guard-test
+
+# Prove optional off-site credential placeholders are accepted only while the
+# off-site service is disabled. Kept in the local check gate with the other
+# non-KVM shell behavior.
+install-guard-test:
+    bash tests/test-install-placeholder-guard.sh
 
 # Edit the box's secrets (admin age key)
 secrets-edit:
@@ -120,7 +126,8 @@ install target *args:
     # Refuse to install placeholder secrets. Decrypting into a variable
     # first makes a failed decrypt a loud failure, not a skipped check.
     plain="$(SOPS_AGE_KEY_FILE={{quote(age_key)}} sops decrypt secrets/secrets.yaml)"
-    if printf '%s' "$plain" | grep -q REPLACE-BEFORE-INSTALL; then
+    backup_enabled="$(nix eval --raw .#nixosConfigurations.{{host}}.config.emubox.backups.enable)"
+    if ! printf '%s' "$plain" | bash scripts/emubox-install-placeholder-guard "$backup_enabled"; then
         echo "secrets/secrets.yaml still holds placeholders; run: just secrets-edit" >&2
         exit 1
     fi

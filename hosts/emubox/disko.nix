@@ -4,6 +4,7 @@
 #   @persist /persist     OS state that must survive
 #   @data    /data        the family's stuff, snapshotted, backed up
 #   @cache   /data/cache  reproducible caches, survive reboot, never backed up
+#   @snapshots /data/.snapshots root-only local recovery history of @data
 { config, ... }:
 let
   btrfsOpts = [
@@ -54,6 +55,10 @@ in
               };
               "@cache" = {
                 mountpoint = "/data/cache";
+                mountOptions = btrfsOpts;
+              };
+              "@snapshots" = {
+                mountpoint = "/data/.snapshots";
                 mountOptions = btrfsOpts;
               };
             };

@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import emubox_prepare as ep
 
-# The owned ES-DE keys in the shape the module renders them (design D6).
+# The owned ES-DE keys in the shape the module renders them.
 OWNED = {
     "UIMode": {"type": "string", "value": "kiosk"},
     "UIMode_passkey": {"type": "string", "value": "uuddlrlrba"},
@@ -1158,7 +1158,7 @@ def test_main_reports_an_unknown_format_without_a_traceback(
     assert "unknown format" in capsys.readouterr().err
 
 
-# --- The owned-values document shape (design D1) --------------------------
+# --- The owned-values document shape ---------------------------------------
 
 
 def test_main_rejects_a_top_level_value_that_is_not_an_object(
@@ -1212,7 +1212,7 @@ def test_main_rejects_retroachievements_that_is_not_an_object_or_null(
 def test_main_treats_an_absent_retroachievements_key_as_null(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # design D1: missing is equivalent to null, not an error.
+    # Missing is equivalent to null, not an error.
     monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
     values = tmp_path / "owned.json"
     values.write_text(json.dumps({"files": {}}))
@@ -1350,7 +1350,7 @@ def test_main_rejects_an_esde_key_that_is_not_a_typed_object(
     assert "Traceback" not in err
 
 
-# --- RetroAchievements: login2 and the token cache (design D2) ------------
+# --- RetroAchievements: login2 and the token cache -------------------------
 #
 # A real http.server.HTTPServer on 127.0.0.1:0 in a thread, never a
 # monkeypatched urllib, so the timeout, the POST body and the status
@@ -1782,7 +1782,7 @@ def test_resolve_token_never_leaks_the_password(
     assert "hunter2" not in capsys.readouterr().err
 
 
-# --- DuckStation's encrypted token (design D3) -----------------------------
+# --- DuckStation's encrypted token ------------------------------------------
 
 
 def _independent_duckstation_decrypt(
@@ -1790,7 +1790,7 @@ def _independent_duckstation_decrypt(
 ) -> str:
     """Decrypt a duckstation token without calling any of ep's own functions.
 
-    Re-derives the key and IV by design D3's steps directly - SHA-256 seed,
+    Re-derives the key and IV by DuckStation's own steps directly - SHA-256 seed,
     100 further rounds, key/IV split from the digest - rather than reusing
     ep._duckstation_key_iv, so a bug shared between encrypt and decrypt
     would not cancel out and hide behind a green round-trip test.
@@ -1817,7 +1817,7 @@ def test_duckstation_token_round_trips_through_an_independent_decrypt() -> None:
 
 def test_duckstation_token_matches_a_pinned_fixed_vector() -> None:
     # Computed once from the implementation, then checked step by step
-    # against design D3's description - SHA-256 seed over machine id plus
+    # against DuckStation's documented transform - SHA-256 seed over machine id plus
     # username, 100 FURTHER rounds over that seed (101 SHA-256 calls in
     # total), key = digest[0:16], IV = digest[16:32], AES-128-CBC over the
     # zero-padded token, base64 - before being pinned here. Its only job is
@@ -1929,7 +1929,7 @@ def test_duckstation_login_values_skips_login_when_machine_id_is_unreadable(
     assert "missing-machine-id" in capsys.readouterr().err
 
 
-# --- RetroAchievements: the owned-table merge (design D1, D2) -------------
+# --- RetroAchievements: the owned-table merge -------------------------------
 #
 # One function per emulator-shaped target, so each test names the target
 # the way a real one would be built rather than exercising encodings in the
@@ -3902,7 +3902,8 @@ def test_main_survives_a_credential_removal_it_cannot_write(
     # below it, outside that call's blanket guard. An OSError there - /data
     # full, remounted read-only after a power cut, a directory that cannot
     # be written - escaped as a traceback and ended the session at the
-    # greeter, which is exactly what design D2 forbids. Making the disabled
+    # greeter, which is exactly what the subsystem's contract forbids -
+    # any failure costs the achievements and nothing else. Making the disabled
     # path do removals is what made it reachable on a disabled box, the
     # configuration nearly every real box is in.
     #

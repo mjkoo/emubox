@@ -1,6 +1,6 @@
-# Design section 4: ephemeral root, persistent OS state under /persist.
+# Ephemeral root, persistent OS state under /persist.
 # User data is deliberately outside this mechanism: player's home is on
-# /data and is never wiped (design section 9, layer 1).
+# /data and is never wiped - the first layer of the saves guarantee.
 {
   config,
   lib,
@@ -170,7 +170,7 @@ in
       "/var/lib/NetworkManager"
       "/var/log"
       "/var/lib/emubox"
-      # TODO(design 12): cloudflared state, restic cache.
+      # TODO: cloudflared state, restic cache.
     ];
     files = [
       # Kept in the list so it is declared with the rest; the initrd unit

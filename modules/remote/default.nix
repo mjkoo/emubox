@@ -28,8 +28,8 @@
     };
   };
 
-  # TODO(design 12.1): services.cloudflared.tunnels.emubox with the
+  # TODO: services.cloudflared.tunnels.emubox with the
   # credentials file from secrets and ingress "emubox-ssh.<domain>".
-  # TODO(design 12.4): emubox-update, system.autoUpgrade tracking `release`
+  # TODO: emubox-update, system.autoUpgrade tracking `release`
   # (operation = "boot"), emubox-boot-ok / emubox-boot-assess, kill switch.
 }

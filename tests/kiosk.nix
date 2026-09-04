@@ -9,15 +9,13 @@
 # The two tests are complementary and both are enrolled in `nix flake check`:
 # the install test owns the boot path, this one owns the session.
 #
-# What it proves is design D5's coverage table, which is the change's single
-# enumeration of what proves each kiosk scenario. An assertion added or
-# dropped here starts as an edit there. The emulator and RetroAchievements
-# assertions appended at the end of this file are design D7's group instead -
-# the vm-test and retroachievements specs' own enumeration of what a fresh
-# box proves without hardware.
+# Each assertion in the kiosk half answers one of the kiosk spec's
+# scenarios. The emulator and RetroAchievements assertions appended at the
+# end of this file answer the vm-test and retroachievements specs instead -
+# their enumeration of what a fresh box proves without hardware.
 { self }:
 let
-  # The one test hook the session script carries (design D5). A number here,
+  # The one test hook the session script carries. A number here,
   # rendered into the node's environment and into the script's waits, so the
   # two cannot drift.
   crashWindow = 30;
@@ -30,11 +28,11 @@ let
   pkgs = self.nixosConfigurations.emubox.pkgs;
   inherit (pkgs) lib;
 
-  # The document `modules/emulators` actually ships (design D5), read from
+  # The document `modules/emulators` actually ships, read from
   # the real host config rather than this file's own node - whose
   # `emubox.kiosk.customSystems` below is `mkForce`d to a 10-line test
   # document so the kiosk subtests can prove the custom-systems mechanism
-  # against something they control (design D7). That `mkForce` is exactly
+  # against something they control. That `mkForce` is exactly
   # why nothing else in this file, or anywhere else, ever parsed the
   # shipped 218-line document - the one `modules/emulators` actually
   # contributes to a real box went unparsed by any check in this
@@ -47,7 +45,7 @@ let
   # account's credentials.
   values = import ./values.nix;
 
-  # design D7's mock RA endpoint (below): a static token and a fixed port.
+  # The mock RA endpoint's fixtures (below): a static token and a fixed port.
   # Not a secret - it is server-side data the mock always returns, never a
   # credential read from the secrets store - so it lives here rather than in
   # tests/values.nix, whose header reserves that file for actual test input
@@ -55,12 +53,12 @@ let
   mockToken = "emubox-mock-ra-token-0123456789abcdef";
   mockPort = 8080;
 
-  # The mock `login2` endpoint (design D7): a static Python HTTP server, on
+  # The mock `login2` endpoint: a static Python HTTP server, on
   # the node's own loopback interface rather than a second VM node.
   #
-  # Design D7 reads "a python HTTP server on the test network"; this project
-  # has no KVM anywhere in its own toolchain (VM tests are CI-only, per the
-  # repository's own working notes), so a second node's networking - vlans,
+  # On loopback rather than on a test network between two nodes: this
+  # project has no KVM anywhere in its own toolchain (VM tests are
+  # CI-only), so a second node's networking - vlans,
   # static addressing, NetworkManager's `unmanaged` interface list to keep it
   # off an interface this project has never exercised together before - is
   # exactly the kind of thing that would have to be debugged blind, one full
@@ -97,13 +95,12 @@ let
     http.server.HTTPServer(("127.0.0.1", ${toString mockPort}), Handler).serve_forever()
   '';
 
-  # --- Homebrew ROM fixtures (design D7; vm-test spec "Core families launch
+  # --- Homebrew ROM fixtures (vm-test spec "Core families launch
   # headless") -----------------------------------------------------------
   #
   # One freely-redistributable ROM per BIOS-free RetroArch core family,
   # fetched by URL and SRI hash as a test-only input - never part of the
-  # system closure (design's risk list: "fixtures are test-only inputs, not
-  # part of the system closure"). Every hash below was independently
+  # system closure. Every hash below was independently
   # re-verified by actually building the `fetchurl`/`fetchzip` expression
   # against the live URL, not copied from a research note on trust; two of
   # them (Virtual Boy, Genesis Plus GX) turned out to need a different hash
@@ -282,9 +279,9 @@ let
   # found the SNES entry below filed under `"mechanism"` on evidence that
   # only supports "something is wrong", not "this specific core cannot run
   # headless at all", and its own reason string already conceded the
-  # ambiguity before its `kind` did). Every family here moves to the E12
-  # hardware checklist instead (design D7: "an exempt family is a hardware
-  # checklist item, like the BIOS-dependent cores"), and every entry below
+  # ambiguity before its `kind` did). Every family here moves to the
+  # hardware bring-up checklist instead, like the BIOS-dependent cores,
+  # and every entry below
   # also carries `recheck`: honest prose, read by nobody programmatically,
   # stating what would put the family back on the headless-launch side of
   # that line. Nothing else in this repository ever revisits an exemption
@@ -407,8 +404,9 @@ let
     }
   ];
 
-  # Named BIOS-dependent core families (design's system table's "yes" BIOS
-  # rows whose assigned emulator is a RetroArch core, minus any core that
+  # Named BIOS-dependent core families (every system that requires firmware
+  # to run anything at all and whose assigned emulator is a RetroArch core,
+  # minus any core that
   # also serves a BIOS-free system and so is already reachable through a
   # `homebrewFixtures` entry above: Mesen covers both NES and FDS, Beetle
   # PCE Fast covers both PC Engine and PCE CD, Genesis Plus GX covers both
@@ -472,7 +470,7 @@ assert lib.assertMsg
 {
   name = "emubox-kiosk";
 
-  # DuckStation's token-decrypt round-trip (design D3, D7) is written from
+  # DuckStation's token-decrypt round-trip is written from
   # scratch in the test script below rather than imported from
   # emubox_prepare.py - the whole point of an independent implementation -
   # so it needs its own `cryptography` in the driver's own Python, not the
@@ -536,15 +534,15 @@ assert lib.assertMsg
       # nixpkgs' own cage test uses; both are one-line adjustments if the
       # frontend turns out to need more.
       #
-      # Bumped to 3 GB for emulators-retroachievements (design D7 explicitly
-      # allows this): the RetroArch and standalone launches appended at the
+      # Bumped to 3 GB for the emulator launches: the RetroArch and
+      # standalone launches appended at the
       # end of this test run one process at a time, after the kiosk session
       # is already up (cage + es-de stay resident throughout), so the extra
       # headroom only has to cover one emulator's peak footprint on top of
       # the session, not the sum of all of them. Chosen without a way to
       # measure on real hardware - VM tests are CI-only for this project -
       # so a generous, round bump rather than a tightly tuned one; a second
-      # node was the other option design D7 named, and was rejected because
+      # node was the other option considered, and was rejected because
       # it would double this test's boot cost in CI for every run, not just
       # the ones that touch emulators.
       virtualisation.memorySize = 3072;
@@ -581,12 +579,11 @@ assert lib.assertMsg
       # A complete es_systems.xml document, <systemList> wrapper included,
       # because the module writes the option verbatim and adds no wrapper.
       #
-      # mkForce, load-bearing since emulators-retroachievements: `modules/emulators`
-      # now contributes its own (non-empty) definition of this same option
-      # (design D5), so two plain definitions would conflict and the kiosk
+      # mkForce, load-bearing: `modules/emulators` contributes its own
+      # (non-empty) definition of this same option, so two plain definitions would conflict and the kiosk
       # check would stop evaluating. This node deliberately proves the
       # custom-systems mechanism against a document it controls, not against
-      # the shipped override list - design D7.
+      # the shipped override list.
       emubox.kiosk.customSystems = lib.mkForce ''
         <?xml version="1.0"?>
         <systemList>
@@ -602,7 +599,7 @@ assert lib.assertMsg
         </systemList>
       '';
 
-      # design D7: prepare's login2 call is pointed at the mock server
+      # Prepare's login2 call is pointed at the mock server
       # above instead of the real service, with no patching. The service
       # itself starts stopped (below) - the test script starts it only for
       # the subtests that need a reachable endpoint - so every boot and
@@ -612,7 +609,7 @@ assert lib.assertMsg
       emubox.retroachievements.apiUrl = "http://127.0.0.1:${toString mockPort}/dorequest.php";
 
       systemd.services.emubox-mock-retroachievements = {
-        description = "Mock RetroAchievements login2 endpoint for the kiosk VM test (design D7)";
+        description = "Mock RetroAchievements login2 endpoint for the kiosk VM test";
         # No `wantedBy`: this unit is never started at boot. The test script
         # starts and stops it explicitly, which is what makes "no route to
         # the endpoint" and "a reachable endpoint" both provable from the
@@ -829,8 +826,8 @@ assert lib.assertMsg
           ciphertext = base64.b64decode(ciphertext_b64)
           decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
           plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-          # DuckStation zero-pads to a 16-byte boundary rather than PKCS#7
-          # (design D3), so the padding is stripped the same way.
+          # DuckStation zero-pads to a 16-byte boundary rather than PKCS#7,
+          # so the padding is stripped the same way.
           return plaintext.rstrip(b"\x00").decode()
 
       def rerun_prepare(owned_values_path):
@@ -860,8 +857,7 @@ assert lib.assertMsg
               if rc == 0:
                   assert RA_PASSWORD not in out, f"{path} contains the RA password"
 
-      # --- emulators: the shipped custom-systems document parses (design
-      # D5) -----------------------------------------------------------------
+      # --- emulators: the shipped custom-systems document parses ------------
       #
       # No node, no boot: this runs on the driver host, before
       # `machine.wait_for_unit` below ever touches the VM, because the
@@ -958,7 +954,7 @@ assert lib.assertMsg
           # set, the declared-off hardcore default, `enabled` itself, and
           # which five emulators own a target - not every key spelling,
           # which is what test_emubox_prepare.py's own unit tests already
-          # pin per encoding (design D4: "verified at apply time").
+          # pin per encoding, verified at apply time.
           ra = owned["retroachievements"]
           assert ra is not None, owned["retroachievements"]
           assert ra["api_url"] == RA_API_URL, ra["api_url"]
@@ -1180,8 +1176,8 @@ assert lib.assertMsg
                   # declared with `keys = { }` in modules/emulators because
                   # their only content is retroachievements namespace keys
                   # (token, or enabled/hardcore/username/token) written at
-                  # runtime rather than through this static table (design
-                  # D1-D4). There is nothing this walk could check here even
+                  # runtime rather than through this static table. There
+                  # is nothing this walk could check here even
                   # if the file existed, and the matching prepare-side fix
                   # (the ini/retroarch editors now leave a file alone
                   # entirely rather than touching it for zero keys) means
@@ -1198,8 +1194,8 @@ assert lib.assertMsg
                   # `RetroAchievements.ini` has the same empty static table
                   # but is not reliably absent at this point - its
                   # enabled/hardcore keys are written unconditionally by
-                  # `apply_retroachievements` regardless of network (design
-                  # D2), unlike PCSX2's, whose only key is the token itself.
+                  # `apply_retroachievements` regardless of network, unlike
+                  # PCSX2's, whose only key is the token itself.
                   # A blanket "must be absent whenever there are no static
                   # keys" would be wrong for one of these two files, not
                   # merely early - so this walk stays silent on existence
@@ -1344,7 +1340,7 @@ assert lib.assertMsg
           for mapping in save_bind_mappings:
               machine.succeed(f"mountpoint -q {mapping['where']}")
 
-      # --- emulators/retroachievements: design D7 ---------------------------
+      # --- emulators/retroachievements: the no-hardware proofs --------------
       #
       # Everything below runs after the kiosk session mechanism above is
       # already proven, and deliberately never disturbs it: every manual
@@ -1394,8 +1390,8 @@ assert lib.assertMsg
               booleans = target["booleans"]
               # Written as declared even with no login: enabled follows the
               # namespace being non-null, hardcore follows the (default off)
-              # switch - design D2's "the enabled and hardcore keys are
-              # still written as declared".
+              # switch - the enabled and hardcore keys are still written as
+              # declared even when no login resolves.
               assert read_target_value(target, "enabled") == booleans["true"], target["name"]
               assert read_target_value(target, "hardcore") == booleans["false"], target["name"]
               # No account name or token anywhere - the exact absence, not
@@ -1440,7 +1436,7 @@ assert lib.assertMsg
                   ciphertext = read_target_value(target, "token")
                   recovered = duckstation_decrypt(machine_id, RA_USERNAME, ciphertext)
                   assert recovered == MOCK_TOKEN, (target["name"], recovered)
-                  # LoginTimestamp is change-gated (design D3): it is written
+                  # LoginTimestamp is change-gated: it is written
                   # once the token changes from absent to present, which just
                   # happened.
                   assert read_target_value(target, "login_timestamp") is not None, target["name"]
@@ -1453,9 +1449,8 @@ assert lib.assertMsg
           sweep_for_password(owned)
 
       with subtest("Both hardcore positions are reflected in every configuration"):
-          # design D7's "re-render and re-run prepare inside the test with a
-          # different owned-values document" option, chosen over a second
-          # node: `ownedValuesFile` is exactly the readOnly option the kiosk
+          # Re-rendering and re-running prepare inside the test with a
+          # different owned-values document, chosen over a second node: `ownedValuesFile` is exactly the readOnly option the kiosk
           # module exposes for this (its own description: "a test
           # interpolates one source of truth rather than scraping the
           # session script or re-rendering the JSON and agreeing with
@@ -1495,8 +1490,8 @@ assert lib.assertMsg
           # then genuinely loses both the network route and its cache, must
           # not go on serving emulator configs that still name an account -
           # `emubox-prepare` has to actively remove those keys, not merely
-          # stop refreshing them (design D2's "on network failure without
-          # one [a cache], ... drop the account-name and token keys").
+          # stop refreshing them: on network failure with no cache to fall
+          # back on, the account-name and token keys are dropped.
           #
           # Run before the emulator launches below so this subtest can
           # restore the ordinary state - route reachable, token present -
@@ -1618,7 +1613,7 @@ assert lib.assertMsg
           rerun_prepare(OWNED_VALUES)
 
       with subtest("emubox-check-bios reports the declared BIOS files as missing from an empty /data/bios"):
-          # The checker ships (design D6) but nothing ran it against the
+          # The checker ships but nothing ran it against the
           # inventory it actually reads on a real box until this subtest. This node's
           # `/data/bios` is an empty tmpfs (no disko layout here, above), so
           # every declared file is legitimately missing - proving the PATH
@@ -1638,12 +1633,12 @@ assert lib.assertMsg
           # the same as "everything is MISSING" at the exit-code level).
           assert "does not implement" not in out, out
 
-      # --- emulators: BIOS-free core families launch headless (design D7) --
+      # --- emulators: BIOS-free core families launch headless ---------------
 
       with subtest("Every BIOS-free core family with a licensed ROM runs headless"):
           # Every driver RetroArch would otherwise try to open a real device
-          # for is overridden to "null" (design D7's "video_driver
-          # overridden for the run", extended here to every driver the pinned
+          # for is overridden to "null" (video_driver overridden for the run,
+          # extended here to every driver the pinned
           # 1.22.2 source shows has one): this VM has no GPU, no input
           # devices, no audio device and no ALSA sequencer, and RetroArch's
           # own drivers/*.c confirm each has a driver literally named
@@ -1793,7 +1788,7 @@ assert lib.assertMsg
               f"{sorted(accounted - installed)}"
           )
 
-      # --- standalones: smoke launch (design D7) ----------------------------
+      # --- standalones: smoke launch ----------------------------------------
 
       # settle=5: long enough that a slow CI runner forking and execve-ing
       # a multi-hundred-megabyte Qt/SDL binary has time to get past its own

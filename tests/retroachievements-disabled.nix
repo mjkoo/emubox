@@ -8,7 +8,7 @@
 # (owned by `pkgs/emubox-prepare/`'s own suite, which only ever exercises
 # `apply_retroachievements` directly, never through this module's rendered
 # document), not the kiosk VM test (whose node leaves the option at its true
-# default throughout, per design D7). Flipping the off spelling in that one
+# default throughout). Flipping the off spelling in that one
 # helper would ship a box with achievements enabled while the option says
 # disabled, and every other check in the repository would stay green - this
 # is the one that would not.

@@ -10,7 +10,7 @@
 #   nix shell nixpkgs#mkpasswd -c mkpasswd -m yescrypt
 #
 # `raUsername`/`raPassword` are the test RetroAchievements account the kiosk
-# test's mock `login2` endpoint (design D7) is posted with `emubox-prepare`'s
+# test's mock `login2` endpoint is posted with `emubox-prepare`'s
 # real login path - never patched out. The mock does not check the password
 # against anything (it is a static responder that always succeeds), so the
 # value only has to be distinctive enough that "no config carries the

@@ -10,7 +10,7 @@ in
     ''SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_JOYSTICK}=="1", ENV{ID_PATH}=="${path}", SYMLINK+="input/emubox-p${toString i}"''
   ) ports;
 
-  # TODO(design 10): export SDL_JOYSTICK_DEVICE in the session, hotkeys,
+  # TODO: export SDL_JOYSTICK_DEVICE in the session, hotkeys,
   # the "Pair a controller" discoverable window.
   hardware.xpadneo.enable = true;
   hardware.bluetooth.settings.General = {

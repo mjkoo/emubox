@@ -16,8 +16,7 @@ let
   #
   # This module contributes only its own file, `settings/es_settings.xml`,
   # to `emubox.kiosk.ownedFiles` below; `modules/emulators` contributes every
-  # emulator's config file to the same option (design D4,
-  # emulators-retroachievements). The two merge through the module system's
+  # emulator's config file to the same option. The two merge through the module system's
   # ordinary attrset merging, which is why the option's type has to be one
   # that merges rather than a plain let-bound value.
   esdeString = value: {
@@ -28,8 +27,8 @@ let
   # The empty string, not a store path to an empty file: the empty value
   # itself is what selects prepare's removal branch, so writing an empty
   # document to the store and passing its path would leave that branch
-  # unreachable for every configuration, whatever `customSystems` held
-  # (design D6). Not "unreachable on the box as shipped" - the shipped box
+  # unreachable for every configuration, whatever `customSystems` held.
+  # Not "unreachable on the box as shipped" - the shipped box
   # takes the other branch, since `modules/emulators` sets `customSystems`
   # to a real document. The removal branch is what a box whose
   # configuration drops back to the empty default relies on, and it is the
@@ -38,7 +37,7 @@ let
     if cfg.customSystems == "" then "" else pkgs.writeText "emubox-es_systems.xml" cfg.customSystems;
 
   # The session loop. Runs as `player`; relaunches ES-DE if it exits, and
-  # gives up at the greeter if it cannot keep it up (design D1).
+  # gives up at the greeter if it cannot keep it up.
   #
   # ESDE_APPDATA_DIR is exported once, above the loop, rather than prefixed
   # onto any single command: prepare and the frontend must read the same
@@ -62,8 +61,8 @@ let
       # HELPER_AUTH_ERROR and then never starts one at all (the threshold
       # comment below carries the mechanism). That applies to the deliberate
       # give-up *and* to an unexpected failure under `set -e`: a bug here, or
-      # the non-zero `emubox-prepare` that design D1 says should "stop at a
-      # greeter the admin can log into", would otherwise leave the box on a
+      # the non-zero `emubox-prepare` whose broken-call-site policy is to stop
+      # at a greeter the admin can log into, would otherwise leave the box on a
       # black screen with no way in - the opposite of what it promises. The
       # real status is logged before it is swallowed, so the journal keeps it.
       # A named function rather than the assignment inline in the trap
@@ -104,7 +103,7 @@ let
 
       while true; do
         mode=$(cat /run/emubox/mode 2>/dev/null || echo kiosk)
-        # TODO(design 11, open question 1): desktop mode hands over to Plasma.
+        # TODO: desktop mode hands over to Plasma.
         if [ "$mode" = desktop ]; then
           exec startplasma-wayland
         fi
@@ -118,13 +117,12 @@ let
         # the `OSError` guards around its editor loop and the custom-systems
         # install). An unwritable /data therefore does NOT end up here; it
         # ends up in the journal with the frontend still launching, which is
-        # deliberate (design D2: the alternative is a family staring at a
-        # greeter). What is left to reach this line is the broken-call-site
+        # deliberate (the alternative is a family staring at a greeter). What is left to reach this line is the broken-call-site
         # class prepare refuses to paper over - an owned-values document
         # that is unreadable or the wrong shape, an unset ESDE_APPDATA_DIR,
         # an unreadable custom-systems store path - and for those the
-        # greeter an admin can log into is the right destination (design
-        # D1), because no relaunch of the same call would do any better.
+        # greeter an admin can log into is the right destination, because no
+        # relaunch of the same call would do any better.
         emubox-prepare ${cfg.ownedValuesFile} "${customSystemsPath}"
 
         # The loop needs the run's length, not its status, but the status is
@@ -134,7 +132,7 @@ let
         rc=0
         cage -- es-de || rc=$?
         ran=$(( SECONDS - started ))
-        # TODO(design 9): emubox-leakcheck
+        # TODO: emubox-leakcheck after each session.
 
         if [ "$ran" -lt "$window" ]; then
           crashes=$(( crashes + 1 ))
@@ -254,7 +252,7 @@ in
         is used as written - the same convention `emubox-prepare` uses
         throughout). `modules/kiosk` and `modules/emulators` each add their
         own entries here; the attrset merge across modules is the whole
-        mechanism (design D4, emulators-retroachievements) - no module
+        mechanism - no module
         reads another's entries, they just both write into this one option.
       '';
     };
@@ -282,7 +280,7 @@ in
           options = {
             api_url = lib.mkOption {
               type = lib.types.str;
-              description = "The RetroAchievements API endpoint prepare posts its `login2` request to (design D2).";
+              description = "The RetroAchievements API endpoint prepare posts its `login2` request to.";
             };
             username_file = lib.mkOption {
               type = lib.types.str;
@@ -294,7 +292,7 @@ in
             };
             cache_file = lib.mkOption {
               type = lib.types.str;
-              description = "Where prepare caches the last resolved login token (design D2), relative to the appdata root.";
+              description = "Where prepare caches the last resolved login token, relative to the appdata root.";
             };
             enabled = lib.mkOption {
               type = lib.types.bool;
@@ -312,7 +310,7 @@ in
             };
             hardcore = lib.mkOption {
               type = lib.types.bool;
-              description = "The single hardcore switch every target's own hardcore key follows (design D4).";
+              description = "The single hardcore switch every target's own hardcore key follows.";
             };
             targets = lib.mkOption {
               type = lib.types.listOf (
@@ -320,7 +318,7 @@ in
                   options = {
                     name = lib.mkOption {
                       type = lib.types.str;
-                      description = "The supporting emulator this target writes into (design D1).";
+                      description = "The supporting emulator this target writes into.";
                     };
                     encoding = lib.mkOption {
                       type = lib.types.enum [
@@ -328,7 +326,7 @@ in
                         "duckstation"
                         "secret-file"
                       ];
-                      description = "Which at-rest form this target's token takes - design D4's three encodings.";
+                      description = "Which at-rest form this target's token takes.";
                     };
                     booleans = lib.mkOption {
                       type = lib.types.submodule {
@@ -343,7 +341,7 @@ in
                           };
                         };
                       };
-                      description = "This target's own true/false spelling - not every supporting emulator agrees (design D4).";
+                      description = "This target's own true/false spelling - not every supporting emulator agrees.";
                     };
                     keys = lib.mkOption {
                       type = lib.types.attrsOf lib.types.anything;
@@ -358,12 +356,12 @@ in
                     machine_id_file = lib.mkOption {
                       type = lib.types.nullOr lib.types.str;
                       default = null;
-                      description = "The duckstation encoding's machine-id source path (design D3); unset for every other encoding.";
+                      description = "The duckstation encoding's machine-id source path; unset for every other encoding.";
                     };
                   };
                 }
               );
-              description = "One entry per RetroAchievements-supporting emulator (design D1).";
+              description = "One entry per RetroAchievements-supporting emulator.";
             };
           };
         }
@@ -371,8 +369,8 @@ in
       default = null;
       internal = true;
       description = ''
-        The owned-values document's `retroachievements` namespace (design
-        D1, emulators-retroachievements). This module never sets it;
+        The owned-values document's `retroachievements` namespace. This
+        module never sets it;
         `modules/emulators` does, always to a non-null value with its own
         `enabled` field following `emubox.retroachievements.enable` -
         `null` here would make `emubox-prepare` skip the whole
@@ -450,7 +448,7 @@ in
 
     # A real `player` group: the /data layout (modules/library) is owned
     # `player player` with setgid on roms/ and bios/, so that admin's ingest
-    # over the admin link lands group-owned (design 8). isNormalUser alone
+    # over the admin link lands group-owned. isNormalUser alone
     # would put the user in `users` and leave the tmpfiles rules unresolvable
     # (the first booted CI run: "Failed to resolve group 'player'").
     users.groups.player = { };
@@ -477,7 +475,7 @@ in
         # the session gives up after three crashes, "the script exits" and
         # "the greeter appears" are then the same event. With relogin = true
         # SDDM would log `player` straight back in and the greeter could
-        # never be reached from a crash loop (design D1). A reboot restores
+        # never be reached from a crash loop. A reboot restores
         # automatic login. The option is SDDM's own, not the generic
         # displayManager.autoLogin, which has no relogin.
         autoLogin.relogin = false;
@@ -507,8 +505,7 @@ in
       pkgs.cage
       pkgs.es-de
       # On the system path, not only inside the session script, so that the
-      # test driver and an admin who reached the greeter can run it too
-      # (design D3's invocation contract).
+      # test driver and an admin who reached the greeter can run it too.
       pkgs.emubox-prepare
     ];
   };

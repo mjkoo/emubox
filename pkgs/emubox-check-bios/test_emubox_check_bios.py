@@ -84,8 +84,7 @@ def test_md5_entry_present_and_matching_exits_zero(
 ) -> None:
     # The realistic case: every real entry this module ships is md5, sourced
     # from DuckStation's own bios.cpp or docs.libretro.com's published
-    # per-core BIOS tables, since nobody publishes sha256 for these files
-    # (design D6).
+    # per-core BIOS tables, since nobody publishes sha256 for these files.
     bios_dir = tmp_path / "bios"
     bios_dir.mkdir()
     (bios_dir / "console.bin").write_bytes(CORRECT_BYTES)

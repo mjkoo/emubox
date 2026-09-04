@@ -10,14 +10,14 @@
 #    against that emulator's source at the pinned revision, bound exactly
 #    once so no two call sites can drift apart; the RetroArch build and the
 #    cores directory that follows from it.
-# 2. Frontend overrides (design D5). Every system whose assigned emulator
+# 2. Frontend overrides. Every system whose assigned emulator
 #    differs from ES-DE's bundled default, copied verbatim from the pinned
 #    upstream `es_systems.xml` with only the command order rewritten, and
 #    contributed to `emubox.kiosk.customSystems`.
-# 3. BIOS inventory (design D6). One entry per firmware-required system
+# 3. BIOS inventory. One entry per firmware-required system
 #    that has a citable published checksum, rendered to
 #    `/etc/emubox/bios-inventory.json` for `emubox-check-bios`.
-# 4. RetroAchievements tables (design D1-D4). `raEmulators` names, per
+# 4. RetroAchievements tables. `raEmulators` names, per
 #    emulator, where each credential and switch lives; `raDisabledFiles`
 #    is the static half of the disabled path.
 # 5. `config`. The packages, the owned-values tables that
@@ -83,15 +83,16 @@ let
   # `IsRunningInPortableMode()` check (`AppRoot == DataRoot`) sees its
   # read-only Nix store extraction as `AppRoot` and this home-relative path
   # as `DataRoot` - they differ, so portable mode is off and the machine-id
-  # key stays in the token derivation, exactly as design D3 assumes. A
+  # key stays in the token derivation, exactly as the encryption scheme
+  # below assumes. A
   # future DuckStation bump could change this wrapper's behaviour; if it
   # ever starts setting `APPIMAGE`, or nixpkgs switches this package off
   # `wrapType2`, this verdict needs rechecking before the bump lands.
   duckstationConfigFile = "${playerHome}/.local/share/duckstation/settings.ini";
   scummvmConfigFile = "${playerHome}/.config/scummvm/scummvm.ini";
 
-  # DuckStation's token encryption keys off the raw bytes of this file
-  # (design D3); it is not under the appdata root because E1 already keeps
+  # DuckStation's token encryption keys off the raw bytes of this file;
+  # it is not under the appdata root because the base system already keeps
   # it stable across the root wipe on its own, so a second copy here would
   # just be another place for the same fact to drift.
   machineIdFile = "/etc/machine-id";
@@ -153,7 +154,7 @@ let
   coresDirectory = "${retroarchWithCores}/lib/retroarch/cores";
 
   # ---------------------------------------------------------------------
-  # Frontend overrides (design D5): every system whose assigned emulator
+  # Frontend overrides: every system whose assigned emulator
   # differs from ES-DE 3.4.1's bundled default, contributed to
   # `emubox.kiosk.customSystems`.
   #
@@ -508,10 +509,10 @@ let
   '';
 
   # ---------------------------------------------------------------------
-  # BIOS inventory (design D6): path under /data/bios, a digest with the
-  # algorithm that produced it, and a human name, for every system the
-  # design's system table marks "yes" (firmware required to run anything at
-  # all) where a citable checksum exists at all.
+  # BIOS inventory: path under /data/bios, a digest with the
+  # algorithm that produced it, and a human name, for every system that
+  # requires firmware to run anything at all and has a citable checksum
+  # at all.
   #
   # D6's first draft fixed the digest field at sha256; corrected because
   # nobody publishes a sha256 for any of these files, which would have kept
@@ -650,9 +651,9 @@ let
   };
   biosInventoryFile = pkgs.writeText "emubox-bios-inventory.json" (builtins.toJSON biosInventory);
 
-  # RetroAchievements' per-emulator tables (design D1-D4). One attrset per
+  # RetroAchievements' per-emulator tables. One attrset per
   # supporting emulator, each shaped exactly as `emubox-prepare`'s
-  # `retroachievements.targets[]` entries (design D1) minus the `name`
+  # `retroachievements.targets[]` entries minus the `name`
   # field, which `retroachievementsNamespace` below adds when it renders
   # the enabled JSON. The same attrset also drives the disabled fallback in
   # `raDisabledFiles`, which is what keeps every key spelling here typed
@@ -805,7 +806,7 @@ let
     # The one target `emubox-prepare` cannot write as a plain string:
     # DuckStation's `Cheevos.Token` holds the login2 token AES-128-CBC
     # encrypted with a key and IV both derived from `/etc/machine-id` and
-    # the account name (src/core/achievements.cpp, design D3), which is
+    # the account name (src/core/achievements.cpp), which is
     # what `encoding = "duckstation"` and `machine_id_file` exist for.
     # `ChallengeMode`, not `HardcoreMode`, mirrors PCSX2's same
     # field-vs-ini-key split (settings.cpp:530,881).
@@ -918,23 +919,23 @@ in
 
     apiUrl = lib.mkOption {
       # Constrained to a URL with a scheme, not a bare `str`: prepare hands
-      # this value straight to `urllib.request.urlopen` (design D2), which
+      # this value straight to `urllib.request.urlopen`, which
       # raises `ValueError: unknown url type` on a schemeless host - a
       # hard, unrecoverable prepare failure that strands the box at the
-      # greeter (design D1's "a bug in prepare... should stop at a greeter
-      # the admin can log into", not the fresh-box, working-network path
+      # greeter (a bug in prepare should stop at a greeter the admin can log
+      # into - not the fresh-box, working-network path
       # the retroachievements spec promises to leave achievements-only
       # broken) - and, unconstrained, would also accept `file://`, which
       # `urlopen` follows just as readily as `http(s)://`.
       #
       # `http://` is still accepted, not narrowed to `https://` only,
-      # because design D7's VM test points prepare at a plain `python
+      # because the VM test points prepare at a plain `python
       # http.server` mock with no TLS - the one place this box is ever
       # meant to run the login over an unencrypted connection, and the
       # documented exception the URL-scheme constraint below was written
       # to allow. An admin who points this at a real `http://` endpoint gets
       # the account password crossing the network in clear text on every
-      # prepare run (design D2's `login2` POST carries it) - the
+      # prepare run (the `login2` POST carries it) - the
       # description below says so, since the type alone cannot forbid a
       # legitimately reachable but insecure host.
       type = lib.types.strMatching "https?://.*";
@@ -942,7 +943,7 @@ in
       description = ''
         The RetroAchievements API endpoint `emubox-prepare` posts its
         `login2` request to. An option rather than a literal buried in
-        this module, because design D2 has the VM test point prepare at a
+        this module, because the VM test points prepare at a
         mock server here instead of patching the module to do it. Must
         start with `http://` or `https://`; an `http://` endpoint carries
         the RetroAchievements account password across the network in
@@ -961,8 +962,8 @@ in
       pkgs.azahar
       pkgs.scummvm
       pkgs.duckstation
-      # For the admin over SSH (design D6); `emubox-status` (E5+) is the
-      # only other consumer this design names, and it is not built yet.
+      # For the admin over SSH; the planned `emubox-status` is the only
+      # other consumer of this inventory, and it is not built yet.
       pkgs.emubox-check-bios
     ];
 
@@ -970,12 +971,11 @@ in
     # admin who has to look up a nix store hash before they can run the
     # checker is exactly the manual step this project avoids everywhere
     # else. `emubox-check-bios /etc/emubox/bios-inventory.json /data/bios`
-    # is the whole admin-facing command (design D6, "no options, no
-    # writes" - and this file itself is one of `environment.etc`'s writes,
+    # is the whole admin-facing command (no options, no writes - and this file itself is one of `environment.etc`'s writes,
     # not the checker's).
     environment.etc."emubox/bios-inventory.json".source = biosInventoryFile;
 
-    # The performance and hotkey tables (design D4) always apply; the
+    # The performance and hotkey tables always apply; the
     # `enabled`/`hardcore` RetroAchievements keys only get folded in
     # statically here, and only when the feature is off (`raDisabledFiles`)
     # - when it is on, prepare's own `apply_retroachievements` writes them
@@ -1009,11 +1009,11 @@ in
           # shortcut.
           menu_show_online_updater = "false";
           menu_show_core_updater = "false";
-          # The uniform hotkey set (design's open question, settled here).
+          # The uniform hotkey set, uniform across every emulator on purpose.
           # These are *keyboard* key-name strings - RetroArch's separate
           # per-pad `_btn` keys are written by autoconfig per controller,
-          # which is epic E6's territory, not this change's, so none
-          # appears here on purpose.
+          # which is controller work still to come, so none appears here
+          # on purpose.
           input_menu_toggle = "f1";
           input_save_state = "f2";
           input_load_state = "f4";
@@ -1298,7 +1298,7 @@ in
             # 320x240 (up to 512x480 in hi-res modes), and 4x lands around
             # 1280x960-2048x1920 - close to 1080p without wildly
             # overshooting it. Config data, not a source-verified fact;
-            # revisit at the E12 hardware checklist if it disappoints.
+            # revisit at the hardware bring-up checklist if it disappoints.
             ResolutionScale = "4";
           };
           # BIOS.SearchDirectory: stenzek/duckstation src/core/settings.cpp
@@ -1354,7 +1354,7 @@ in
       };
     } (lib.optionalAttrs (!cfg.enable) raDisabledFiles);
 
-    # design D5. `modules/kiosk` defines the option itself and owns its
+    # `modules/kiosk` defines the option itself and owns its
     # empty-means-no-file semantics; this is the one place that ever sets
     # it to a non-empty value on the shipped box.
     emubox.kiosk.customSystems = customSystems;
@@ -1374,10 +1374,9 @@ in
       api_url = cfg.apiUrl;
       username_file = config.sops.secrets.retroachievements_username.path;
       password_file = config.sops.secrets.retroachievements_password.path;
-      # Relative, so it resolves under the appdata root (design D2: the
-      # root wipe must not be able to eat it) rather than under `/data`
-      # generally, which E5's backup design has not yet settled the
-      # inclusion of.
+      # Relative, so it resolves under the appdata root (the root wipe must
+      # not be able to eat it) rather than under `/data` generally, whose
+      # backup inclusion is not yet settled.
       cache_file = "retroachievements/token-cache";
       inherit (cfg) hardcore;
       enabled = cfg.enable;

@@ -1,6 +1,6 @@
 # emubox-prepare: the config editor the kiosk session runs before every
 # launch of the frontend. It asserts the settings the flake owns and leaves
-# every other key as the frontend last wrote it (design D3).
+# every other key as the frontend last wrote it.
 #
 # Not a vendored package: this is a program of the project's own, built by
 # the flake like any other package it provides. A handful of Python files
@@ -36,7 +36,7 @@ stdenvNoCC.mkDerivation {
   version = "0.1.0";
 
   # By extension rather than by name: `ty.toml` exists only if a ty release
-  # needs per-rule downgrades (design Risks), and a fileset naming a file
+  # needs per-rule downgrades, and a fileset naming a file
   # that is not there fails evaluation.
   src = lib.fileset.toSource {
     root = ./.;

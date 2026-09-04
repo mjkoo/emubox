@@ -168,7 +168,7 @@ let
   saveBindMappingsJson = builtins.toJSON saveBindMappings;
 in
 {
-  # Test secrets (design D7): the committed test host key decrypts
+  # Test secrets: the committed test host key decrypts
   # secrets/test.yaml, which holds the values from values.nix. Both mkForce,
   # because modules/secrets defines the same options for the box and a plain
   # definition would conflict or merge the real key path back in.
@@ -509,7 +509,7 @@ in
         # back, exercising the double rather than this project. The bytes
         # asserted above already prove the source snapshot, not the live file,
         # is what reached restic. Verified restore is proven where it is real,
-        # against B2, in the E12 rollout checklist.
+        # against B2, in the hardware bring-up checklist.
 
     with checked("Runtime symlink aliases fail before restic sees backup inputs"):
         for alias, target in [

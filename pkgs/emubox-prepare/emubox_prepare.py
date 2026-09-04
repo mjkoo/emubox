@@ -99,8 +99,9 @@ The three editors, and what each is built on:
   emulators' parsers read, stated once in the per-line classifier. A file
   may lead with a UTF-8 byte order mark - PPSSPP's own writer puts one
   there on every save - and exactly one, at the very start of the file, is
-  set aside before any line is classified and written back first on any
-  write; a file holding only the mark is an empty file. A U+FEFF anywhere
+  set aside before any line is classified and written back first whenever
+  the loaded document is written; a recreated file carries no mark, and a
+  file holding only the mark is an empty file. A U+FEFF anywhere
   else gets no special treatment: it is content like any other codepoint,
   and the line carrying it keeps whatever behavior these rules already
   give it.
@@ -434,7 +435,7 @@ def _holds_something(path: Path) -> bool:
     text = _read_quietly(path)
     if text is None:
         return True
-    return bool(text.removeprefix("\ufeff"))
+    return bool(text.removeprefix(_BOM))
 
 
 # --- ES-DE settings XML ---------------------------------------------------
@@ -558,6 +559,13 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
 # it would destroy the unowned line and the owned key together. There is no
 # index arithmetic anywhere: an edit replaces a node, sections own their
 # children, and deletion invalidates nothing.
+
+# The one leading byte order mark a flat file may carry (module docstring).
+# Every site that judges a flat file's emptiness or leading content - the
+# set-aside in `_parse_flat`, the re-emission in `_render_flat`, the probe
+# in `set_ini_settings`, and `_holds_something` - has to agree on exactly
+# one, leading, and this constant is what keeps them agreeing.
+_BOM = "\ufeff"
 
 
 @dataclass
@@ -752,8 +760,8 @@ def _parse_flat(text: str, *, ini: bool) -> Document:
     file, a second mark leads the residual's first line and that line's
     shape decides, and a mark anywhere later is ordinary content.
     """
-    bom = text.startswith("\ufeff")
-    text = text.removeprefix("\ufeff")
+    bom = text.startswith(_BOM)
+    text = text.removeprefix(_BOM)
     if ini and not text.strip():
         raise _Unparseable(None)
     lines = text.split("\n")
@@ -807,7 +815,7 @@ def _render_flat(document: Document) -> str:
                     f"assignment is not one line: {child.raw!r}"
                 )
             parts.append(child.raw)
-    mark = "\ufeff" if document.bom else ""
+    mark = _BOM if document.bom else ""
     return mark + "".join(part + "\n" for part in parts)
 
 
@@ -1060,7 +1068,7 @@ def set_ini_settings(
         # the parser applies: a mark-only file is an empty file, and the
         # note has to fire for it too.
         probe = _read_quietly(path)
-        if probe is not None and not probe.removeprefix("\ufeff").strip():
+        if probe is not None and not probe.removeprefix(_BOM).strip():
             note(f"{path} is empty; recreating it")
         recreated = Document(
             sections=[SectionNode(raw_header=None, name=None, children=[])]

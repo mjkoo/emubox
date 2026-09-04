@@ -761,16 +761,17 @@ def test_retroarch_reads_a_marked_file_and_keeps_the_mark_leading(
 
     assert ep.set_retroarch_settings(path, RA_OWNED) is True
 
-    lines = path.read_text().removeprefix(BOM).splitlines()
+    text = path.read_text()
+    lines = text.removeprefix(BOM).splitlines()
     assert lines[0] == 'menu_driver = "ozone"'
     assert lines[1] == 'input_driver = "sdl"'
     assert path.read_bytes().startswith(BOM_BYTES)
-    assert BOM not in path.read_text().removeprefix(BOM)
+    assert BOM not in text.removeprefix(BOM)
     assert capsys.readouterr().err == ""
 
 
 def test_retroarch_marked_settled_file_reports_no_write_twice(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # The sectionless half of the settled-file promise: once the marked file
     # carries every owned value, the mark alone must never make the next
@@ -786,6 +787,7 @@ def test_retroarch_marked_settled_file_reports_no_write_twice(
 
     assert unwritten(path)
     assert path.read_bytes().startswith(BOM_BYTES)
+    assert capsys.readouterr().err == ""
 
 
 def test_ini_recreates_a_file_with_a_mark_before_a_mid_file_header(
@@ -884,6 +886,40 @@ def test_ini_a_mark_only_file_owning_only_removals_is_left_unwritten(
     assert capsys.readouterr().err == ""
 
 
+def test_ini_a_removal_only_write_keeps_the_mark_and_settles(
+    tmp_path: Path,
+) -> None:
+    # The mark survives a write whose only edit is a removal, and the swept
+    # file then settles.
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{BOM}[Achievements]\nKeepMe = yes\nToken = LIVE\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    text = path.read_text()
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert "KeepMe = yes" in text
+    assert "Token" not in text
+
+    freeze(path)
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+    assert unwritten(path)
+
+
+def test_ini_a_marked_unparseable_file_still_recreates_on_the_all_removals_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The mark set-aside must not let a mark-plus-junk file slip past the
+    # recreation that removes a live token.
+    path = tmp_path / "secrets.ini"
+    path.write_text(f"{BOM}[Achievements]\nTok\nToken = LIVE\n")
+
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+
+    assert "LIVE" not in path.read_text()
+    assert "not a setting" in capsys.readouterr().err
+
+
 def test_retroarch_a_mark_only_file_gains_the_owned_keys_after_the_mark(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -901,6 +937,29 @@ def test_retroarch_a_mark_only_file_gains_the_owned_keys_after_the_mark(
     assert 'menu_driver = "ozone"' in text
     assert 'video_fullscreen = "true"' in text
     assert capsys.readouterr().err == ""
+
+    freeze(path)
+    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert unwritten(path)
+
+
+def test_retroarch_migrates_a_file_a_glued_key_reader_left_duplicated(
+    tmp_path: Path,
+) -> None:
+    # A reader that once glued the mark into the first key left files shaped
+    # like this: the owned key below was appended as a duplicate rather than
+    # edited in place, since the glued name never matched. Real boxes hold
+    # that shape now. It is deduplicated to the flake's value with the mark
+    # intact, then settles.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(f'{BOM}menu_driver = "rgui"\nmenu_driver = "ozone"\n')
+
+    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+
+    text = path.read_text()
+    assert path.read_bytes().startswith(BOM_BYTES)
+    assert text.count("menu_driver") == 1
+    assert 'menu_driver = "ozone"' in text
 
     freeze(path)
     assert ep.set_retroarch_settings(path, RA_OWNED) is False
@@ -944,13 +1003,7 @@ def test_a_marked_ppsspp_file_is_edited_not_recreated(
 
     text = path.read_text()
     assert path.read_bytes().startswith(BOM_BYTES)
-    assert "FirstRun = False" in text
-    assert "CheckForNewVersion = True" in text
-    assert "CPUCore = 1" in text
-    assert "InternalResolution = 2" in text
-    assert "Enable = True" in text
-    assert "FullScreen = True" in text
-    assert "FullScreen = False" not in text
+    assert text == ppsspp_file("True")
     assert capsys.readouterr().err == ""
 
 

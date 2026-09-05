@@ -25,10 +25,26 @@
 
   nodes.machine =
     { pkgs, ... }:
+    let
+      # bluez's own controller emulator. nixpkgs does not build it: there is no
+      # --enable-testing in the configure flags, and the postInstall only sweeps
+      # tools/, while btvirt lives in emulator/. This override is the whole
+      # question - if btvirt drives a vhci controller that bluez adopts, the
+      # fixture is upstream's code rather than ours.
+      bluezWithEmulator = pkgs.bluez.overrideAttrs (old: {
+        configureFlags = (old.configureFlags or [ ]) ++ [ "--enable-testing" ];
+        postInstall = (old.postInstall or "") + ''
+          for f in emulator/btvirt emulator/b1ee emulator/hfp; do
+            [ -x "$f" ] && install -Dm755 "$f" "$out/bin/$(basename $f)" || true
+          done
+        '';
+      });
+    in
     {
       hardware.bluetooth.enable = true;
       environment.systemPackages = [
         pkgs.bluez
+        bluezWithEmulator
         pkgs.kmod
         pkgs.python3
       ];
@@ -80,6 +96,26 @@
     probe("pairable off", "bluetoothctl pairable off")
     probe("show after pairable off", "bluetoothctl show")
     probe("scan on", "bluetoothctl --timeout 5 scan on", 25)
+    probe("show after scan", "bluetoothctl show")
+
+    print("=========== Q2: does upstream's own emulator work? ===========")
+    probe("btvirt present", "command -v btvirt && btvirt --help 2>&1 | head -20")
+    machine.execute("systemctl stop vhci-hold.service")
+    machine.sleep(2)
+    probe("devices after stopping holder", "ls -1 /sys/class/bluetooth/ 2>&1")
+    machine.succeed("systemd-run --unit=btvirt --collect btvirt -l")
+    machine.sleep(6)
+    probe("btvirt unit", "systemctl is-active btvirt.service")
+    probe("btvirt log", "journalctl -u btvirt --no-pager -n 20")
+    probe("devices with btvirt", "ls -1 /sys/class/bluetooth/ 2>&1")
+    probe("hciconfig with btvirt", "hciconfig -a")
+    probe("bluetoothctl list with btvirt", "bluetoothctl list")
+    probe("bluetoothctl show with btvirt", "bluetoothctl show")
+    probe("power on with btvirt", "bluetoothctl power on")
+    probe("show after power on", "bluetoothctl show")
+    probe("pairable off with btvirt", "bluetoothctl pairable off")
+    probe("show after pairable off", "bluetoothctl show")
+    probe("scan on with btvirt", "bluetoothctl --timeout 5 scan on", 25)
     probe("show after scan", "bluetoothctl show")
 
     print("=========== probe complete ===========")

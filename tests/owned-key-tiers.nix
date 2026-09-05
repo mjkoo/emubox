@@ -6,8 +6,11 @@
 # than through a shallower one that would pass whether or not the assertion
 # exists.
 #
-# The three candidates are independent - each trips exactly one of the three
-# assertions in modules/kiosk/default.nix, not any of the others - because
+# The three candidates are independent. The first two both trip the
+# `ownedFileTierOverlaps` assertion, but through its two different shape
+# branches: a flat file's bare key name, and a sectioned file's section and
+# key. The third trips `raTargetSeedOverlaps`, the separate assertion beside
+# it, and trips only that one - because
 # `emubox.retroachievements.enable` defaults to true on the host these tests
 # extend. `modules/emulators/default.nix`'s `raDisabledFiles` - which is what
 # forces a target's `enabled`/`hardcore` keys into that file's own `enforce`

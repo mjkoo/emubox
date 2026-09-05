@@ -753,6 +753,31 @@ assert lib.assertMsg
                   return v.strip()
           return None
 
+      def retroarch_all_values(text, key):
+          """Every assignment of `key` in a RetroArch-format file, in file
+          order - not merely the first, the way `ini_value` above
+          deliberately returns. `config_save_on_exit` (default on) rewrites
+          `retroarch.cfg` from RetroArch's own effective settings at exit,
+          which is what makes a read after a launch an observable of the
+          settings that launch actually used - but nothing here has
+          independently confirmed that rewrite can never leave a stale
+          assignment sitting alongside the new one, so a caller checking
+          what a launch actually applied needs the full list rather than a
+          single value that might be the wrong one of several: a stale
+          first line could otherwise satisfy a naive check while the
+          effective value sits further down. Quoted the same way
+          `owned_file_value` already unwraps a `retroarch`-format value.
+          """
+          values = []
+          for line in text.splitlines():
+              stripped = line.strip()
+              if "=" not in stripped:
+                  continue
+              k, _, v = stripped.partition("=")
+              if k.strip() == key:
+                  values.append(v.strip().strip('"'))
+          return values
+
       def resolve(root, value):
           """A path from the retroachievements namespace, root-relative or
           absolute - the same convention emubox_prepare.py's `_resolve_path`
@@ -1335,6 +1360,43 @@ assert lib.assertMsg
           # cannot be player's at the same time.
           assert not session_on_seat("player")
 
+      with subtest("A seeded setting edited while the frontend is stopped survives the next boot"):
+          # Run here, not inside the reboot subtest below: the session is at
+          # the greeter and no es-de process exists at this point (the
+          # crash-loop subtest above just finished proving exactly that), so
+          # this is the one place in the file where editing the settings
+          # file cannot race the frontend's own writer. ApplicationLanguage
+          # is seeded rather than enforced, so `emubox-prepare` only ever
+          # writes it once, if absent - a player's own later choice is
+          # never corrected. Proving that survives a boot needs a value the
+          # frontend genuinely keeps rather than one it would silently
+          # replace on its own next start, which is exactly what makes the
+          # value chosen here load-bearing: en_GB is one of the locales
+          # ES-DE 3.4.1 actually bundles (share/es-de/resources/locale), so
+          # ES-DE accepts it as a real selection rather than falling back to
+          # its own default the way an unrecognised locale would.
+          assert not esde_pids(), "the frontend must be stopped before this edit"
+
+          # The line is matched by the `name` attribute alone, not a fixed
+          # attribute order: ES-DE's own writer, not this project's code,
+          # decides where `value` sits relative to `name` on the line, and a
+          # pattern anchored to a specific order would be betting on that
+          # incidentally rather than on anything this test controls.
+          edit = (
+              "sed -i '/name=\"ApplicationLanguage\"/"
+              "s/value=\"en_US\"/value=\"en_GB\"/' " + SETTINGS
+          )
+          # As `player`, not through the driver's own root `machine.succeed`:
+          # ES-DE and emubox-prepare both run as `player`, and a root-owned
+          # settings file here would break the frontend's own writes for
+          # the rest of the run - the same ownership hazard the
+          # append-config precedence bake below (the headless RetroArch
+          # launches) exists to avoid for retroarch.cfg.
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(edit)}")
+
+          before = settings_elements()
+          assert before.get("ApplicationLanguage") == ("string", "en_GB"), before.get("ApplicationLanguage")
+
       with subtest("A reboot from the greeter restores the kiosk"):
           # Last, so that the reboot is genuinely from the greeter and this
           # proves that ending there does not outlive the boot.
@@ -1350,6 +1412,17 @@ assert lib.assertMsg
           machine.wait_for_unit("display-manager.service")
           retry(lambda _: session_on_seat("player"), timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)
+
+          # The subtest above changed ApplicationLanguage while the frontend
+          # was stopped and already confirmed the edit itself took; this
+          # reads the same key back now that ES-DE has started fresh from
+          # the reboot. Splitting the read across the two subtests, rather
+          # than asserting only here, is what lets a failure at this
+          # specific line mean "the frontend reverted the value on
+          # startup" - a failure in "the edit did not take" would already
+          # have shown up in the subtest above instead.
+          after = settings_elements()
+          assert after.get("ApplicationLanguage") == ("string", "en_GB"), after.get("ApplicationLanguage")
 
           # Every route's fixture was written through the emulator's own save
           # path before the reboot; each must still read back from beneath
@@ -1658,6 +1731,44 @@ assert lib.assertMsg
 
       # --- emulators: BIOS-free core families launch headless ---------------
 
+      def retroarch_appendconfig_path():
+          """The flake's own launch-time append-config file, recovered from
+          the RetroArch binary the node actually runs rather than
+          re-rendered from `modules/emulators`'s settings attrset - a copy
+          built here from that same attrset would land on the same store
+          path whenever the rendering agrees with itself, which would only
+          prove the module agrees with itself, never that the wrapper the
+          node actually installs still passes this exact file.
+
+          The distinct-path rule mirrors tests/retroarch-settings.nix's own
+          builder-side check against the identical binary: `makeBinaryWrapper`
+          repeats the flag on purpose for any correctly-built wrapper, once
+          as the NUL-terminated argv literal it actually execs and once more
+          inside its own generator docstring (a comment embedded in the
+          binary restating the `--add-flags` call that produced it) - so two
+          raw occurrences of the *same* path is the expected, healthy case,
+          and tightening this to a raw count of one would fail every
+          correctly-built wrapper. What must never happen is two *different*
+          paths, so every match is deduplicated before counting. The
+          terminator excludes whitespace and quote characters so a
+          docstring's own closing quote is never captured into the path.
+          `grep -a -o`, not `strings`: the latter is a binutils tool this
+          test has no reason to believe is installed on the node, while
+          `grep` already is known to be.
+          """
+          out = machine.succeed(
+              r"""tr '\0' '\n' < /run/current-system/sw/bin/retroarch """
+              r"""| { grep -a -o -- "--appendconfig=/nix/store/[^[:space:]'\"]*" || true; } """
+              r"""| sed -e 's/^--appendconfig=//' """
+              r"""| sort -u"""
+          )
+          paths = [line for line in out.splitlines() if line]
+          assert len(paths) == 1, (
+              "expected exactly one distinct --appendconfig path in the "
+              f"node's retroarch binary, found {paths!r}"
+          )
+          return paths[0]
+
       with subtest("Every BIOS-free core family with a licensed ROM runs headless"):
           # Every driver RetroArch would otherwise try to open a real device
           # for is overridden to "null" (video_driver overridden for the run,
@@ -1707,6 +1818,71 @@ assert lib.assertMsg
               f"> {override}"
           )
 
+          # A second `--appendconfig` flag on this command line would
+          # replace the flake's own append file rather than add to it
+          # (RetroArch 1.22.2's source: the flag's handling is a plain copy
+          # into the append-path variable, not an append to a list already
+          # there), which would silently discard every one of the eight
+          # settings `retroarchWithCores` pins ahead of `retroarch.cfg` for
+          # the whole of every launch below. The two files are joined into
+          # the *one* flag every launch actually gets instead, with `|` as
+          # the separator: RetroArch's own append-path parser
+          # (`retroarch.c`'s `parse_config_file`, pinned 1.22.2 source)
+          # splits on `|`, not the comma RetroArch's own man page and
+          # docs.libretro.com both document for this flag. Order between
+          # the two paths carries no meaning here - the override above and
+          # `retroarchWithCores`'s settings share no key - but the flake's
+          # file is listed first as the box's own baseline, with this
+          # test's launch-only overrides layered after it.
+          #
+          # Recovered from the binary rather than re-rendered: this test
+          # must never derive its own copy of the flake's settings, since
+          # that would only prove a `writeText` built here from the same
+          # attrset agrees with itself, not that the append file this join
+          # relies on is the one the node's own wrapper actually passes.
+          appendconfig_path = retroarch_appendconfig_path()
+          joined_appendconfig = f"{appendconfig_path}|{override}"
+
+          # The precedence proof: bake a stale value for one of the seven
+          # launch-delivered settings directly into `retroarch.cfg` before
+          # any launch below runs, then let the very first launch's own
+          # exit write-back answer whether the joined flag actually won.
+          # `libretro_directory` cannot serve this purpose - the wrapper's
+          # own `-L` flag overrides that key at runtime regardless of what
+          # any config names, so its write-back would show the wrapper's
+          # own store path rather than either config file's literal -
+          # `video_fullscreen` is used instead, matching
+          # tests/retroarch-settings.nix's own pinned literal for it
+          # ("true"). Appended, not edited in place: this key hasn't been
+          # enforced in `retroarch.cfg` itself since it moved to the
+          # append file above, and `emubox-prepare` only ever writes the
+          # keys its own owned-files table names - there is no existing
+          # `video_fullscreen` line here yet for an in-place substitution
+          # to match, and a `sed` replace against an absent line would
+          # silently do nothing, leaving this bake never having taken at
+          # all.
+          retroarch_cfg = f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg"
+          bake = (
+              "printf '%s\\n' "
+              "'video_fullscreen = \"false\"' "
+              f">> {retroarch_cfg}"
+          )
+          # As `player`, not through the driver's own root `machine.succeed`:
+          # RetroArch itself launches as `player` and rewrites this file on
+          # exit as `player` too (`config_save_on_exit`, on by default), so
+          # a root-owned file here would make that write-back fail
+          # silently - the precedence assertion below would then fail for
+          # a reason unrelated to precedence, and every enforced write
+          # `emubox-prepare` makes into this same file for the rest of the
+          # run would fail right along with it.
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(bake)}")
+          owner = machine.succeed(f"stat -c '%U' {retroarch_cfg}").strip()
+          assert owner == "player", (
+              f"retroarch.cfg must stay player-owned before this launch, "
+              f"or RetroArch's own exit write-back fails silently: got "
+              f"owner {owner!r}"
+          )
+
           # Two markers, not the bare exit-0-and-a-log-line the pinned
           # source shows is vacuous: runloop.c:3712-3713 logs
           # "Loading dynamic libretro core from" by echoing straight back
@@ -1739,19 +1915,23 @@ assert lib.assertMsg
           # even if a future RetroArch version's fallback path let
           # `--max-frames` exit 0 with the dummy core silently substituted,
           # this line would still have been logged on the way there.
-          for fixture in ${
+          for index, fixture in enumerate(${
             py (
               map (f: {
                 inherit (f) family core;
                 rom = "${f.rom}";
               }) homebrewFixtures
             )
-          }:
+          }):
               cmd = (
                   "retroarch "
                   f"-L /run/current-system/sw/lib/retroarch/cores/{fixture['core']} "
                   f"{shlex.quote(fixture['rom'])} "
-                  f"--appendconfig {override} --max-frames 60 --verbose 2>&1"
+                  # The joined path list carries a `|`, a shell pipe
+                  # character - left unquoted here it would split this
+                  # command in two at the shell that parses it, rather than
+                  # reaching RetroArch as a single argument.
+                  f"--appendconfig {shlex.quote(joined_appendconfig)} --max-frames 60 --verbose 2>&1"
               )
               # 60 frames is enough to prove the core loaded and ran without
               # paying more than a couple of seconds of CI time per family;
@@ -1770,6 +1950,37 @@ assert lib.assertMsg
               out = machine.succeed(
                   f"su player -s /bin/sh -c {shlex.quote(cmd)}", timeout=60
               )
+
+              if index == 0:
+                  # The precedence bake above only needs one launch to
+                  # answer it, and this is the first one to run - reusing
+                  # it rather than paying for a dedicated thirteenth
+                  # RetroArch process for the same proof.
+                  #
+                  # Not the "[Config] Appending config" log line: RetroArch
+                  # only emits that line when `first_load` is false
+                  # (`retroarch.c`'s own append-file loader), so it is
+                  # never logged on this file's first-ever load and would
+                  # be no evidence at all here. `retroarch.cfg`'s own
+                  # exit write-back is the observable this proof actually
+                  # has: `config_save_on_exit` (on by default) rewrites the
+                  # file from RetroArch's effective settings when the
+                  # process exits, and `--appendconfig` alone does not set
+                  # the separate overrides-active flag that would instead
+                  # suppress that rewrite.
+                  cfg_text = machine.succeed(f"cat {retroarch_cfg}")
+                  values = retroarch_all_values(cfg_text, "video_fullscreen")
+                  assert len(values) == 1, (
+                      "expected a single video_fullscreen assignment in "
+                      f"retroarch.cfg after this launch's own exit "
+                      f"write-back, found {values}"
+                  )
+                  assert values[0] == "true", (
+                      "the flake's append-config value did not win over "
+                      f"the stale value baked into retroarch.cfg before "
+                      f"this launch: {values}"
+                  )
+
               assert "[Core] Geometry:" in out, (
                   f"{fixture['family']}: the core never reached a real "
                   f"retro_get_system_av_info() call - content did not load\n{out}"

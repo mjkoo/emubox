@@ -83,7 +83,7 @@
 
 ## 2. Module schema and declarations
 
-- [ ] 2.1 Rename `keys` to `enforce` and add `seed` in the file-entry
+- [x] 2.1 Rename `keys` to `enforce` and add `seed` in the file-entry
       submodule, update the JSON contract rendering to carry both maps,
       add a module assertion that no file declares a key (a key name in
       a flat file, a section and key in a sectioned one) under both
@@ -133,7 +133,7 @@
       under `enforce`; and the new check failing when the module
       assertion is temporarily commented out (recorded once, so the
       check is known to detect the assertion's absence).
-- [ ] 2.2 Update the kiosk VM test's owned-key subtests in
+- [x] 2.2 Update the kiosk VM test's owned-key subtests in
       `tests/kiosk.nix` for the two-map contract: split the ES-DE
       literal pin into an `enforce` literal (`UIMode`, `UIMode_passkey`,
       `ROMDirectory`, `MediaDirectory`, `ShowQuitMenu`) and a `seed`

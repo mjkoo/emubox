@@ -959,6 +959,12 @@ let
     let
       off =
         ra: keyDef:
+        # Whether `keyDef` carries a `section` decides the shape written
+        # below; the identical fact is re-derived twice more, each into a
+        # differently shaped value - `raTargetSeedOverlaps`'s path list in
+        # modules/kiosk/default.nix, and prepare's own per-target validation
+        # in emubox_prepare.py. A field added alongside `section`/`key` in a
+        # later encoding has to be taught to all three.
         if keyDef ? section then
           { ${keyDef.file}.enforce.${keyDef.section}.${keyDef.key} = ra.booleans."false"; }
         else

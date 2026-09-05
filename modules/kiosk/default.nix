@@ -226,6 +226,14 @@ let
           lib.mapAttrsToList (
             keyName: keyDef:
             let
+              # Whether `keyDef` carries a `section` is the same fact
+              # `raDisabledFiles`'s `off` helper in
+              # modules/emulators/default.nix and prepare's own per-target
+              # validation in emubox_prepare.py each re-derive, into a
+              # differently shaped value of their own - a nested
+              # `recursiveUpdate` value there, a validated JSON entry there.
+              # A field added alongside `section`/`key` in a later encoding
+              # has to be taught to all three.
               path =
                 if keyDef ? section then
                   [

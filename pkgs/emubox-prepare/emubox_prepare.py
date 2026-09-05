@@ -366,7 +366,19 @@ REMOVE = Removal()
 
 
 def _without_removals(keys: Mapping[str, str | Removal]) -> dict[str, str]:
-    """The keys that carry a value, for the branches that write a fresh file."""
+    """The keys that carry a string value.
+
+    Two uses, one filter. On the enforce tier this is what the fresh-file
+    branches build from, and its name is about the sentinel it drops: a
+    `Removal` names a key to delete, never one to write. On the seed tier
+    there is no sentinel to drop - a seeded value is never `REMOVE` - but
+    the same call still has to run there, because `ini` and `retroarch`
+    values in either tier can carry a JSON type this program never
+    validates (`_owned_keys_error`'s own docstring records that decision).
+    Applying the identical filter to both tiers is what keeps a wrong-typed
+    seed value quietly unwritten rather than coerced to a string or handed
+    to `_seed_key`'s backstop assert.
+    """
     return {key: value for key, value in keys.items() if isinstance(value, str)}
 
 
@@ -1143,10 +1155,14 @@ def _seed_key(document: Document, key: str, value: str, section: str | None) -> 
     # to remove a seeded key (the two validations that keep a
     # RetroAchievements target's key out of a file's seed map exist for
     # exactly that reason - see `_target_validation_error` and the per-file
-    # shape check in `main`), so this is a backstop against a future bug in
-    # one of them, not a path any caller today can reach.
+    # shape check in `main`), and every seed map reaching an editor has
+    # already been filtered to strings the same way `_without_removals`
+    # filters the enforce maps (`set_ini_settings`, `set_retroarch_settings`),
+    # so this is a backstop against a future bug in one of those, not a path
+    # any caller today can reach.
     assert isinstance(value, str), (
-        f"seed key {key!r} carries a removal, which the seed tier never accepts"
+        f"seed key {key!r} does not carry a string value, which the seed "
+        "tier never accepts"
     )
     target = _document_write_target(document, section)
     target.children.append(_make_assignment(key, value))
@@ -1175,7 +1191,11 @@ def set_ini_settings(
     A seeded key is appended the same way, but only the first time no
     assignment of it exists anywhere in its section's places (see
     `_seed_key`); once one does, it is left alone for good, drift and
-    repeats included.
+    repeats included. A seeded value that is not a string is dropped before
+    it ever reaches an editor - `_without_removals` filters both tiers
+    identically - so a wrong-typed seed value is quietly left unwritten
+    exactly as a wrong-typed enforced one already was, never coerced and
+    never a call that reaches `_seed_key`'s own backstop assert.
 
     An enforced key whose value is `REMOVE` is deleted from the file
     instead, with the same properties: everything around it survives, and
@@ -1202,7 +1222,7 @@ def set_ini_settings(
     """
     enforce = {name: _writable(path, keys, ini=True) for name, keys in enforce.items()}
     seed = {
-        name: cast("dict[str, str]", _writable(path, keys, ini=True))
+        name: _without_removals(_writable(path, keys, ini=True))
         for name, keys in seed.items()
     }
 
@@ -1330,10 +1350,14 @@ def set_retroarch_settings(
     alone. A seeded key is appended only the first time no assignment of it
     exists anywhere in the file, and is then left alone for good, drift and
     repeats included - see `_seed_key`. The whole file is one section here,
-    so a repeated key repeats outright rather than under a second header.
+    so a repeated key repeats outright rather than under a second header. A
+    seeded value that is not a string is dropped before it is ever quoted
+    for the file - `_without_removals` filters both tiers identically - so
+    it is left unwritten rather than wrapped in quotes and coerced to
+    `str()`.
     """
     enforce = _writable(path, enforce, ini=False)
-    seed = cast("dict[str, str]", _writable(path, seed, ini=False))
+    seed = _without_removals(_writable(path, seed, ini=False))
     if not enforce and not seed:
         return False
 
@@ -1985,6 +2009,14 @@ def _target_validation_error(
                 f"{file_name!r} has format {file_format!r}, which cannot "
                 "carry a retroachievements key"
             )
+        # Whether an entry carries a `section` is validated here as a JSON
+        # entry's shape; the identical fact is re-derived twice more in the
+        # Nix modules that render this document - `raDisabledFiles`'s `off`
+        # helper in modules/emulators/default.nix and
+        # `raTargetSeedOverlaps`'s path construction in
+        # modules/kiosk/default.nix - each into a differently shaped value
+        # of its own. A field added alongside `section`/`key` in a later
+        # encoding has to be taught to all three.
         if file_format == "ini" and "section" not in entry:
             return (
                 f"retroachievements target {name!r}.{key_name}: "
@@ -2392,9 +2424,10 @@ def _owned_keys_error(table: Mapping[str, object]) -> str | None:
     here.
 
     Only what an editor subscripts or iterates is checked. An `ini` or
-    `retroarch` value that is not a string is left alone on purpose:
-    `_without_removals` keeps only the strings, so such a key is quietly
-    skipped rather than written - a poor answer, but not a traceback, and
+    `retroarch` value that is not a string is left alone on purpose, in
+    either tier: `_without_removals` keeps only the strings, applied to the
+    enforce map and the seed map alike, so such a key is quietly skipped
+    rather than written - a poor answer, but not a traceback, and
     tightening it here would reject documents that work on boxes today.
     """
     fmt = table["format"]

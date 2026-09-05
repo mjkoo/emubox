@@ -33,7 +33,11 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import emubox_prepare as ep
 
-# The owned ES-DE keys in the shape the module renders them.
+# A set of ES-DE keys in the shape an editor's `enforce` map takes - synthetic
+# direct-editor input, not a copy of what the module currently renders: the
+# module puts `Theme` and `ApplicationLanguage` under `seed` rather than
+# `enforce`, but every key below still exercises `set_esde_settings` the same
+# way regardless of which tier a caller passes it under.
 OWNED = {
     "UIMode": {"type": "string", "value": "kiosk"},
     "UIMode_passkey": {"type": "string", "value": "uuddlrlrba"},
@@ -705,6 +709,162 @@ def test_retroarch_drops_a_seeded_key_name_that_does_not_read_back(
     assert "bad" not in text
     assert "does not read back as" in capsys.readouterr().err
     assert unwritten(path)
+
+
+# --- The seed tier's type policy matches the enforce tier's own -------------
+#
+# `emubox.kiosk.ownedFiles.<file>.seed` is typed `attrsOf anything` because
+# Nix cannot check a value's type, so a module author writing
+# `seed."Core.CPUThread" = false;` instead of `"False";` is a mistake this
+# program has to survive, not one Nix catches first. The enforce tier already
+# has a policy for a wrong-typed `ini`/`retroarch` value - `_without_removals`
+# drops it silently, never coercing and never raising - and these tests pin
+# that the seed tier now shares it exactly, in both directions: a bad seed
+# value is dropped the same way, and a bad enforce value still is too.
+
+
+def test_ini_enforce_of_the_wrong_type_is_dropped_rather_than_written(
+    tmp_path: Path,
+) -> None:
+    # Pins the enforce tier's own existing policy as the parity target the
+    # seed tier's filter (below) now matches.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n")
+    freeze(path)
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            cast(
+                "dict[str, dict[str, str | ep.Removal]]",
+                {"Interface": {"Language": False}},
+            ),
+            {},
+        )
+        is False
+    )
+
+    text = path.read_text()
+    assert "Language" not in text
+    assert "ConfirmStop = True" in text
+    assert unwritten(path)
+
+
+def test_retroarch_enforce_of_the_wrong_type_is_dropped_rather_than_written(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "ozone"\n')
+    freeze(path)
+
+    assert (
+        ep.set_retroarch_settings(
+            path, cast("dict[str, str | ep.Removal]", {"input_driver": False}), {}
+        )
+        is False
+    )
+
+    text = path.read_text()
+    assert "input_driver" not in text
+    assert 'menu_driver = "ozone"' in text
+    assert unwritten(path)
+
+
+def test_ini_seed_of_the_wrong_type_is_dropped_rather_than_written(
+    tmp_path: Path,
+) -> None:
+    # Before the seed tier had this filter, a non-string seed value whose key
+    # was absent from the file reached `_seed_key`'s backstop assert
+    # uncaught - an `AssertionError` the editor loop's `except OSError` does
+    # not catch, escaping as a traceback and, because it fires inside the
+    # loop over every owned file, aborting every remaining file with it.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n")
+    freeze(path)
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {},
+            cast("dict[str, dict[str, str]]", {"Interface": {"Language": False}}),
+        )
+        is False
+    )
+
+    text = path.read_text()
+    assert "Language" not in text
+    assert "ConfirmStop = True" in text
+    assert unwritten(path)
+
+
+def test_retroarch_seed_of_the_wrong_type_is_dropped_rather_than_coerced(
+    tmp_path: Path,
+) -> None:
+    # Before this filter, the retroarch editor wrapped every seed value in
+    # an f-string ahead of `_seed_key`, which coerces any type to a string
+    # rather than tripping the assert - so a wrong-typed seed value was
+    # written anyway, as `str()` of itself, where the enforce tier would
+    # have written nothing at all.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "ozone"\n')
+    freeze(path)
+
+    assert (
+        ep.set_retroarch_settings(
+            path, {}, cast("dict[str, str]", {"input_driver": False})
+        )
+        is False
+    )
+
+    text = path.read_text()
+    assert "input_driver" not in text
+    assert 'menu_driver = "ozone"' in text
+    assert unwritten(path)
+
+
+def test_ini_recreation_drops_a_seed_value_of_the_wrong_type(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The recreate branch builds a fresh document carrying both tiers
+    # straight from the same maps, so it must not write a coerced or
+    # malformed seed value either.
+    path = tmp_path / "Dolphin.ini"
+    path.write_bytes(b"[Interface]\n\xff\xfe not a line of this file's format\n")
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {"Interface": {"ConfirmStop": "False"}},
+            cast("dict[str, dict[str, str]]", {"Interface": {"Language": False}}),
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert "ConfirmStop = False" in text
+    assert "Language" not in text
+    assert "Dolphin.ini" in capsys.readouterr().err
+
+
+def test_retroarch_recreation_drops_a_seed_value_of_the_wrong_type(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_bytes(b'menu_driver = "ozone"\n\xff\xfe a line with no assignment\n')
+
+    assert (
+        ep.set_retroarch_settings(
+            path,
+            {"menu_driver": "ozone"},
+            cast("dict[str, str]", {"input_driver": False}),
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert 'menu_driver = "ozone"' in text
+    assert "input_driver" not in text
+    assert "retroarch.cfg" in capsys.readouterr().err
 
 
 # --- The custom systems step ----------------------------------------------
@@ -3452,6 +3612,47 @@ def test_main_survives_a_settings_ini_that_is_not_valid_utf8(
     # Recreated by the editors' ordinary policy, carrying the owned keys.
     assert "Username = alice" in ini_path.read_text()
     assert "unreadable" in capsys.readouterr().err
+
+
+def test_main_survives_an_ini_seed_value_of_the_wrong_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `emubox.kiosk.ownedFiles.<file>.seed` is typed `attrsOf anything`
+    # because Nix cannot check its values, so a module written later that
+    # spells a seed value `false` instead of `"False"` reaches this program
+    # as a JSON boolean under `seed` - and with the file on disk already
+    # missing that key, it used to reach `_seed_key`'s backstop assert
+    # uncaught: an `AssertionError` the editor loop's `except OSError` does
+    # not catch, ending the session at a traceback rather than a greeter
+    # with a journal line, and aborting every other owned file in the same
+    # loop with it.
+    appdata = tmp_path / "es-de"
+    appdata.mkdir()
+    ini_path = appdata / "Dolphin.ini"
+    ini_path.write_text("[Interface]\nConfirmStop = True\n")
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "Dolphin.ini": {
+                        "format": "ini",
+                        "enforce": {},
+                        "seed": {"Interface": {"Language": False}},
+                    }
+                },
+                "retroachievements": None,
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 0
+
+    text = ini_path.read_text()
+    assert "Language" not in text
+    assert "ConfirmStop = True" in text
 
 
 def test_login2_bounds_a_dribbling_server_by_wall_clock() -> None:

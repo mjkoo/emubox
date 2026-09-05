@@ -5,6 +5,19 @@
 # evaluated, so each candidate below is built through that attribute rather
 # than through a shallower one that would pass whether or not the assertion
 # exists.
+#
+# The three candidates are independent - each trips exactly one of the three
+# assertions in modules/kiosk/default.nix, not any of the others - because
+# `emubox.retroachievements.enable` defaults to true on the host these tests
+# extend. `modules/emulators/default.nix`'s `raDisabledFiles` - which is what
+# forces a target's `enabled`/`hardcore` keys into that file's own `enforce`
+# map - is only folded in while the feature is off, so on this host
+# `retroarchTarget.keys.enabled`'s key is absent from `enforce` entirely.
+# `targetKeyInSeed` seeds that same key, which therefore only ever collides
+# with `raTargetSeedOverlaps`'s own check; on a host with the feature
+# disabled by default the identical candidate would also trip the plain
+# enforce/seed overlap the other two candidates exercise, since the key would
+# already sit in `enforce` too.
 { self, pkgs }:
 let
   inherit (pkgs) lib;

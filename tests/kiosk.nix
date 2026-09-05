@@ -963,7 +963,8 @@ assert lib.assertMsg
           target_names = {t["name"] for t in ra["targets"]}
           assert target_names == {"retroarch", "dolphin", "pcsx2", "ppsspp", "duckstation"}, target_names
 
-          keys = owned["files"]["settings/es_settings.xml"]["keys"]
+          keys_enforce = owned["files"]["settings/es_settings.xml"]["enforce"]
+          keys_seed = owned["files"]["settings/es_settings.xml"]["seed"]
 
           # Pinned here, literally, and deliberately not derived from the
           # module: the loop below compares the settings file against this
@@ -973,30 +974,37 @@ assert lib.assertMsg
           # "kiosk UI mode, the unlock sequence, the ROM and media
           # directories under /data, the theme, the en_US language and the
           # quit menu enabled" - so a key leaving the module has to be a
-          # deliberate edit here too.
-          assert keys == {
+          # deliberate edit here too. Theme and ApplicationLanguage are
+          # seeded, not enforced: a player who picks a different one in
+          # ES-DE's own menus keeps that choice, so only their presence,
+          # never their value, is asserted below.
+          assert keys_enforce == {
               "UIMode": {"type": "string", "value": "kiosk"},
               "UIMode_passkey": {"type": "string", "value": ${py passkey}},
               "ROMDirectory": {"type": "string", "value": "/data/roms"},
               "MediaDirectory": {"type": "string", "value": "/data/media"},
+              "ShowQuitMenu": {"type": "bool", "value": "true"},
+          }, keys_enforce
+          assert keys_seed == {
               "Theme": {"type": "string", "value": "linear-es-de"},
               "ApplicationLanguage": {"type": "string", "value": "en_US"},
-              "ShowQuitMenu": {"type": "bool", "value": "true"},
-          }, keys
+          }, keys_seed
 
           got = settings_elements()
-          for name, spec in keys.items():
+          for name, spec in keys_enforce.items():
               assert got.get(name) == (spec["type"], spec["value"]), (
                   f"{name}: {got.get(name)} != {(spec['type'], spec['value'])}"
               )
+          for name in keys_seed:
+              assert name in got, f"{name}: missing from the settings file (seeded key)"
           # Named separately because this is what proves the option is wired
           # rather than that ES-DE's own default happens to be in the file.
           assert got["UIMode_passkey"] == ("string", ${py passkey}), got["UIMode_passkey"]
           assert got["UIMode"] == ("string", "kiosk"), got["UIMode"]
 
-      # PINNED_OWNED_KEYS. The emulators spec's
-      # headline requirement - the owned values "SHALL pin at least" the
-      # core directory, `/data/bios`, the 30 s autosave interval,
+      # PINNED_OWNED_KEYS_ENFORCE and PINNED_OWNED_KEYS_SEED. The emulators
+      # spec's headline requirement - the owned values "SHALL pin at least"
+      # the core directory, `/data/bios`, the 30 s autosave interval,
       # fullscreen, the two online/core-download menu entries disabled and
       # the uniform hotkey set for RetroArch, and fullscreen plus each
       # standalone's own performance choice for every standalone - was
@@ -1009,7 +1017,9 @@ assert lib.assertMsg
       # right and unapplied, or applied and wrong" reasoning the ES-DE pin
       # above already applies). `None` in place of a section name is
       # RetroArch's own flat, sectionless format (`ini_value`'s own
-      # convention above).
+      # convention above). Split in two because the two tiers are checked
+      # differently below: an enforced key's value is asserted, a seeded
+      # key's presence is.
       #
       # A later review round found this table guarded key PRESENCE only -
       # `names - actual.keys()` - never the value sitting behind a present
@@ -1025,15 +1035,19 @@ assert lib.assertMsg
       # against `modules/emulators` rather than read from it, so a wrong
       # value fails here exactly the way a dropped key already did.
       #
-      # One exception: RetroArch's `libretro_directory`. Its value is
-      # `coresDirectory`, a content-addressed Nix store path
-      # (`modules/emulators`'s own `retroarchWithCores` build) - there is no
-      # literal to hand-type for it that would not itself be a rebuild of
-      # that same derivation under a different name, which would just be
-      # the module agreeing with itself again, one layer further out. It
-      # stays a presence-only pin (`UNPINNED_VALUE` below), the one key in
-      # this table for which "guard presence, not value" is still the
-      # honest thing to assert, not an oversight.
+      # Eight RetroArch keys are pinned nowhere here any more:
+      # `video_fullscreen`, `libretro_directory`, `system_directory`,
+      # `autosave_interval`, `menu_show_online_updater`,
+      # `menu_show_core_updater`, `input_menu_toggle_gamepad_combo`, and
+      # `input_quit_gamepad_combo` move to a launch-time append file a later
+      # change owns and pins in its own flake check; they stay in
+      # `modules/emulators`'s `enforce` table for now and so are still
+      # walked (not pinned) below. `libretro_directory`'s own presence-only
+      # pin - it names a content-addressed Nix store path
+      # (`modules/emulators`'s own `retroarchWithCores` build), so there was
+      # never a literal to hand-type for it that would not itself be a
+      # rebuild of that same derivation under a different name - goes with
+      # it, since the key it guarded is one of the eight.
       #
       # DuckStation's `BIOS.SearchDirectory`, PCSX2's `Folders.Bios` and
       # both emulators' own `SetupWizardIncomplete` keys are pinned here
@@ -1066,38 +1080,9 @@ assert lib.assertMsg
       # (its own comment on `azaharConfigFile` records why - the setting is
       # compiled out of this flake's Azahar build, so there was nothing
       # left to pin).
-      UNPINNED_VALUE = ...  # presence only - see `libretro_directory` above
-
-      PINNED_OWNED_KEYS = {
-          f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg": {
-              None: {
-                  "video_fullscreen": "true",
-                  "libretro_directory": UNPINNED_VALUE,
-                  "system_directory": "/data/bios",
-                  "autosave_interval": "30",
-                  "menu_driver": "ozone",
-                  "menu_show_online_updater": "false",
-                  "menu_show_core_updater": "false",
-                  "input_menu_toggle": "f1",
-                  "input_save_state": "f2",
-                  "input_load_state": "f4",
-                  "input_toggle_fast_forward": "space",
-                  "input_screenshot": "f8",
-                  # Two DIFFERENT enum values on purpose. RetroArch
-                  # evaluates the menu and quit combos independently
-                  # against the same frame and handles quit first, so the
-                  # same value in both makes the menu combo dead code -
-                  # `modules/emulators` carries the source citation. Pinned
-                  # as distinct literals here so a future edit that
-                  # collapses them back to one value fails this test rather
-                  # than shipping a knob that does nothing.
-                  "input_menu_toggle_gamepad_combo": "2",
-                  "input_quit_gamepad_combo": "4",
-              },
-          },
+      PINNED_OWNED_KEYS_ENFORCE = {
           f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
               "Display": {"Fullscreen": "True"},
-              "Core": {"CPUThread": "False"},
               # The emulators spec's "no emulator setup screen in the path
               # from choosing a game to playing it", for the third emulator
               # that has one: Dolphin's analytics consent dialog is modal
@@ -1109,7 +1094,6 @@ assert lib.assertMsg
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
               "UI": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
               "Folders": {"Bios": "/data/bios"},
-              "EmuCore/GS": {"upscale_multiplier": "1"},
           },
           f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini": {
               "Graphics": {"FullScreen": "True"},
@@ -1124,7 +1108,6 @@ assert lib.assertMsg
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
               "Main": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
-              "GPU": {"PGXPEnable": "true", "ResolutionScale": "4"},
               "BIOS": {"SearchDirectory": "/data/bios"},
           },
           f"{PLAYER_HOME}/.config/scummvm/scummvm.ini": {
@@ -1136,47 +1119,84 @@ assert lib.assertMsg
           },
       }
 
+      PINNED_OWNED_KEYS_SEED = {
+          f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg": {
+              None: {
+                  "menu_driver": "ozone",
+                  "input_menu_toggle": "f1",
+                  "input_save_state": "f2",
+                  "input_load_state": "f4",
+                  "input_toggle_fast_forward": "space",
+                  "input_screenshot": "f8",
+              },
+          },
+          f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
+              "Core": {"CPUThread": "False"},
+          },
+          f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
+              "EmuCore/GS": {"upscale_multiplier": "1"},
+          },
+          f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
+              "GPU": {"PGXPEnable": "true", "ResolutionScale": "4"},
+          },
+      }
+
       with subtest("Every owned emulator config key holds the flake's value"):
           _MISSING = object()  # distinct from any real value, including None/False-ish strings
-          for path, sections in PINNED_OWNED_KEYS.items():
-              entry = owned["files"].get(path)
-              assert entry is not None, f"{path}: pinned in this test but not in emubox.kiosk.ownedFiles at all"
-              for section, keys in sections.items():
-                  actual = entry["keys"] if section is None else entry["keys"].get(section, {})
-                  for name, expected in keys.items():
-                      got = actual.get(name, _MISSING)
-                      if got is _MISSING:
-                          raise AssertionError(f"{path} [{section}]: pinned key dropped from the module: {name}")
-                      if expected is UNPINNED_VALUE:
-                          continue  # presence only, see UNPINNED_VALUE's own comment above
-                      assert got == expected, f"{path} [{section}]: {name}: {got!r} != {expected!r}"
+
+          def check_pins(pinned, tier):
+              for path, sections in pinned.items():
+                  entry = owned["files"].get(path)
+                  assert entry is not None, f"{path}: pinned in this test but not in emubox.kiosk.ownedFiles at all"
+                  for section, keys in sections.items():
+                      actual = entry[tier] if section is None else entry[tier].get(section, {})
+                      for name, expected in keys.items():
+                          got = actual.get(name, _MISSING)
+                          if got is _MISSING:
+                              raise AssertionError(
+                                  f"{path} [{section}] ({tier}): pinned key dropped from the module: {name}"
+                              )
+                          if tier == "seed":
+                              continue  # never corrected, so only its presence is pinned
+                          assert got == expected, f"{path} [{section}]: {name}: {got!r} != {expected!r}"
+
+          check_pins(PINNED_OWNED_KEYS_ENFORCE, "enforce")
+          check_pins(PINNED_OWNED_KEYS_SEED, "seed")
 
           # The walk: every file the rendered JSON actually names (not just
           # the pinned subset above), so a key a concurrent change adds is
           # checked against disk automatically rather than silently
-          # unverified until someone remembers to update this test.
-          for path, entry in owned["files"].items():
-              if path == "settings/es_settings.xml":
-                  continue  # its own pin-then-walk above already covers it
-              fmt = entry["format"]
+          # unverified until someone remembers to update this test. Every
+          # enforced key is checked by value, every seeded key only by
+          # presence - a seeded key is never corrected, so its on-disk
+          # value can legitimately be whatever a player last set it to.
+          def owned_paths(fmt, path, keys):
               if fmt == "retroarch":
-                  assertions = [(None, key, expected) for key, expected in entry["keys"].items()]
+                  return [(None, key, expected) for key, expected in keys.items()]
               elif fmt == "ini":
-                  assertions = [
+                  return [
                       (section, key, expected)
-                      for section, keys in entry["keys"].items()
-                      for key, expected in keys.items()
+                      for section, section_keys in keys.items()
+                      for key, expected in section_keys.items()
                   ]
               else:
                   raise AssertionError(f"{path}: unhandled owned-file format {fmt!r}")
 
-              if not assertions:
+          for path, entry in owned["files"].items():
+              if path == "settings/es_settings.xml":
+                  continue  # its own pin-then-walk above already covers it
+              fmt = entry["format"]
+              enforce_assertions = owned_paths(fmt, path, entry["enforce"])
+              seed_assertions = owned_paths(fmt, path, entry["seed"])
+
+              if not enforce_assertions and not seed_assertions:
                   # A file the flake owns zero static keys in - PCSX2's
                   # `secrets.ini` and Dolphin's `RetroAchievements.ini`, both
-                  # declared with `keys = { }` in modules/emulators because
-                  # their only content is retroachievements namespace keys
-                  # (token, or enabled/hardcore/username/token) written at
-                  # runtime rather than through this static table. There
+                  # declared with empty `enforce`/`seed` tables in
+                  # modules/emulators because their only content is
+                  # retroachievements namespace keys (token, or
+                  # enabled/hardcore/username/token) written at runtime
+                  # rather than through this static table. There
                   # is nothing this walk could check here even
                   # if the file existed, and the matching prepare-side fix
                   # (the ini/retroarch editors now leave a file alone
@@ -1191,7 +1211,7 @@ assert lib.assertMsg
                   # to exist and carry it, unconditionally, below.
                   #
                   # Not asserted absent here either, deliberately: Dolphin's
-                  # `RetroAchievements.ini` has the same empty static table
+                  # `RetroAchievements.ini` has the same empty static tables
                   # but is not reliably absent at this point - its
                   # enabled/hardcore keys are written unconditionally by
                   # `apply_retroachievements` regardless of network, unlike
@@ -1203,9 +1223,12 @@ assert lib.assertMsg
                   continue
 
               text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
-              for section, key, expected in assertions:
+              for section, key, expected in enforce_assertions:
                   got = owned_file_value(fmt, text, section, key)
                   assert got == expected, f"{path} [{section}]: {key}: {got!r} != {expected!r}"
+              for section, key, _expected in seed_assertions:
+                  got = owned_file_value(fmt, text, section, key)
+                  assert got is not None, f"{path} [{section}]: {key}: missing from disk (seeded key)"
 
       # --- kiosk: custom systems, both branches -----------------------------
 

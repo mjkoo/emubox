@@ -392,6 +392,302 @@ def test_retroarch_recreates_an_unreadable_file(
     assert "retroarch.cfg" in capsys.readouterr().err
 
 
+# --- The seed tier ----------------------------------------------------------
+#
+# A seeded key is written once, the first time the file is missing it
+# entirely, and never touched again: unlike an enforced key it is never
+# corrected, never swept for repeats, and never removed. "Absent" means no
+# assignment of the key exists anywhere among the places that belong to it -
+# a key present with an empty value is present, and is left exactly as
+# enforced keys leave everything they do not own.
+
+
+def test_esde_seeds_a_missing_key_with_the_default(tmp_path: Path) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text('<?xml version="1.0"?>\n<string name="UIMode" value="kiosk" />\n')
+
+    assert (
+        ep.set_esde_settings(
+            path, {}, {"Theme": {"type": "string", "value": "linear-es-de"}}
+        )
+        is True
+    )
+
+    assert esde_named(path, "Theme") == ("string", "Theme", "linear-es-de")
+
+
+def test_esde_leaves_a_seeded_key_already_set_to_something_else(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n<string name="Theme" value="slate-es-de" />\n'
+    )
+    freeze(path)
+
+    assert (
+        ep.set_esde_settings(
+            path, {}, {"Theme": {"type": "string", "value": "linear-es-de"}}
+        )
+        is False
+    )
+
+    assert esde_named(path, "Theme") == ("string", "Theme", "slate-es-de")
+    assert unwritten(path)
+
+
+def test_esde_leaves_a_seeded_key_already_set_to_an_empty_value(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text('<?xml version="1.0"?>\n<string name="Theme" value="" />\n')
+    freeze(path)
+
+    assert (
+        ep.set_esde_settings(
+            path, {}, {"Theme": {"type": "string", "value": "linear-es-de"}}
+        )
+        is False
+    )
+
+    assert esde_named(path, "Theme") == ("string", "Theme", "")
+    assert unwritten(path)
+
+
+def test_esde_keeps_every_repeat_of_a_seeded_key_while_correcting_an_enforced_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<string name="UIMode" value="full" />\n'
+        '<string name="Theme" value="slate-es-de" />\n'
+        '<string name="Theme" value="linear-es-de" />\n'
+    )
+
+    assert (
+        ep.set_esde_settings(
+            path,
+            {"UIMode": {"type": "string", "value": "kiosk"}},
+            {"Theme": {"type": "string", "value": "linear-es-de"}},
+        )
+        is True
+    )
+
+    elements = esde_elements(path)
+    assert elements.count(("string", "Theme", "slate-es-de")) == 1
+    assert elements.count(("string", "Theme", "linear-es-de")) == 1
+    assert esde_named(path, "UIMode") == ("string", "UIMode", "kiosk")
+
+
+def test_esde_recreation_writes_seeded_keys_alongside_enforced_ones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_bytes(b"\xff\xfe not valid xml at all")
+
+    assert (
+        ep.set_esde_settings(
+            path,
+            {"UIMode": {"type": "string", "value": "kiosk"}},
+            {"Theme": {"type": "string", "value": "linear-es-de"}},
+        )
+        is True
+    )
+
+    assert esde_named(path, "UIMode") == ("string", "UIMode", "kiosk")
+    assert esde_named(path, "Theme") == ("string", "Theme", "linear-es-de")
+    assert "es_settings.xml" in capsys.readouterr().err
+
+
+# ES-DE has no per-name round-trip validation - a name and a value reach the
+# file as XML attributes, which safely escape anything they are given - so
+# there is no "does not read back as itself" failure mode for this format to
+# exercise the way the two flat editors have one; see `_writable`.
+
+
+def test_ini_seeds_a_missing_key_with_the_default(tmp_path: Path) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n")
+
+    assert ep.set_ini_settings(path, {}, {"Interface": {"Language": "0"}}) is True
+
+    assert "Language = 0" in path.read_text()
+
+
+def test_ini_leaves_a_seeded_key_already_set_to_something_else(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nLanguage = 5\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}, {"Interface": {"Language": "0"}}) is False
+
+    assert "Language = 5" in path.read_text()
+    assert unwritten(path)
+
+
+def test_ini_leaves_a_seeded_key_already_set_to_an_empty_value(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nLanguage = \n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}, {"Interface": {"Language": "0"}}) is False
+
+    assert "Language = \n" in path.read_text()
+    assert unwritten(path)
+
+
+def test_ini_keeps_every_repeat_of_a_seeded_key_while_correcting_an_enforced_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\nLanguage = 0\nLanguage = 1\n")
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {"Interface": {"ConfirmStop": "False"}},
+            {"Interface": {"Language": "0"}},
+        )
+        is True
+    )
+
+    settings = ini_settings(path)
+    assert ("Interface", "Language", "0") in settings
+    assert ("Interface", "Language", "1") in settings
+    assert ("Interface", "ConfirmStop", "False") in settings
+
+
+def test_ini_recreation_writes_seeded_keys_alongside_enforced_ones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_bytes(b"[Interface]\n\xff\xfe not a line of this file's format\n")
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {"Interface": {"ConfirmStop": "False"}},
+            {"Interface": {"Language": "0"}},
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert "ConfirmStop = False" in text
+    assert "Language = 0" in text
+    assert "Dolphin.ini" in capsys.readouterr().err
+
+
+def test_ini_drops_a_seeded_key_name_that_does_not_read_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}, {"Achievements": {"Bad\nKey": "v"}}) is False
+
+    text = path.read_text()
+    assert "Bad" not in text
+    assert "does not read back as" in capsys.readouterr().err
+    assert unwritten(path)
+
+
+def test_retroarch_seeds_a_missing_key_with_the_default(tmp_path: Path) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "ozone"\n')
+
+    assert ep.set_retroarch_settings(path, {}, {"input_driver": "sdl"}) is True
+
+    assert 'input_driver = "sdl"' in path.read_text()
+
+
+def test_retroarch_leaves_a_seeded_key_already_set_to_something_else(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('input_driver = "udev"\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {}, {"input_driver": "sdl"}) is False
+
+    assert 'input_driver = "udev"' in path.read_text()
+    assert unwritten(path)
+
+
+def test_retroarch_leaves_a_seeded_key_already_set_to_an_empty_value(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('input_driver = ""\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {}, {"input_driver": "sdl"}) is False
+
+    assert 'input_driver = ""' in path.read_text()
+    assert unwritten(path)
+
+
+def test_retroarch_keeps_every_repeat_of_a_seeded_key_while_correcting_an_enforced_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(
+        'menu_driver = "rgui"\ninput_driver = "sdl"\ninput_driver = "udev"\n'
+    )
+
+    assert (
+        ep.set_retroarch_settings(
+            path, {"menu_driver": "ozone"}, {"input_driver": "sdl"}
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert text.count('input_driver = "sdl"') == 1
+    assert text.count('input_driver = "udev"') == 1
+    assert 'menu_driver = "ozone"' in text
+
+
+def test_retroarch_recreation_writes_seeded_keys_alongside_enforced_ones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_bytes(b'menu_driver = "ozone"\n\xff\xfe a line with no assignment\n')
+
+    assert (
+        ep.set_retroarch_settings(
+            path, {"menu_driver": "ozone"}, {"input_driver": "sdl"}
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert 'menu_driver = "ozone"' in text
+    assert 'input_driver = "sdl"' in text
+    assert "retroarch.cfg" in capsys.readouterr().err
+
+
+def test_retroarch_drops_a_seeded_key_name_that_does_not_read_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "rgui"\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {}, {"bad\nkey": "v"}) is False
+
+    text = path.read_text()
+    assert "bad" not in text
+    assert "does not read back as" in capsys.readouterr().err
+    assert unwritten(path)
+
+
 # --- The custom systems step ----------------------------------------------
 
 
@@ -2564,6 +2860,417 @@ def test_apply_never_leaks_the_password_across_every_target_shape(
         assert "hunter2" not in json.dumps(table["keys"]), relative
     assert b"hunter2" not in ppsspp_token_file.read_bytes()
     assert "hunter2" not in capsys.readouterr().err
+
+
+# --- The two-tier owned-values contract -------------------------------------
+#
+# A per-file table carries exactly `format`, `enforce` and `seed` - both maps
+# present, `{}` allowed, no alias for the old single `keys` map. Every case
+# below is a broken call site: non-zero exit, a diagnostic naming the file and
+# the offending field, and nothing downstream ever runs - not a write to any
+# configuration file, not a write to any credential, and not a login attempt,
+# which each test proves with a server that counts what it is asked.
+
+
+def _pristine_credentials(tmp_path: Path) -> tuple[Path, Path]:
+    """A pre-existing PPSSPP token file and login cache, to prove untouched."""
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    token_file.write_bytes(b"pre-existing-token")
+    cache_file = tmp_path / "cache" / "ra-token"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("pre-existing-cache")
+    return token_file, cache_file
+
+
+def _document_beside_a_valid_retroachievements_setup(
+    malformed_relative: str,
+    malformed_table: dict[str, object],
+    tmp_path: Path,
+    api_url: str,
+) -> dict[str, object]:
+    """A document pairing one malformed per-file table with an otherwise valid
+    RetroAchievements setup, so a test can prove the malformed table is
+    refused before the login it would otherwise trigger. `malformed_relative`
+    must not be "retroarch.cfg" - that name is the companion file the
+    RetroAchievements target itself declares.
+    """
+    return {
+        "files": {
+            malformed_relative: malformed_table,
+            "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}},
+        },
+        "retroachievements": retroachievements_namespace(
+            tmp_path, api_url, [plain_target("retroarch", "retroarch.cfg")]
+        ),
+    }
+
+
+def test_main_rejects_the_old_single_keys_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "old.cfg", {"format": "retroarch", "keys": {}}, tmp_path, url
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "old.cfg" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_file_table_missing_enforce(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "bad.cfg", {"format": "retroarch", "seed": {}}, tmp_path, url
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "bad.cfg" in err
+    assert "enforce" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_file_table_missing_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "bad.cfg", {"format": "retroarch", "enforce": {}}, tmp_path, url
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "bad.cfg" in err
+    assert "seed" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_file_table_with_an_unexpected_extra_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Without this refusal a misspelled map - `seedKeys` here, instead of
+    # `seed` - would pass alongside both real maps and its keys would be
+    # silently ignored rather than reported.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "bad.cfg",
+                    {
+                        "format": "retroarch",
+                        "enforce": {},
+                        "seed": {},
+                        "seedKeys": {},
+                    },
+                    tmp_path,
+                    url,
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "bad.cfg" in err
+    assert "seedKeys" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_malformed_seeded_ini_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The existing ini inner-shape diagnostic names the section, not the key,
+    # and that stays true when the malformed entry sits under `seed` rather
+    # than `enforce`.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "f.ini",
+                    {"format": "ini", "enforce": {}, "seed": {"Main": "on"}},
+                    tmp_path,
+                    url,
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "Main" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_malformed_seeded_esde_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "settings/es_settings.xml",
+                    {
+                        "format": "esde-xml",
+                        "enforce": {},
+                        "seed": {"Theme": "slate"},
+                    },
+                    tmp_path,
+                    url,
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "Theme" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+# --- Enforcing and seeding the same key is a broken call site ---------------
+
+
+def test_main_rejects_a_key_enforced_and_seeded_in_the_same_flat_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The overlap is visible in the document as parsed, so it is caught
+    # before the RetroAchievements login is ever attempted - proved here with
+    # the feature enabled and a server that counts what it is asked.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        ra = retroachievements_namespace(
+            tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
+        )
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "retroarch.cfg": {
+                            "format": "retroarch",
+                            "enforce": {"menu_driver": "ozone"},
+                            "seed": {"menu_driver": "rgui"},
+                        }
+                    },
+                    "retroachievements": ra,
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "retroarch.cfg" in err
+    assert "menu_driver" in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_key_enforced_and_seeded_in_the_same_ini_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        ra = retroachievements_namespace(
+            tmp_path, url, [ini_target("dolphin", "Dolphin.ini")]
+        )
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "Dolphin.ini": {
+                            "format": "ini",
+                            "enforce": {"Interface": {"ConfirmStop": "True"}},
+                            "seed": {"Interface": {"ConfirmStop": "False"}},
+                        }
+                    },
+                    "retroachievements": ra,
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "Dolphin.ini" in err
+    assert "ConfirmStop" in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_retroachievements_target_key_the_file_already_seeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # cheevos_username is both a plain target's login key and, here, a name
+    # the file's own seed map already claims - refused by the target
+    # validation before the login is attempted.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        ra = retroachievements_namespace(
+            tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
+        )
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "retroarch.cfg": {
+                            "format": "retroarch",
+                            "enforce": {},
+                            "seed": {"cheevos_username": "someone"},
+                        }
+                    },
+                    "retroachievements": ra,
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "retroarch.cfg" in err
+    assert "cheevos_username" in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_seeded_target_key_even_with_retroachievements_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The disabled path merges a REMOVE into every login key rather than a
+    # value, so this is the proof that a REMOVE on a seeded key is refused
+    # the same way, before any editor runs. The closed port means a login
+    # attempt would have shown up as a loud failure, not a silent one.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    values = tmp_path / "owned.json"
+
+    ra = retroachievements_namespace(
+        tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
+    )
+    ra["enabled"] = False
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "retroarch.cfg": {
+                        "format": "retroarch",
+                        "enforce": {},
+                        "seed": {"cheevos_username": "someone"},
+                    }
+                },
+                "retroachievements": ra,
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "retroarch.cfg" in err
+    assert "cheevos_username" in err
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
 
 
 # --- The crash boundary: what must never reach main as a traceback ---------

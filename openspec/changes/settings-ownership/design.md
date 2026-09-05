@@ -327,7 +327,7 @@ pinned revisions.
 
 ### 5. Which keys are seeded
 
-Twelve keys move (eight settings, the five keyboard hotkeys counted one by
+Twelve keys move (seven settings, the five keyboard hotkeys counted one by
 one); everything else stays enforced.
 
 | File | Key | Reason |

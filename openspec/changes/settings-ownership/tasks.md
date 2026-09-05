@@ -306,8 +306,14 @@
       final revision, with the run URL recorded next to this box.
       Blocked on a push, which only the user may perform.
 
-      https://github.com/mjkoo/emubox/actions/runs/33942814847 -
-      conclusion success, on the pull request from this branch.
+      https://github.com/mjkoo/emubox/actions/runs/33945898682 -
+      conclusion success, at revision e44cb2a, the last revision of
+      this branch that touches anything outside `openspec/`. An earlier
+      run, https://github.com/mjkoo/emubox/actions/runs/33942814847 at
+      576acdd, was green on the same code and is the run 5.1's builder
+      evidence sits beside; the run between them, 33943406950 at
+      b62dfec, failed on runner disk exhaustion (`/dev/root` at 100%)
+      with nothing of this change's own reached.
 
       That run's `nix flake check -L` step covers the whole
       x86_64-linux check set on a runner with `/dev/kvm` opened, so it

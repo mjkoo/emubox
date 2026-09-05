@@ -1063,19 +1063,25 @@ assert lib.assertMsg
       # against `modules/emulators` rather than read from it, so a wrong
       # value fails here exactly the way a dropped key already did.
       #
-      # Eight RetroArch keys are pinned nowhere here any more:
+      # Eight RetroArch keys are checked nowhere in this file any more:
       # `video_fullscreen`, `libretro_directory`, `system_directory`,
       # `autosave_interval`, `menu_show_online_updater`,
       # `menu_show_core_updater`, `input_menu_toggle_gamepad_combo`, and
-      # `input_quit_gamepad_combo` move to a launch-time append file a later
-      # change owns and pins in its own flake check; they stay in
-      # `modules/emulators`'s `enforce` table for now and so are still
-      # walked (not pinned) below. `libretro_directory`'s own presence-only
-      # pin - it names a content-addressed Nix store path
+      # `input_quit_gamepad_combo` are delivered through the launch-time
+      # append file `modules/emulators`'s own `wrapRetroArch` call builds,
+      # so they left that module's `enforce` table entirely - which is why
+      # the walk below does not reach them either: it reads the rendered
+      # contract, and the contract no longer names them. Their values are
+      # pinned by `tests/retroarch-settings.nix`, the builder-side check
+      # that reads the append file out of the very binary this node runs;
+      # the runtime half - that the file wins over a stale
+      # `retroarch.cfg` - is proven by the headless RetroArch subtest
+      # further down this same file. `libretro_directory`'s own
+      # presence-only pin - it names a content-addressed Nix store path
       # (`modules/emulators`'s own `retroarchWithCores` build), so there was
       # never a literal to hand-type for it that would not itself be a
-      # rebuild of that same derivation under a different name - goes with
-      # it, since the key it guarded is one of the eight.
+      # rebuild of that same derivation under a different name - went with
+      # them, since the key it guarded is one of the eight.
       #
       # DuckStation's `BIOS.SearchDirectory`, PCSX2's `Folders.Bios` and
       # both emulators' own `SetupWizardIncomplete` keys are pinned here

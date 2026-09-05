@@ -141,9 +141,13 @@
       `PINNED_OWNED_KEYS` per tier, dropping the eight RetroArch keys
       task 3.1 moves to the append file (the flake check in 3.2 owns
       them, and the presence-only `UNPINNED_VALUE` sentinel that
-      existed for `libretro_directory` goes with them) and keeping
-      `savefile_directory` and `savestate_directory` under `enforce`;
-      make both walks iterate `enforce` and `seed`, asserting enforced
+      existed for `libretro_directory` goes with them). That empties
+      the pin table's `retroarch.cfg` entry: `savefile_directory` and
+      `savestate_directory` stay enforced in `modules/emulators`, but
+      they were never in this table to begin with - `tests/saves.nix`
+      is what pins them by value, and the walk below covers them on
+      disk because the rendered contract still names them.
+      Make both walks iterate `enforce` and `seed`, asserting enforced
       keys on disk by value and seeded keys by presence only. Verified
       by `just check-all` passing (the script is evaluated there; the
       run is CI-gated, group 5).

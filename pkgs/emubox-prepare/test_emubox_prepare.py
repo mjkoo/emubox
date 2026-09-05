@@ -3368,8 +3368,9 @@ def test_main_rejects_a_seeded_target_key_even_with_retroachievements_disabled(
 ) -> None:
     # The disabled path merges a REMOVE into every login key rather than a
     # value, so this is the proof that a REMOVE on a seeded key is refused
-    # the same way, before any editor runs. The closed port means a login
-    # attempt would have shown up as a loud failure, not a silent one.
+    # the same way, before any editor runs. The counting server is what
+    # proves the refusal precedes the login: a request reaching it would be
+    # recorded rather than passing unnoticed.
     appdata = tmp_path / "es-de"
     monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
     token_file, cache_file = _pristine_credentials(tmp_path)

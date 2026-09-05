@@ -224,7 +224,7 @@
 
 ## 4. Kiosk VM test
 
-- [ ] 4.1 Add the seeded-survival assertion to the kiosk VM test, with
+- [x] 4.1 Add the seeded-survival assertion to the kiosk VM test, with
       the frontend stopped: after the crash-loop subtest, when the
       session is at the greeter and no `es-de` process exists, and
       before the `machine.shutdown()` of the reboot subtest, change
@@ -238,7 +238,7 @@
       changed value. Verified by the assertion being present in the
       test script the flake evaluates (`just check-all` passes; the run
       itself is CI-gated, group 5).
-- [ ] 4.2 Prove the append file at runtime in the kiosk VM test. Change
+- [x] 4.2 Prove the append file at runtime in the kiosk VM test. Change
       the headless RetroArch launches to pass the flake's append file
       and the test override in one `--appendconfig` flag joined by `|`,
       since a second flag replaces the first. The test recovers the

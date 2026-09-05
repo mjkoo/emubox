@@ -1876,7 +1876,7 @@ assert lib.assertMsg
           # `emubox-prepare` makes into this same file for the rest of the
           # run would fail right along with it.
           machine.succeed(f"su player -s /bin/sh -c {shlex.quote(bake)}")
-          owner = machine.succeed(f"stat -c '%U' {retroarch_cfg}").strip()
+          owner = machine.succeed(f"stat -c '%U' {shlex.quote(retroarch_cfg)}").strip()
           assert owner == "player", (
               f"retroarch.cfg must stay player-owned before this launch, "
               f"or RetroArch's own exit write-back fails silently: got "

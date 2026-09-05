@@ -881,9 +881,9 @@ let
       off =
         ra: keyDef:
         if keyDef ? section then
-          { ${keyDef.file}.keys.${keyDef.section}.${keyDef.key} = ra.booleans."false"; }
+          { ${keyDef.file}.enforce.${keyDef.section}.${keyDef.key} = ra.booleans."false"; }
         else
-          { ${keyDef.file}.keys.${keyDef.key} = ra.booleans."false"; };
+          { ${keyDef.file}.enforce.${keyDef.key} = ra.booleans."false"; };
     in
     lib.foldl' (
       acc: ra:
@@ -990,7 +990,7 @@ in
     emubox.kiosk.ownedFiles = lib.recursiveUpdate {
       "${retroarchConfigFile}" = {
         format = "retroarch";
-        keys = {
+        enforce = {
           video_fullscreen = "true";
           libretro_directory = coresDirectory;
           # The literal "default" is magic in RetroArch's own parser and
@@ -1002,26 +1002,12 @@ in
           savefile_directory = "/data/saves/retroarch/saves";
           savestate_directory = "/data/saves/retroarch/states";
           autosave_interval = "30";
-          menu_driver = "ozone";
           # Both entries a family could otherwise use to pull unvetted
           # cores or content onto the box over the network - the "Online
           # Updater" submenu and the separate top-level "Core Downloader"
           # shortcut.
           menu_show_online_updater = "false";
           menu_show_core_updater = "false";
-          # The uniform hotkey set, uniform across every emulator on purpose.
-          # These are *keyboard* key-name strings - RetroArch's separate
-          # per-pad `_btn` keys are written by autoconfig per controller,
-          # which is controller work still to come, so none appears here
-          # on purpose.
-          input_menu_toggle = "f1";
-          input_save_state = "f2";
-          input_load_state = "f4";
-          # The toggle variant, not `input_hold_fast_forward`: a
-          # press-once switch is the right semantics for a couch box, and
-          # RetroArch has no single key that means both.
-          input_toggle_fast_forward = "space";
-          input_screenshot = "f8";
           # The gamepad-combo counterparts, device-independent (no `_btn`
           # binding needed). Both keys are plain `SETTING_UINT`s against
           # RetroArch's `enum input_combo_type` (configuration.c:2558,2560),
@@ -1061,17 +1047,31 @@ in
           input_menu_toggle_gamepad_combo = "2";
           input_quit_gamepad_combo = "4";
         };
+        # Written once and left alone afterward: a player who rebinds a menu
+        # driver or a hotkey through RetroArch's own settings keeps that
+        # choice across a reboot, which enforcing any of these would undo.
+        seed = {
+          menu_driver = "ozone";
+          # The uniform hotkey set, uniform across every emulator on purpose.
+          # These are *keyboard* key-name strings - RetroArch's separate
+          # per-pad `_btn` keys are written by autoconfig per controller,
+          # which is controller work still to come, so none appears here
+          # on purpose.
+          input_menu_toggle = "f1";
+          input_save_state = "f2";
+          input_load_state = "f4";
+          # The toggle variant, not `input_hold_fast_forward`: a
+          # press-once switch is the right semantics for a couch box, and
+          # RetroArch has no single key that means both.
+          input_toggle_fast_forward = "space";
+          input_screenshot = "f8";
+        };
       };
 
       "${dolphinConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           Display.Fullscreen = "True";
-          # "Wii dual core off": Dolphin's own writer emits `True`/`False`
-          # capitalized (StringUtil.cpp:290-293); `CPUThread = False` is
-          # dual core *off* - the UI's "Enable Dual Core" checkbox is this
-          # same key inverted (DolphinQt/Settings/GeneralPane.cpp:144).
-          Core.CPUThread = "False";
           # Dolphin's first-run analytics consent dialog, the third
           # instance of the same shape PCSX2's `UI.SetupWizardIncomplete`
           # and DuckStation's `Main.SetupWizardIncomplete` already close:
@@ -1122,21 +1122,32 @@ in
           # next bump. False is also what `ShowAnalyticsPrompt` writes for
           # a "No", so this is the declined answer, stated declaratively.
           # `True`/`False` capitalized, per `Core.CPUThread`'s own citation
-          # of `StringUtil.cpp:290-293` above - the same writer emits both.
+          # of `StringUtil.cpp:290-293` below - the same writer emits both.
           Analytics.PermissionAsked = "True";
           Analytics.Enabled = "False";
+        };
+        # Written once and left alone afterward: a player who turns dual
+        # core back on through Dolphin's own settings keeps that choice
+        # across a reboot, which enforcing this would undo.
+        seed = {
+          # "Wii dual core off": Dolphin's own writer emits `True`/`False`
+          # capitalized (StringUtil.cpp:290-293); `CPUThread = False` is
+          # dual core *off* - the UI's "Enable Dual Core" checkbox is this
+          # same key inverted (DolphinQt/Settings/GeneralPane.cpp:144).
+          Core.CPUThread = "False";
         };
       };
       # No performance keys of its own - see the comment on
       # `dolphinAchievementsFile` above for why this file exists at all.
       "${dolphinAchievementsFile}" = {
         format = "ini";
-        keys = { };
+        enforce = { };
+        seed = { };
       };
 
       "${pcsx2ConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           UI.StartFullscreen = "true";
           # UI.SetupWizardIncomplete: PCSX2/pcsx2 pcsx2-qt/QtHost.cpp
           # (v2.6.3) sets this true whenever the base settings layer is
@@ -1158,35 +1169,43 @@ in
           # root, never `/data/bios`, so `emubox-check-bios` reporting OK
           # would not mean PS2 can actually boot a game.
           Folders.Bios = biosDirectory;
+        };
+        # Written once and left alone afterward: a player who changes the
+        # internal resolution through PCSX2's own settings keeps that
+        # choice across a reboot, which enforcing this would undo.
+        seed = {
           # Native internal resolution. PCSX2 serializes this float with
           # plain `ostringstream` formatting - the shortest decimal, `1`,
-          # never `1.000000` - so this exact literal is what has to be
-          # asserted, or every launch would see a spurious diff and rewrite
-          # the file (Pcsx2Config.cpp:908,1021; INISettingsInterface.cpp).
+          # never `1.000000` - and that is the exact literal to seed:
+          # `1.000000` would still parse, but it is not the value PCSX2
+          # itself would ever write here, so the seeded file would read as
+          # already carrying a player-chosen value that never was one
+          # (Pcsx2Config.cpp:908,1021; INISettingsInterface.cpp).
           "EmuCore/GS".upscale_multiplier = "1";
         };
       };
       # No performance keys of its own - see the comment on
       # `pcsx2SecretsFile` above; only the RA token, when enabled, ever
-      # lands here. Kept declared with an empty `keys` table rather than
-      # dropped from `ownedFiles` even though nothing here is ever static:
-      # prepare's `_target_validation_error` requires every retroachievements
-      # target key's `file` to already be a key of the rendered `files` map
-      # (emubox_prepare.py), and the pcsx2 target's `token` key names this
-      # file - removing the declaration would fail that check the moment RA
-      # is enabled, not just leave a spurious-write cost when it is off. The
-      # spurious recreate-on-every-launch this empty declaration causes when
-      # no token resolves is prepare's to fix (its own file-format editor
-      # deciding "no static keys and nothing merged in" means "no write"),
-      # not this module's.
+      # lands here. Kept declared with empty `enforce`/`seed` tables rather
+      # than dropped from `ownedFiles` even though nothing here is ever
+      # static: prepare's `_target_validation_error` requires every
+      # retroachievements target key's `file` to already be a key of the
+      # rendered `files` map (emubox_prepare.py), and the pcsx2 target's
+      # `token` key names this file - removing the declaration would fail
+      # that check the moment RA is enabled, not just leave a
+      # spurious-write cost when it is off. The spurious recreate-on-every-
+      # launch this empty declaration causes when no token resolves is
+      # prepare's to fix (its own file-format editor deciding "no static
+      # keys and nothing merged in" means "no write"), not this module's.
       "${pcsx2SecretsFile}" = {
         format = "ini";
-        keys = { };
+        enforce = { };
+        seed = { };
       };
 
       "${ppssppConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           Graphics.FullScreen = "True";
           # No suppressible splash or first-run dialog exists in PPSSPP's
           # source to own a "quiet-start" key for, checked rather than
@@ -1231,7 +1250,7 @@ in
         # this module's own idempotency check and never clean it up. The
         # backslash spelling is what prepare must actually assert to be
         # the same key QSettings itself reads and writes.
-        keys = {
+        enforce = {
           UI = {
             fullscreen = "true";
             "fullscreen\\default" = "false";
@@ -1273,7 +1292,7 @@ in
 
       "${duckstationConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           Main.StartFullscreen = "true";
           # Main.SetupWizardIncomplete: stenzek/duckstation
           # src/duckstation-qt/qthost.cpp (v0.1-11752),
@@ -1289,18 +1308,6 @@ in
           # Forcing it false here is the same fix Azahar's
           # `firstStart = false` already applies for the same reason.
           Main.SetupWizardIncomplete = "false";
-          GPU = {
-            # "PGXP geometry correction": `PGXPEnable` is the one setting
-            # that key names in the design - `PGXPCulling` etc. are
-            # distinct add-ons layered on top of it, not part of it.
-            PGXPEnable = "true";
-            # A 1080p-appropriate upscale: PS1 renders natively around
-            # 320x240 (up to 512x480 in hi-res modes), and 4x lands around
-            # 1280x960-2048x1920 - close to 1080p without wildly
-            # overshooting it. Config data, not a source-verified fact;
-            # revisit at the hardware bring-up checklist if it disappoints.
-            ResolutionScale = "4";
-          };
           # BIOS.SearchDirectory: stenzek/duckstation src/core/settings.cpp
           # (v0.1-11752), `Bios = LoadPathFromSettings(si, DataRoot, "BIOS",
           # "SearchDirectory", "bios")`, and `LoadPathFromSettings` uses the
@@ -1313,11 +1320,29 @@ in
           # PS1 can actually boot a game.
           BIOS.SearchDirectory = biosDirectory;
         };
+        # Written once and left alone afterward: a player who turns PGXP off
+        # or changes the internal resolution through DuckStation's own
+        # settings keeps that choice across a reboot, which enforcing
+        # either would undo.
+        seed = {
+          GPU = {
+            # "PGXP geometry correction": `PGXPEnable` is the one setting
+            # that key names in the design - `PGXPCulling` etc. are
+            # distinct add-ons layered on top of it, not part of it.
+            PGXPEnable = "true";
+            # A 1080p-appropriate upscale: PS1 renders natively around
+            # 320x240 (up to 512x480 in hi-res modes), and 4x lands around
+            # 1280x960-2048x1920 - close to 1080p without wildly
+            # overshooting it. Config data, not a source-verified fact;
+            # revisit at the hardware bring-up checklist if it disappoints.
+            ResolutionScale = "4";
+          };
+        };
       };
 
       "${scummvmConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           scummvm = {
             fullscreen = "true";
             savepath = "/data/saves/scummvm/saves";

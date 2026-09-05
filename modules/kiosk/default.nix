@@ -169,6 +169,82 @@ let
     Exec=${emubox-session}/bin/emubox-session
     Type=Application
   '';
+
+  # Every path one file's `enforce`/`seed` table declares, decomposed the
+  # same way `emubox-prepare`'s own editors read it: `ini`'s keys sit inside
+  # a section, so the path is `[section key]`; retroarch's and esde-xml's
+  # are flat, so it is `[key]`. Spelled out once here because the assertion
+  # below has to walk it twice - within one file's own two maps, and again
+  # for a RetroAchievements target's file, section and key against that
+  # file's `seed`.
+  keyPaths =
+    format: keys:
+    if format == "ini" then
+      lib.concatLists (
+        lib.mapAttrsToList (
+          section: sectionKeys:
+          map (key: [
+            section
+            key
+          ]) (lib.attrNames sectionKeys)
+        ) keys
+      )
+    else
+      map (key: [ key ]) (lib.attrNames keys);
+
+  # A setting belongs to exactly one tier: corrected forever (`enforce`) or
+  # written once and left alone (`seed`), never both - a key in both would
+  # have enforce's rewrite and seed's "leave it" disagreeing about the same
+  # value on every launch. One description string per offending path, empty
+  # when every file's two maps are disjoint.
+  ownedFileTierOverlaps = lib.concatLists (
+    lib.mapAttrsToList (
+      file: entry:
+      map (path: "${file}: ${lib.concatStringsSep "." path}") (
+        lib.filter (path: lib.hasAttrByPath path entry.seed) (keyPaths entry.format entry.enforce)
+      )
+    ) cfg.ownedFiles
+  );
+
+  # No RetroAchievements target may name a key that its own file lists
+  # under `seed`: prepare writes every target's keys at login/logout time
+  # through its own dynamic path, not through `enforce` or `seed` at all, so
+  # a target key doubling as a seed entry would leave the login write racing
+  # a seed the frontend (or a prior login) may already have satisfied,
+  # silently discarding the target's own value. `null` short-circuits here
+  # so the check still runs on a host with the feature off, and
+  # `cfg.ownedFiles ? file` is checked before indexing into it so a target
+  # naming a file this module never declared gets the same named diagnostic
+  # as an actual overlap, not a raw Nix attribute-missing error.
+  raTargetSeedOverlaps =
+    if cfg.retroachievementsNamespace == null then
+      [ ]
+    else
+      lib.concatMap (
+        target:
+        lib.filter (m: m != null) (
+          lib.mapAttrsToList (
+            keyName: keyDef:
+            let
+              path =
+                if keyDef ? section then
+                  [
+                    keyDef.section
+                    keyDef.key
+                  ]
+                else
+                  [ keyDef.key ];
+              label = "${target.name}.${keyName} (${lib.concatStringsSep "." path}) in ${keyDef.file}";
+            in
+            if !(cfg.ownedFiles ? ${keyDef.file}) then
+              "${label}: file is not declared in emubox.kiosk.ownedFiles"
+            else if lib.hasAttrByPath path cfg.ownedFiles.${keyDef.file}.seed then
+              "${label}: listed under that file's seed"
+            else
+              null
+          ) target.keys
+        )
+      ) cfg.retroachievementsNamespace.targets;
 in
 {
   options.emubox.kiosk = {
@@ -220,11 +296,16 @@ in
       # a module that forgets `format` or misspells it as `"ini "` gets a
       # named-option eval error at the file and line that set it, rather
       # than a value that only fails once `emubox-prepare` reads the
-      # rendered JSON on the box. The `keys` shape still varies by format
-      # (esde-xml's `{name: {type, value}}`, ini's `{section: {key:
-      # value}}`, retroarch's flat `{key: value}}`) and prepare, not this
-      # module, is what enforces that shape - `anything` here is honest
-      # about the limit of what Nix can usefully check.
+      # rendered JSON on the box. Two maps, not one: `enforce` is corrected
+      # back to its configured value at every launch when missing or
+      # drifted, `seed` is written only the first time no assignment exists
+      # at all and left alone forever after - a setting belongs to exactly
+      # one of the two, never both (the module assertion below is what
+      # catches a key declared in both). Each map's own shape still varies
+      # by format (esde-xml's `{name: {type, value}}`, ini's `{section:
+      # {key: value}}`, retroarch's flat `{key: value}}`) and prepare, not
+      # this module, is what enforces that shape - `anything` here is
+      # honest about the limit of what Nix can usefully check.
       type = lib.types.attrsOf (
         lib.types.submodule {
           options = {
@@ -236,10 +317,24 @@ in
               ];
               description = "The emubox-prepare editor this file's keys are written through.";
             };
-            keys = lib.mkOption {
+            enforce = lib.mkOption {
               type = lib.types.attrsOf lib.types.anything;
               default = { };
-              description = "The keys this file owns, shaped per `format` (see emubox-prepare).";
+              description = ''
+                The keys corrected back to this configuration's value at
+                every launch, whether missing or drifted, shaped per
+                `format` (see emubox-prepare).
+              '';
+            };
+            seed = lib.mkOption {
+              type = lib.types.attrsOf lib.types.anything;
+              default = { };
+              description = ''
+                The keys written only when no assignment exists yet, and
+                never corrected, swept, or removed afterward - a preference
+                a player changes in the frontend's own menus stays changed,
+                shaped per `format` (see emubox-prepare).
+              '';
             };
           };
         }
@@ -269,8 +364,9 @@ in
       # `emubox-prepare` at boot, ending the session at a greeter - the
       # same class of failure `ownedFiles`'s own comment gives as the
       # reason for its submodule. `keys` inside each target stays
-      # `attrsOf anything`, mirroring `ownedFiles.keys` for the same
-      # reason that option gives: the shape already varies by encoding
+      # `attrsOf anything`, mirroring `ownedFiles.enforce`/`ownedFiles.seed`
+      # for the same reason those options give: the shape already varies by
+      # encoding
       # (retroarch's flat keys carry no `section`; every ini-backed
       # emulator's do; duckstation's carries an extra `login_timestamp`
       # the others don't), and `emubox-prepare`, not this module, is what
@@ -426,23 +522,48 @@ in
   };
 
   config = {
+    assertions = [
+      {
+        assertion = ownedFileTierOverlaps == [ ];
+        message = ''
+          emubox.kiosk.ownedFiles declares the same key under both enforce
+          and seed - a setting belongs to exactly one tier:
+          ${lib.concatStringsSep "\n" ownedFileTierOverlaps}
+        '';
+      }
+      {
+        assertion = raTargetSeedOverlaps == [ ];
+        message = ''
+          A RetroAchievements target names a key its own file lists under
+          seed, or a file this module never declared:
+          ${lib.concatStringsSep "\n" raTargetSeedOverlaps}
+        '';
+      }
+    ];
+
     emubox.kiosk.ownedFiles."settings/es_settings.xml" = {
       format = "esde-xml";
-      keys = {
+      enforce = {
         # The restriction itself, reasserted before every launch: an admin
         # who unlocked the full menu last time gets kiosk mode this time.
         UIMode = esdeString "kiosk";
         UIMode_passkey = esdeString cfg.passkey;
         ROMDirectory = esdeString "/data/roms";
         MediaDirectory = esdeString "/data/media";
-        Theme = esdeString "linear-es-de";
-        ApplicationLanguage = esdeString "en_US";
         # Makes the QUIT entry open the patched menu (pkgs/es-de) rather
         # than a bare "really quit?" box.
         ShowQuitMenu = {
           type = "bool";
           value = "true";
         };
+      };
+      # Written once, on a fresh box with no prior assignment, and never
+      # corrected afterward: an admin who picks a different theme or
+      # language in ES-DE's own menus keeps that choice across a reboot,
+      # which enforcing either value would undo.
+      seed = {
+        Theme = esdeString "linear-es-de";
+        ApplicationLanguage = esdeString "en_US";
       };
     };
 

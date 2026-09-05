@@ -125,7 +125,7 @@ let
     let
       got =
         if owned ? ${e.file} then
-          e.get owned.${e.file}.keys
+          e.get owned.${e.file}.enforce
         else
           throw "tests/retroachievements-disabled.nix: ${e.name}'s file ${e.file} is not in emubox.kiosk.ownedFiles at all with RetroAchievements disabled";
     in

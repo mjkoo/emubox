@@ -230,6 +230,10 @@
               inherit self;
               pkgs = hostPkgs;
             };
+            # Spike probe for the controllers design pass; deleted with its
+            # branch. Prints what a node can observe about Bluetooth adapters,
+            # RuntimeMaxSec failure semantics and polkit, rather than asserting.
+            spike-probe = hostPkgs.testers.runNixOSTest (import ./tests/spike-probe.nix { });
             # No test secret value in any store path of the test closure.
             closure-no-secrets = import ./tests/closure-no-secrets.nix {
               pkgs = testHost.pkgs;

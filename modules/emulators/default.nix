@@ -8,8 +8,8 @@
 #
 # 1. Paths and packages. Each emulator's own config file path, verified
 #    against that emulator's source at the pinned revision, bound exactly
-#    once so no two call sites can drift apart; the RetroArch build and the
-#    cores directory that follows from it.
+#    once so no two call sites can drift apart; the RetroArch build, wrapped
+#    with the settings it needs delivered before every launch.
 # 2. Frontend overrides. Every system whose assigned emulator
 #    differs from ES-DE's bundled default, copied verbatim from the pinned
 #    upstream `es_systems.xml` with only the command order rewritten, and
@@ -114,15 +114,42 @@ let
   # proves only that the module agrees with itself.
   biosDirectory = "/data/bios";
 
-  # The flake's own cores bundle - the one source `libretro_directory`
-  # below is allowed to name (spec: "the flake's packaged cores and no
-  # other source"). Every `libretro-*` core derivation installs its .so
-  # into `$out/lib/retroarch/cores` by default (mkLibretroCore.nix); with
-  # no cores of its own, `symlinkJoin` folds every core named here plus
-  # retroarch-bare into one `$out`, so this literal subpath is where all of
-  # them land together - not a path this module invents.
-  retroarchWithCores = pkgs.retroarch.withCores (
-    cores: with cores; [
+  # RetroArch's own launch-time settings, delivered as a flake-owned append
+  # file every launch passes ahead of `retroarch.cfg` itself
+  # (`--appendconfig`, retroarch-bare's own wrapper.nix). Only the settings
+  # that must win over whatever a player or a prior session left in
+  # `retroarch.cfg` live here; everything a player is meant to keep tuning
+  # session to session - the menu driver, the hotkeys - stays a seeded key
+  # in `ownedFiles` below instead, written once and never overwritten by a
+  # later launch. Nor do `savefile_directory`/`savestate_directory` move
+  # here even though they are equally static: the saves capability's route
+  # table needs each one to remain a parsed, owned `retroarch.cfg` key so
+  # it can order migration before the value is written, and an
+  # append-config entry is delivered before `emubox-prepare` ever parses
+  # the file at all - so those two stay put in `ownedFiles` below.
+  #
+  # `libretro_directory` is pinned to the literal
+  # `/run/current-system/sw/lib/retroarch/cores`, not this build's own
+  # `$out/lib/retroarch/cores`: the file these settings render into is
+  # itself a build input of this same derivation (retroarch-bare's
+  # `wrapper.nix` renders it with `runCommand` and appends it via
+  # `makeBinaryWrapper`), so a value naming this derivation's own output
+  # would make the derivation depend on its own output, and evaluation
+  # would fail with infinite recursion. The literal still resolves through
+  # `environment.systemPackages` below to this build and no other source -
+  # every `libretro-*` core derivation installs its .so into
+  # `$out/lib/retroarch/cores` by default (mkLibretroCore.nix), and with no
+  # cores of its own, `symlinkJoin` folds every core named here plus
+  # retroarch-bare into one `$out`, so that subpath is where all of them
+  # land together. It is also the exact path ES-DE's bundled find rules
+  # resolve `%CORE_RETROARCH%` against (see the frontend-overrides comment
+  # below), and the wrapper passes `-L <this build's own $out>/lib/retroarch/cores`
+  # on every launch regardless of what `libretro_directory` names - so
+  # RetroArch always loads its cores from its own output, and the literal
+  # here only ever has to satisfy ES-DE's placeholder resolution, never the
+  # wrapper's own `-L` flag.
+  retroarchWithCores = pkgs.wrapRetroArch {
+    cores = with pkgs.libretro; [
       stella
       prosystem
       handy
@@ -149,9 +176,61 @@ let
       bluemsx
       vecx
       freeintv
-    ]
-  );
-  coresDirectory = "${retroarchWithCores}/lib/retroarch/cores";
+    ];
+    settings = {
+      video_fullscreen = "true";
+      libretro_directory = "/run/current-system/sw/lib/retroarch/cores";
+      # The literal "default" is magic in RetroArch's own parser and
+      # gets cleared back to empty (configuration.c:4346-4347) - never
+      # spell the BIOS directory that way.
+      system_directory = biosDirectory;
+      autosave_interval = "30";
+      # Both entries a family could otherwise use to pull unvetted
+      # cores or content onto the box over the network - the "Online
+      # Updater" submenu and the separate top-level "Core Downloader"
+      # shortcut.
+      menu_show_online_updater = "false";
+      menu_show_core_updater = "false";
+      # The gamepad-combo counterparts, device-independent (no `_btn`
+      # binding needed). Both keys are plain `SETTING_UINT`s against
+      # RetroArch's `enum input_combo_type` (configuration.c:2558,2560),
+      # whose full membership, read at the pinned v1.22.2 source
+      # (`input/input_defines.h:211-225`), is: `NONE`=0,
+      # `DOWN_Y_L_R`=1, `L3_R3`=2, `L1_R1_START_SELECT`=3,
+      # `START_SELECT`=4, `L3_R`=5, `L_R`=6, `HOLD_START`=7,
+      # `HOLD_SELECT`=8, `DOWN_SELECT`=9, `L2_R2`=10, `LAST`=11.
+      # The desktop build's own default for both is `INPUT_COMBO_NONE`
+      # (config.def.h:939,942) - with nothing pinned here a player who
+      # entered a core would have no controller-only way back to the
+      # frontend, which is exactly the gap a quit combo exists to close.
+      #
+      # The two values must differ, and not merely for tidiness.
+      # `runloop.c` evaluates them independently against the same frame's
+      # button bits: the menu combo sets `RARCH_MENU_TOGGLE`
+      # (runloop.c:5648-5653) and the quit combo sets `trig_quit_key`
+      # (runloop.c:5889-5895) with no exclusion between them, and the
+      # quit block runs first (line 5880 vs. the menu-toggle hotkey's
+      # own check at line 6003). Giving both keys `4` therefore made
+      # Start+Select quit and left the menu combo dead - one knob doing
+      # nothing while looking configured.
+      #
+      # Menu toggle is `L3_R3` = 2: the two stick clicks share no button
+      # with Start+Select, so no single press can satisfy both bindings
+      # and the collision cannot come back. That rules out the three
+      # values that do share one (`L1_R1_START_SELECT`=3 is a superset
+      # of the quit combo, `HOLD_START`=7 and `HOLD_SELECT`=8 each hold
+      # one of its two buttons), and among the remaining disjoint ones
+      # `L_R`=6 and `L2_R2`=10 are shoulder pairs games press constantly
+      # and `DOWN_Y_L_R`=1 needs four buttons at once; L3+R3 is both the
+      # least likely to fire mid-game and RetroArch's own default menu
+      # combo on the console platforms that have two sticks
+      # (config.def.h:930-931). It does need a pad with clickable
+      # sticks; a pad without them still reaches the frontend through
+      # the quit combo, which is the route the design actually requires.
+      input_menu_toggle_gamepad_combo = "2";
+      input_quit_gamepad_combo = "4";
+    };
+  };
 
   # ---------------------------------------------------------------------
   # Frontend overrides: every system whose assigned emulator
@@ -990,62 +1069,16 @@ in
     emubox.kiosk.ownedFiles = lib.recursiveUpdate {
       "${retroarchConfigFile}" = {
         format = "retroarch";
+        # Everything else this box pins for RetroArch is delivered ahead of
+        # this file instead, as `retroarchWithCores`'s own append-config
+        # settings above: those are launch-time values with no dependency
+        # on parsing or migration ordering. These two survive as ordinary
+        # owned keys because the saves capability's route table needs them
+        # to remain parsed, owned `retroarch.cfg` keys, so it can order
+        # migration before `emubox-prepare` writes either value.
         enforce = {
-          video_fullscreen = "true";
-          libretro_directory = coresDirectory;
-          # The literal "default" is magic in RetroArch's own parser and
-          # gets cleared back to empty (configuration.c:4346-4347) - never
-          # spell the BIOS directory that way.
-          system_directory = biosDirectory;
-          # The save-route declaration owns these destinations. Migration is
-          # ordered before emubox-prepare writes this file at kiosk startup.
           savefile_directory = "/data/saves/retroarch/saves";
           savestate_directory = "/data/saves/retroarch/states";
-          autosave_interval = "30";
-          # Both entries a family could otherwise use to pull unvetted
-          # cores or content onto the box over the network - the "Online
-          # Updater" submenu and the separate top-level "Core Downloader"
-          # shortcut.
-          menu_show_online_updater = "false";
-          menu_show_core_updater = "false";
-          # The gamepad-combo counterparts, device-independent (no `_btn`
-          # binding needed). Both keys are plain `SETTING_UINT`s against
-          # RetroArch's `enum input_combo_type` (configuration.c:2558,2560),
-          # whose full membership, read at the pinned v1.22.2 source
-          # (`input/input_defines.h:211-225`), is: `NONE`=0,
-          # `DOWN_Y_L_R`=1, `L3_R3`=2, `L1_R1_START_SELECT`=3,
-          # `START_SELECT`=4, `L3_R`=5, `L_R`=6, `HOLD_START`=7,
-          # `HOLD_SELECT`=8, `DOWN_SELECT`=9, `L2_R2`=10, `LAST`=11.
-          # The desktop build's own default for both is `INPUT_COMBO_NONE`
-          # (config.def.h:939,942) - with nothing pinned here a player who
-          # entered a core would have no controller-only way back to the
-          # frontend, which is exactly the gap a quit combo exists to close.
-          #
-          # The two values must differ, and not merely for tidiness.
-          # `runloop.c` evaluates them independently against the same frame's
-          # button bits: the menu combo sets `RARCH_MENU_TOGGLE`
-          # (runloop.c:5648-5653) and the quit combo sets `trig_quit_key`
-          # (runloop.c:5889-5895) with no exclusion between them, and the
-          # quit block runs first (line 5880 vs. the menu-toggle hotkey's
-          # own check at line 6003). Giving both keys `4` therefore made
-          # Start+Select quit and left the menu combo dead - one knob doing
-          # nothing while looking configured.
-          #
-          # Menu toggle is `L3_R3` = 2: the two stick clicks share no button
-          # with Start+Select, so no single press can satisfy both bindings
-          # and the collision cannot come back. That rules out the three
-          # values that do share one (`L1_R1_START_SELECT`=3 is a superset
-          # of the quit combo, `HOLD_START`=7 and `HOLD_SELECT`=8 each hold
-          # one of its two buttons), and among the remaining disjoint ones
-          # `L_R`=6 and `L2_R2`=10 are shoulder pairs games press constantly
-          # and `DOWN_Y_L_R`=1 needs four buttons at once; L3+R3 is both the
-          # least likely to fire mid-game and RetroArch's own default menu
-          # combo on the console platforms that have two sticks
-          # (config.def.h:930-931). It does need a pad with clickable
-          # sticks; a pad without them still reaches the frontend through
-          # the quit combo, which is the route the design actually requires.
-          input_menu_toggle_gamepad_combo = "2";
-          input_quit_gamepad_combo = "4";
         };
         # Written once and left alone afterward: a player who rebinds a menu
         # driver or a hotkey through RetroArch's own settings keeps that

@@ -277,10 +277,31 @@
 
 ## 5. Evidence
 
-- [ ] 5.1 Record the full local gate at the final revision:
+- [x] 5.1 Record the full local gate at the final revision:
       `just check-all` exit 0 and the emubox-prepare check-phase
       derivation building on aarch64-darwin and x86_64-linux, with the
       commands and store paths recorded next to this box.
+
+      Recorded at revision d5278c9, clean tree:
+
+      - `just check-all` -> exit 0 (fmt-check, flake check, the five
+        evals, actionlint, zizmor, install-guard test).
+      - `nix build .#checks.aarch64-darwin.emubox-prepare` ->
+        `/nix/store/vy5dh99kjciiw75ra229jv9pmrpgzwmi-emubox-prepare-0.1.0`
+      - `nix build .#checks.x86_64-linux.emubox-prepare` ->
+        `/nix/store/xbd4zs02d05dbfswrsnkyxk9c16ki1ik-emubox-prepare-0.1.0`
+
+      The check phase of that derivation is what runs `ruff check`,
+      `ruff format --check`, `ty check` and `pytest`, so building it on
+      both systems is the unit gate on both.
+
+      Two checks that need the x86_64-linux builder were also built green
+      at this revision, neither needing KVM:
+
+      - `nix build .#checks.x86_64-linux.retroarch-settings` -> exit 0,
+        `retroarch append-config settings verified at
+        /nix/store/vnrrm15vbgxb0hll3fy9yqxxfhxm8wy1-declarative-retroarch.cfg`
+      - `nix build .#checks.aarch64-darwin.owned-key-tiers` -> exit 0.
 - [ ] 5.2 Record a green CI run including the kiosk VM test at the
       final revision, with the run URL recorded next to this box.
       Blocked on a push, which only the user may perform.

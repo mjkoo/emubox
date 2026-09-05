@@ -8,7 +8,13 @@ reduced to one entry if repeated. A **seeded** setting is written only
 when the settings file carries no entry for it; once an entry exists,
 whatever value it holds - the flake's default, one chosen in the
 frontend's menus, or empty - it SHALL be left untouched: not corrected,
-not reduced, not removed. Both tiers together are the owned settings.
+not reduced, not removed. Both tiers together are the owned settings. A
+setting belongs to exactly one tier: a declaration that places the same
+setting in both tiers is a configuration error and SHALL be refused when
+the rendered declaration is validated, before this system contacts
+RetroAchievements for its login and before it touches any file,
+credential files included - preparation fails and the frontend is not
+launched, rather than one tier silently winning.
 
 Before every launch of the frontend the system SHALL ensure the
 frontend's settings file exists and carries the enforced values: kiosk UI
@@ -59,6 +65,16 @@ its entries, repeats included.
   file carries no entry for a seeded setting
 - **THEN** the file carries the flake's default for it before the
   frontend launches
+
+#### Scenario: A setting declared in both tiers
+- **WHEN** the flake's declaration, as rendered for preparation, names
+  one frontend setting under both the enforced and the seeded tier, and
+  the frontend is about to launch
+- **THEN** preparation fails while the rendered declaration is being
+  validated, before this system contacts RetroAchievements for its login
+  and before it touches any file, the settings file and credential files
+  included, reporting the file and the setting, and the frontend is not
+  launched
 
 #### Scenario: Owned key appears more than once
 - **WHEN** the frontend is about to launch and the settings file carries

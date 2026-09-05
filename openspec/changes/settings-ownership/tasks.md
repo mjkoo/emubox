@@ -302,6 +302,14 @@
         `retroarch append-config settings verified at
         /nix/store/vnrrm15vbgxb0hll3fy9yqxxfhxm8wy1-declarative-retroarch.cfg`
       - `nix build .#checks.aarch64-darwin.owned-key-tiers` -> exit 0.
+
+      Re-run at 9c944d3, the head of the branch after verification landed
+      a test fix (`tests/kiosk.nix` pins seeded defaults by value against
+      the rendered contract) and a README rewrite: `just check-all` ->
+      exit 0 again. `pkgs/emubox-prepare` is untouched since d5278c9, so
+      the two check-phase builds above still stand as recorded; only
+      `modules/emulators/default.nix` comments changed, which leaves every
+      derivation path identical.
 - [x] 5.2 Record a green CI run including the kiosk VM test at the
       final revision, with the run URL recorded next to this box.
       Blocked on a push, which only the user may perform.
@@ -331,3 +339,13 @@
       `retroarch-settings`, the latter reporting
       `retroarch append-config settings verified at
       /nix/store/vnrrm15vbgxb0hll3fy9yqxxfhxm8wy1-declarative-retroarch.cfg`.
+
+      Verification then landed a test fix at 9c944d3 that changes this
+      test's script - seeded defaults are now pinned by value against the
+      rendered contract, not by presence - so the kiosk derivation moved
+      from `f3l6dcm2japzqq5sm4vsppqizmbwbvkw` to
+      `n0jqd5lnvq2jlvvz630px045d1gcd3m1` and the run above no longer
+      covers it. The new assertion was checked locally against the
+      rendered contract (all ten seeded pins match) and the rendered
+      script parses, but the VM test itself needs KVM: record the run at
+      the pushed head here before archiving.

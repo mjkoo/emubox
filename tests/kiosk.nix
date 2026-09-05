@@ -1028,12 +1028,13 @@ assert lib.assertMsg
           assert got["UIMode"] == ("string", "kiosk"), got["UIMode"]
 
       # PINNED_OWNED_KEYS_ENFORCE and PINNED_OWNED_KEYS_SEED. The emulators
-      # spec's headline requirement - the owned values "SHALL pin at least"
-      # the core directory, `/data/bios`, the 30 s autosave interval,
+      # spec's headline requirement - the enforced values "SHALL pin at
+      # least" the core directory, `/data/bios`, the 30 s autosave interval,
       # fullscreen, the two online/core-download menu entries disabled and
-      # the uniform hotkey set for RetroArch, and fullscreen plus each
-      # standalone's own performance choice for every standalone - was
-      # unasserted by anything before this: the ES-DE settings file above
+      # the two gamepad combos for RetroArch, and fullscreen for every
+      # standalone, with the seeded defaults holding RetroArch's menu skin
+      # and keyboard hotkeys and each standalone's own performance choice -
+      # was unasserted by anything before this: the ES-DE settings file above
       # had its own pin-then-walk, but it was never extended to the ~150
       # keys `modules/emulators` owns across RetroArch and five
       # standalones. A literal, hand-typed subset here, not the loop's own
@@ -1043,8 +1044,10 @@ assert lib.assertMsg
       # above already applies). `None` in place of a section name is
       # RetroArch's own flat, sectionless format (`ini_value`'s own
       # convention above). Split in two because the two tiers are checked
-      # differently below: an enforced key's value is asserted, a seeded
-      # key's presence is.
+      # differently against DISK below: an enforced key's value is asserted
+      # there, a seeded key's presence is, since a seeded value on disk is
+      # whatever a player last chose. Against the rendered contract, which
+      # is what `check_pins` reads, both tiers are checked by value.
       #
       # A later review round found this table guarded key PRESENCE only -
       # `names - actual.keys()` - never the value sitting behind a present
@@ -1181,9 +1184,14 @@ assert lib.assertMsg
                               raise AssertionError(
                                   f"{path} [{section}] ({tier}): pinned key dropped from the module: {name}"
                               )
-                          if tier == "seed":
-                              continue  # never corrected, so only its presence is pinned
-                          assert got == expected, f"{path} [{section}]: {name}: {got!r} != {expected!r}"
+                          # Both tiers by value, because this walk reads the
+                          # rendered contract rather than the disk: what the
+                          # module declares is the same on every boot, so a
+                          # seeded default that drifted here is a module edit,
+                          # not a player's choice. Presence-only belongs to the
+                          # on-disk walk below, and stays there. The ES-DE pin
+                          # above checks its own seeded pair the same way.
+                          assert got == expected, f"{path} [{section}] ({tier}): {name}: {got!r} != {expected!r}"
 
           check_pins(PINNED_OWNED_KEYS_ENFORCE, "enforce")
           check_pins(PINNED_OWNED_KEYS_SEED, "seed")

@@ -118,14 +118,31 @@ ES-DE's own `uuddlrlrba` until the host sets another. Kiosk mode is
 reasserted before every launch, so unlocking the full menu once does not
 leave the box unlocked after the next restart.
 
-`emubox-prepare` is what asserts it. The flake owns exactly these ES-DE
-settings - the UI mode, the unlock sequence, the ROM and media directories
-under `/data`, the `linear-es-de` theme, the `en_US` language and the quit
-menu - and leaves every other setting as the frontend last wrote it, so a
+`emubox-prepare` is what asserts it, and it owns a setting in one of two
+tiers. Enforced settings are written if missing and corrected before
+every launch: the UI mode, the unlock sequence, the ROM and media
+directories under `/data`, and the quit menu. Seeded settings are
+written only when the file has no entry for them and then left alone
+forever: the `linear-es-de` theme and the `en_US` language, so an admin who
+picks another theme or language in ES-DE's own menus keeps it. Every
+setting the flake does not own stays as the frontend last wrote it, so a
 preference changed in ES-DE's own menus survives a reboot. A settings file
 that cannot be read (truncated by a frontend killed mid-write, say) is
 replaced rather than treated as a failure, because the alternative is the
-family staring at a greeter.
+family staring at a greeter - and that replacement is the one case where a
+seeded setting returns to the flake's default.
+
+The same two tiers govern the emulators' own configuration files.
+Fullscreen, the BIOS and core directories, the first-run wizards and the
+two controller button combos that open the menu and quit a game - the only
+controller-only routes out of a running game - are enforced. RetroArch's
+menu skin and its keyboard hotkeys, and the per-emulator performance
+choices (Wii dual core off in Dolphin, native internal resolution in PCSX2,
+geometry correction and upscaling in DuckStation), are seeded: tuning a
+player may change in an emulator's own menus and keep. RetroArch's eight
+static enforced settings reach it through a read-only file the flake's
+wrapper passes at every launch rather than through `retroarch.cfg`, so a
+stale copy there loses without being edited.
 
 `emubox.kiosk.customSystems` takes the complete contents of an ES-DE
 custom `es_systems.xml`, `<systemList>` wrapper included, written verbatim
@@ -481,9 +498,11 @@ this list stays the one place to read what is unproven.
   the same as any emulator accepting one. DuckStation is the one to check
   first: its token is the only one this project encrypts itself, so it is
   the only one a future DuckStation bump could silently invalidate.
-- Real performance per system. The VM asserts that PCSX2 is set to native
-  internal resolution and DuckStation to PGXP with upscaling, never that
-  either holds frame rate on this box's iGPU. A system that disappoints
+- Real performance per system. The VM asserts that the flake declares
+  PCSX2's native internal resolution and DuckStation's PGXP with upscaling
+  and that both keys reach the files on disk - both are seeded, so a player
+  who changes either keeps the change - never that either holds frame rate
+  on this box's iGPU. A system that disappoints
   here is settled by changing its values in `modules/emulators`, not by
   anything CI can catch first.
 - E12 off-site backup acceptance, recorded below after one normal real-B2

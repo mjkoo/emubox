@@ -150,7 +150,7 @@
 
 ## 3. RetroArch launch-time delivery
 
-- [ ] 3.1 Move the RetroArch package call from
+- [x] 3.1 Move the RetroArch package call from
       `pkgs.retroarch.withCores` to
       `pkgs.wrapRetroArch { cores; settings; }` with the eight static
       enforced settings as the settings attrset: `video_fullscreen`,
@@ -167,7 +167,7 @@
       finding both save directories under the RetroArch file's
       `enforce`) and the RetroArch entry in the rendered contract
       carrying none of the eight keys.
-- [ ] 3.2 Add a flake check as an entry of `flake.nix`'s `hostOnly` set,
+- [x] 3.2 Add a flake check as an entry of `flake.nix`'s `hostOnly` set,
       built with `hostPkgs` for x86_64-linux only beside the `kiosk` and
       `session` checks (not `perSystem`: RetroArch is marked broken on
       Darwin, so a per-system placement would fail `nix flake check`

@@ -344,12 +344,36 @@
       `retroarch append-config settings verified at
       /nix/store/vnrrm15vbgxb0hll3fy9yqxxfhxm8wy1-declarative-retroarch.cfg`.
 
-      Verification then landed a test fix at 9c944d3 that changes this
-      test's script - seeded defaults are now pinned by value against the
-      rendered contract, not by presence - so the kiosk derivation moved
-      from `f3l6dcm2japzqq5sm4vsppqizmbwbvkw` to
-      `n0jqd5lnvq2jlvvz630px045d1gcd3m1` and the run above no longer
-      covers it. The new assertion was checked locally against the
-      rendered contract (all ten seeded pins match) and the rendered
-      script parses, but the VM test itself needs KVM: record the run at
-      the pushed head here before archiving.
+      Verification then landed two edits to this test's script - 9c944d3,
+      which pins seeded defaults by value against the rendered contract
+      rather than by presence, and c6bf84b, which corrects the comment
+      describing where the eight launch-delivered keys are checked - so
+      the kiosk derivation moved twice, from
+      `f3l6dcm2japzqq5sm4vsppqizmbwbvkw` through
+      `n0jqd5lnvq2jlvvz630px045d1gcd3m1` to
+      `whw5dw607ga7jddvpgj15pa08vy2gjvn`, and the run above covers none
+      of them.
+
+      The run at the current head supersedes it:
+
+      https://github.com/mjkoo/emubox/actions/runs/33951289446 -
+      conclusion success, at revision c6bf84b, the head of this branch.
+      Its `nix flake check -L` step built
+      `/nix/store/whw5dw607ga7jddvpgj15pa08vy2gjvn-vm-test-run-emubox-kiosk.drv`,
+      the exact derivation the local eval at this revision produces, on a
+      runner with `/dev/kvm` opened. All three relevant subtests ran and
+      finished:
+
+      - "A seeded setting edited while the frontend is stopped survives
+        the next boot" (0.19s)
+      - "A reboot from the greeter restores the kiosk" (34.01s)
+      - "Every BIOS-free core family with a licensed ROM runs headless"
+        (198.42s), which carries the append-config precedence proof
+
+      The same step rebuilt `owned-key-tiers` and `retroarch-settings`,
+      the latter reporting the same
+      `/nix/store/vnrrm15vbgxb0hll3fy9yqxxfhxm8wy1-declarative-retroarch.cfg`
+      as before - c6bf84b touches only a comment in `tests/kiosk.nix`, so
+      no other derivation moved. `just check-all` was re-run at this
+      revision and exits 0; `pkgs/emubox-prepare` is still untouched
+      since d5278c9, so 5.1's two check-phase builds stand as recorded.

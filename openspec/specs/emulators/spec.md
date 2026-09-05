@@ -2,8 +2,9 @@
 
 Which emulator serves each game system, the launch configuration the
 flake owns in each emulator so every game starts full screen with the
-right BIOS and uniform hotkeys, the frontend's per-system emulator
-overrides, and the BIOS directory with its checking tool.
+right BIOS and a controller-only route back to the frontend, the
+frontend's per-system emulator overrides, and the BIOS directory with
+its checking tool.
 
 ## Requirements
 ### Requirement: Each system launches with its assigned emulator

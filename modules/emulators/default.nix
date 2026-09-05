@@ -1091,11 +1091,17 @@ in
         # choice across a reboot, which enforcing any of these would undo.
         seed = {
           menu_driver = "ozone";
-          # The uniform hotkey set, uniform across every emulator on purpose.
-          # These are *keyboard* key-name strings - RetroArch's separate
-          # per-pad `_btn` keys are written by autoconfig per controller,
-          # which is controller work still to come, so none appears here
-          # on purpose.
+          # One set of actions - menu, save, load, fast-forward,
+          # screenshot - bound the same way everywhere RetroArch runs,
+          # which is every core-based system but none of the standalones:
+          # they declare no hotkey of their own and keep their upstream
+          # defaults. These are *keyboard* key-name strings, and a
+          # keyboard is not part of the box, so they are a first-boot
+          # default rather than a guarantee; the controller-only routes
+          # out of a running game are the two gamepad combos above, which
+          # stay enforced. RetroArch's separate per-pad `_btn` keys are
+          # written by autoconfig per controller, which is controller
+          # work still to come, so none appears here on purpose.
           input_menu_toggle = "f1";
           input_save_state = "f2";
           input_load_state = "f4";

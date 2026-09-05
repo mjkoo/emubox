@@ -1,6 +1,6 @@
 ## Why
 
-Every key the flake owns in the nine emulator and frontend configuration
+Every key the flake owns in the ten emulator and frontend configuration
 files is enforced before every launch: written if missing, corrected if it
 drifted. That is the right guarantee for the settings that make the box a
 console (fullscreen, directories, kiosk mode, credentials), but it is applied
@@ -26,7 +26,7 @@ of the flake's own settings.
   assignment, removable. **Seeded** is written only when the key is absent
   from the file; once present, whatever value it holds, the flake stops
   having an opinion - never corrected, never swept, never removed.
-- Twelve keys become seeded (eight settings, the five keyboard hotkeys
+- Twelve keys become seeded (seven settings, the five keyboard hotkeys
   counted one by one): ES-DE `Theme` and `ApplicationLanguage`; RetroArch
   `menu_driver`, `input_menu_toggle`, `input_save_state`,
   `input_load_state`, `input_toggle_fast_forward` and `input_screenshot`;

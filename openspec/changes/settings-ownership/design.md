@@ -4,7 +4,7 @@ See proposal.md - Why for motivation. Current state, verified against the
 tree at the branch point:
 
 - `emubox-prepare` runs before every launch of the frontend and asserts the
-  keys the flake owns in nine configuration files. The file-entry submodule
+  keys the flake owns in ten configuration files. The file-entry submodule
   is `format` plus `keys` (`modules/kiosk/default.nix:229-248`), the JSON
   contract carries one key map per file, and each editor writes a missing
   key and corrects a drifted one (`set_esde_settings` at
@@ -46,10 +46,10 @@ tree at the branch point:
   keys, orders migration before each key is written, and requires parsed
   owned-key evidence; `tests/saves.nix` asserts both keys in the RetroArch
   file's owned map at evaluation.
-- The kiosk VM test's owned-key subtests read each file's `keys` map and
-  pin the RetroArch keys literally (`tests/kiosk.nix:966-985`,
-  `1071-1096`, `1139-1169`), and its headless RetroArch launches pass
-  their own `--appendconfig` flag (`tests/kiosk.nix:1719-1731`).
+- The kiosk VM test's owned-key subtests read each file's `keys` map,
+  pin the ES-DE and RetroArch keys literally in `tests/kiosk.nix`, and
+  walk them against the file on disk; its headless RetroArch launches
+  pass their own `--appendconfig` flag.
 
 ## Goals / Non-Goals
 
@@ -65,7 +65,7 @@ tree at the branch point:
 
 **Non-Goals:**
 
-- Removing `emubox-prepare`'s parse-and-merge editors. Three of the nine
+- Removing `emubox-prepare`'s parse-and-merge editors. Three of the ten
   files cannot be delivered any other way (decision 3), so the machinery
   stays.
 - Moving PPSSPP, Dolphin, ScummVM or PCSX2 to their override mechanisms.
@@ -372,7 +372,7 @@ The file-entry submodule gains a second key map. Rename `keys` to
 `enforce` and add `seed`, rather than keeping `keys` and bolting on
 `seedKeys` (rejected: asymmetric, and a reader of a declaration cannot see
 the tier without knowing which attribute is the legacy one). It touches
-all nine file declarations, purely as data, and every reader of the
+all ten file declarations, purely as data, and every reader of the
 per-file `keys` map: `raDisabledFiles` in `modules/emulators/default.nix`
 writes its two switches into `enforce`, `tests/retroachievements-disabled.nix`
 reads `enforce`, `tests/saves.nix` reads `enforce` where it read `keys`

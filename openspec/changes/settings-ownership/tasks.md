@@ -302,6 +302,26 @@
         `retroarch append-config settings verified at
         /nix/store/vnrrm15vbgxb0hll3fy9yqxxfhxm8wy1-declarative-retroarch.cfg`
       - `nix build .#checks.aarch64-darwin.owned-key-tiers` -> exit 0.
-- [ ] 5.2 Record a green CI run including the kiosk VM test at the
+- [x] 5.2 Record a green CI run including the kiosk VM test at the
       final revision, with the run URL recorded next to this box.
       Blocked on a push, which only the user may perform.
+
+      https://github.com/mjkoo/emubox/actions/runs/33942814847 -
+      conclusion success, on the pull request from this branch.
+
+      That run's `nix flake check -L` step covers the whole
+      x86_64-linux check set on a runner with `/dev/kvm` opened, so it
+      is the first execution of the kiosk VM test anywhere - no local
+      builder exposes KVM. Its three relevant subtests all ran and
+      passed:
+
+      - "A seeded setting edited while the frontend is stopped survives
+        the next boot"
+      - "A reboot from the greeter restores the kiosk"
+      - "Every BIOS-free core family with a licensed ROM runs headless",
+        which carries the append-config precedence proof
+
+      The same step also built `owned-key-tiers` and
+      `retroarch-settings`, the latter reporting
+      `retroarch append-config settings verified at
+      /nix/store/vnrrm15vbgxb0hll3fy9yqxxfhxm8wy1-declarative-retroarch.cfg`.

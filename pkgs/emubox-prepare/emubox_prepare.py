@@ -22,16 +22,45 @@ broken configuration and the session ending at the greeter is the point.
 The owned-values JSON is an object with two keys:
 
     {
-        "files": {"settings/es_settings.xml": {"format": "esde-xml", "keys": {...}}},
+        "files": {
+            "settings/es_settings.xml": {
+                "format": "esde-xml",
+                "enforce": {...},
+                "seed": {...}
+            }
+        },
         "retroachievements": null
     }
 
 `files` maps a settings file to the format of that file and the keys owned
-in it, exactly as the bare map once did on its own. A relative path resolves
-under the appdata root; an absolute one is used as written, which is how
-later epics reach files outside it. The `keys` shape is the editor's:
-`{name: {"type": ..., "value": ...}}` for `esde-xml`, `{section: {key:
-value}}` for `ini`, `{key: value}` for `retroarch`.
+in it. A relative path resolves under the appdata root; an absolute one is
+used as written, which is how later epics reach files outside it. A per-file
+table carries exactly `format`, `enforce` and `seed` - no other field, and no
+alias for either - because a misspelled map (`enforced`, `seedKeys`) beside
+the two correctly-spelled ones would otherwise pass silently and its keys
+would never be written at all.
+
+Both maps share one shape per format: `{name: {"type": ..., "value": ...}}`
+for `esde-xml`, `{section: {key: value}}` for `ini`, `{key: value}` for
+`retroarch`. What differs is when each is written and what happens to it
+afterwards:
+
+- `enforce` is the flake's own opinion. Corrected back to the declared value
+  on drift, swept to one assignment when a key repeats, and removed outright
+  when the value is a removal (see `Removal` below) - on every single launch.
+- `seed` is only ever a starting point: written once, the first launch that
+  finds no assignment of the key anywhere it could belong, and never touched
+  again after that - not corrected, not swept, not removed, no matter what
+  the family changes it to from inside the frontend's own menus. A key
+  present with an empty value is present, and is left alone exactly like a
+  key present with any other value.
+
+One key may never be declared in both maps of the same file: which of the
+two tiers it belongs to has to be a fact about the key, not something that
+depends on which map a reader happens to check first. A RetroAchievements
+target's login key is the one case this arises from a source other than the
+document's own two maps, and it is refused for the identical reason - see
+`_target_validation_error`.
 
 `retroachievements` drives the shared RetroAchievements account. Null -
 or absent - means this whole namespace is skipped: no login is
@@ -337,7 +366,19 @@ REMOVE = Removal()
 
 
 def _without_removals(keys: Mapping[str, str | Removal]) -> dict[str, str]:
-    """The keys that carry a value, for the branches that write a fresh file."""
+    """The keys that carry a string value.
+
+    Two uses, one filter. On the enforce tier this is what the fresh-file
+    branches build from, and its name is about the sentinel it drops: a
+    `Removal` names a key to delete, never one to write. On the seed tier
+    there is no sentinel to drop - a seeded value is never `REMOVE` - but
+    the same call still has to run there, because `ini` and `retroarch`
+    values in either tier can carry a JSON type this program never
+    validates (`_owned_keys_error`'s own docstring records that decision).
+    Applying the identical filter to both tiers is what keeps a wrong-typed
+    seed value quietly unwritten rather than coerced to a string or handed
+    to `_seed_key`'s backstop assert.
+    """
     return {key: value for key, value in keys.items() if isinstance(value, str)}
 
 
@@ -554,18 +595,25 @@ def _parse_esde(path: Path) -> list[ET.Element] | None:
     return list(root)
 
 
-def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool:
+def set_esde_settings(
+    path: Path,
+    enforce: Mapping[str, Mapping[str, str]],
+    seed: Mapping[str, Mapping[str, str]],
+) -> bool:
     """Assert the owned keys in an ES-DE settings file. Returns whether it wrote.
 
     Every element the flake does not own keeps its type, its value and its
-    position; an owned key that is absent is appended, and one that drifted -
-    in value or in element type - is set back to what the flake declares.
+    position; an enforced key that is absent is appended, and one that
+    drifted - in value or in element type - is set back to what the flake
+    declares. A seeded key is appended only the first time no element carries
+    its name at all; once one does, whatever its value, the key is left
+    alone for good - never corrected, never collapsed if it repeats.
 
-    A file with no owned keys at all is left alone, the same rule as the
-    other two editors: see `set_ini_settings` for why that is not merely a
-    shortcut.
+    A file with no owned keys at all - enforced or seeded - is left alone,
+    the same rule as the other two editors: see `set_ini_settings` for why
+    that is not merely a shortcut.
     """
-    if not keys:
+    if not enforce and not seed:
         return False
 
     elements = _parse_esde(path)
@@ -573,20 +621,20 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
     if elements is None:
         elements = []
 
-    # Collapse repeats of an *owned* name to the first element carrying it,
-    # the same invariant the other two editors keep: exactly one assignment
-    # of an owned key survives, holding the flake's value. A dict
-    # comprehension over `elements` used to do this lookup and silently kept
-    # the *last* repeat instead, so the earlier one stayed behind at
+    # Collapse repeats of an *enforced* name to the first element carrying
+    # it, the same invariant the other two editors keep: exactly one
+    # assignment of an enforced key survives, holding the flake's value. A
+    # dict comprehension over `elements` used to do this lookup and silently
+    # kept the *last* repeat instead, so the earlier one stayed behind at
     # whatever it said - the mirror image of the bug the other two editors
-    # had, and worth removing for the same reason. An unowned name that
-    # repeats is left exactly as it is: not this program's to collapse.
+    # had, and worth removing for the same reason. A seeded or unowned name
+    # that repeats is left exactly as it is: not this program's to collapse.
     by_name: dict[str | None, ET.Element] = {}
     superseded: set[int] = set()
     for element in elements:
         name = element.attrib.get("name")
         if name in by_name:
-            if name in keys:
+            if name in enforce:
                 superseded.add(id(element))
             continue
         by_name[name] = element
@@ -594,7 +642,7 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
     if superseded:
         elements = [e for e in elements if id(e) not in superseded]
         changed = True
-    for name, spec in keys.items():
+    for name, spec in enforce.items():
         element = by_name.get(name)
         if element is None:
             element = ET.SubElement(ET.Element(_WRAPPER), spec["type"])
@@ -608,6 +656,19 @@ def set_esde_settings(path: Path, keys: Mapping[str, Mapping[str, str]]) -> bool
             element.tag = spec["type"]
             element.set("value", spec["value"])
             changed = True
+
+    # `by_name` still reflects the file as it was read, before the loop
+    # above appended or corrected anything - which is exactly the question a
+    # seeded key has to ask: did *this file* already carry an assignment of
+    # it, not "does it hold the value after this run has touched it".
+    for name, spec in seed.items():
+        if name in by_name:
+            continue
+        element = ET.SubElement(ET.Element(_WRAPPER), spec["type"])
+        element.set("name", name)
+        element.set("value", spec["value"])
+        elements.append(element)
+        changed = True
 
     if changed:
         _write(path, _render_esde(elements))
@@ -1065,29 +1126,84 @@ def _write_key(document: Document, key: str, value: str, section: str | None) ->
     return changed
 
 
+def _seed_key(document: Document, key: str, value: str, section: str | None) -> bool:
+    """Append a seeded key only where no assignment of it exists at all.
+
+    "Exists" means anywhere `_document_places` would let an enforced key of
+    this section be found - every instance of the declared section, plus the
+    headerless preamble - and it is a presence check only: whatever value an
+    existing assignment holds, even the empty string, it is left exactly as
+    is. Unlike `_write_key` there is no sweep of other copies and no
+    replacement of the survivor: a seeded key is asserted once and never
+    corrected again, so there is nothing here for a later launch to put
+    right.
+
+    A sectioned key whose only assignment sits in the preamble - above the
+    file's first section header - counts as present under this same rule,
+    and so is never additionally seeded into its declared section. That
+    reads like a miss at first glance, but it is the stated contract applied
+    consistently: the preamble is one of the places that belongs to a
+    sectioned key for every other purpose this module has (the enforced
+    sweep and write both cross that boundary too), and a seed check that drew
+    the line differently there would be its own, undocumented rule.
+    """
+    for place in _document_places(document, section):
+        for child in place.children:
+            if isinstance(child, Assignment) and child.key == key:
+                return False
+    # Never reachable with a real document: nothing in this module ever asks
+    # to remove a seeded key (the two validations that keep a
+    # RetroAchievements target's key out of a file's seed map exist for
+    # exactly that reason - see `_target_validation_error` and the per-file
+    # shape check in `main`), and every seed map reaching an editor has
+    # already been filtered to strings the same way `_without_removals`
+    # filters the enforce maps (`set_ini_settings`, `set_retroarch_settings`),
+    # so this is a backstop against a future bug in one of those, not a path
+    # any caller today can reach.
+    assert isinstance(value, str), (
+        f"seed key {key!r} does not carry a string value, which the seed "
+        "tier never accepts"
+    )
+    target = _document_write_target(document, section)
+    target.children.append(_make_assignment(key, value))
+    return True
+
+
 # --- INI with sections ----------------------------------------------------
 
 
 def set_ini_settings(
-    path: Path, sections: Mapping[str, Mapping[str, str | Removal]]
+    path: Path,
+    enforce: Mapping[str, Mapping[str, str | Removal]],
+    seed: Mapping[str, Mapping[str, str]],
 ) -> bool:
     """Assert owned keys in an INI file with sections. Returns whether it wrote.
 
     Every setting the flake does not own keeps its key, its value and its
-    section, and keeps every one of its assignments where it repeats. A key
-    missing from a section it belongs to is appended to that section; a
-    missing section is appended to the file. Presentation the emulator does
-    not read - the spacing around a delimiter, where a line sits inside its
-    section, whether a comment survives an edit to the line it trails - is
-    not part of that promise, and buying it back would mean the line
-    arithmetic this editor was written to stop carrying.
+    section, and keeps every one of its assignments where it repeats. An
+    enforced key missing from a section it belongs to is appended to that
+    section; a missing section is appended to the file. Presentation the
+    emulator does not read - the spacing around a delimiter, where a line
+    sits inside its section, whether a comment survives an edit to the line
+    it trails - is not part of that promise, and buying it back would mean
+    the line arithmetic this editor was written to stop carrying.
 
-    A key whose value is `REMOVE` is deleted from the file instead, with the
-    same properties: everything around it survives, and removing a key that
-    is not there is a no-op that reports no write. Every occurrence of it
-    goes - in every instance of its section, and in the headerless preamble
-    - because that is what `Removal` promises; a same-named key under some
-    other section is left alone.
+    A seeded key is appended the same way, but only the first time no
+    assignment of it exists anywhere in its section's places (see
+    `_seed_key`); once one does, it is left alone for good, drift and
+    repeats included. A seeded value that is not a string is dropped before
+    it ever reaches an editor - `_without_removals` filters both tiers
+    identically - so a wrong-typed seed value is quietly left unwritten
+    exactly as a wrong-typed enforced one already was, never coerced and
+    never a call that reaches `_seed_key`'s own backstop assert.
+
+    An enforced key whose value is `REMOVE` is deleted from the file
+    instead, with the same properties: everything around it survives, and
+    removing a key that is not there is a no-op that reports no write. Every
+    occurrence of it goes - in every instance of its section, and in the
+    headerless preamble - because that is what `Removal` promises; a
+    same-named key under some other section is left alone. A seeded key is
+    never a removal - see `_seed_key`.
 
     A file in which nothing at all is owned is left alone entirely - not
     parsed, not recreated, not mentioned. PCSX2 declares `secrets.ini` with
@@ -1104,41 +1220,60 @@ def set_ini_settings(
     recreation is the only way a removal can be kept against a file no
     parser can see into. See `_holds_something`.
     """
-    sections = {
-        name: _writable(path, keys, ini=True) for name, keys in sections.items()
+    enforce = {name: _writable(path, keys, ini=True) for name, keys in enforce.items()}
+    seed = {
+        name: _without_removals(_writable(path, keys, ini=True))
+        for name, keys in seed.items()
     }
 
     # The same read-back rule `_writable` applies to a key name or value,
     # applied to a section name - dropped here, before the document is even
     # read, rather than inside either write branch below, because both the
-    # edit path and the recreate path build a `SectionNode` from this same
-    # `sections` mapping and neither may ever see a broken name.
-    writable_sections: dict[str, dict[str, str | Removal]] = {}
-    for name, keys in sections.items():
+    # edit path and the recreate path build a `SectionNode` from these same
+    # mappings and neither may ever see a broken name. Both tiers go through
+    # the identical check: a section name is a section name regardless of
+    # which map claims a key inside it.
+    writable_enforce: dict[str, dict[str, str | Removal]] = {}
+    for name, keys in enforce.items():
         if not _header_reads_back(name):
             note(
                 f"{path}: the section {name!r} does not read back as itself;"
                 " not writing it"
             )
             continue
-        writable_sections[name] = keys
-    sections = writable_sections
+        writable_enforce[name] = keys
+    enforce = writable_enforce
 
-    if not any(sections.values()):
+    writable_seed: dict[str, dict[str, str]] = {}
+    for name, keys in seed.items():
+        if not _header_reads_back(name):
+            note(
+                f"{path}: the section {name!r} does not read back as itself;"
+                " not writing it"
+            )
+            continue
+        writable_seed[name] = keys
+    seed = writable_seed
+
+    if not any(enforce.values()) and not any(seed.values()):
         return False
 
     document = _read_document(path, ini=True)
     if document is None:
-        fresh = {section: _without_removals(keys) for section, keys in sections.items()}
-        if not any(fresh.values()) and not _holds_something(path):
-            # Every owned key in this file is a removal and there is
-            # genuinely nothing on disk to remove them from: creating a
-            # file to hold nothing would only be recreated on the next
-            # launch. A file that is present but unparseable does *not*
-            # take this branch (see `_holds_something`): it falls through
-            # to the recreation below, which is what takes the credential
-            # off the disk - and what makes the note about to be printed
-            # true rather than a lie repeated before every launch.
+        fresh = {section: _without_removals(keys) for section, keys in enforce.items()}
+        if (
+            not any(fresh.values())
+            and not any(seed.values())
+            and not _holds_something(path)
+        ):
+            # Every enforced key in this file is a removal, nothing is
+            # seeded, and there is genuinely nothing on disk to remove them
+            # from: creating a file to hold nothing would only be recreated
+            # on the next launch. A file that is present but unparseable
+            # does *not* take this branch (see `_holds_something`): it falls
+            # through to the recreation below, which is what takes the
+            # credential off the disk - and what makes the note about to be
+            # printed true rather than a lie repeated before every launch.
             return False
         # The empty-file note, deferred from the parse helper, which stays
         # silent about emptiness for exactly this reason: it is only worth
@@ -1155,10 +1290,15 @@ def set_ini_settings(
         recreated = Document(
             sections=[SectionNode(raw_header=None, name=None, children=[])]
         )
-        for section, keys in fresh.items():
+        # A recreated file is missing every key, enforced and seeded alike,
+        # so recreation is the one place both tiers are written together -
+        # each section is made once, whichever map names it first.
+        for section in dict.fromkeys([*fresh, *seed]):
             node = _make_section(section)
             recreated.sections.append(node)
-            for key, value in keys.items():
+            for key, value in fresh.get(section, {}).items():
+                node.children.append(_make_assignment(key, value))
+            for key, value in seed.get(section, {}).items():
                 node.children.append(_make_assignment(key, value))
         _write(path, _render_flat(recreated))
         return True
@@ -1169,14 +1309,22 @@ def set_ini_settings(
     # removal is not confined to one section's bounds and a key this pass
     # deletes must not be one the writing pass then finds and compares
     # against.
-    for section, keys in sections.items():
+    for section, keys in enforce.items():
         for key, value in keys.items():
             if isinstance(value, Removal) and _sweep_key(document, key, section):
                 changed = True
 
-    for section, keys in sections.items():
+    for section, keys in enforce.items():
         for key, value in _without_removals(keys).items():
             if _write_key(document, key, value, section):
+                changed = True
+
+    # Seeding runs last and is excluded from every sweep above: a seeded key
+    # is never a removal and never a duplicate this program collapses, so
+    # nothing about it belongs in either of those passes.
+    for section, keys in seed.items():
+        for key, value in keys.items():
+            if _seed_key(document, key, value, section):
                 changed = True
 
     if changed:
@@ -1187,24 +1335,36 @@ def set_ini_settings(
 # --- RetroArch's flat `key = "value"` file --------------------------------
 
 
-def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> bool:
+def set_retroarch_settings(
+    path: Path,
+    enforce: Mapping[str, str | Removal],
+    seed: Mapping[str, str],
+) -> bool:
     """Assert owned keys in RetroArch's flat config. Returns whether it wrote.
 
     Same properties as the INI editor: unowned keys keep their keys and their
-    values, a repeated unowned key keeps every assignment, a missing key is
-    appended, every assignment of a key valued `REMOVE` is deleted, an
-    unreadable file is recreated carrying the owned keys, and a file with no
-    owned keys is left alone. The whole file is one section here, so a
-    repeated owned key repeats outright rather than under a second header.
+    values, a repeated unowned key keeps every assignment, a missing enforced
+    key is appended, every assignment of an enforced key valued `REMOVE` is
+    deleted, an unreadable file is recreated carrying every owned key -
+    enforced and seeded alike - and a file with no owned keys at all is left
+    alone. A seeded key is appended only the first time no assignment of it
+    exists anywhere in the file, and is then left alone for good, drift and
+    repeats included - see `_seed_key`. The whole file is one section here,
+    so a repeated key repeats outright rather than under a second header. A
+    seeded value that is not a string is dropped before it is ever quoted
+    for the file - `_without_removals` filters both tiers identically - so
+    it is left unwritten rather than wrapped in quotes and coerced to
+    `str()`.
     """
-    keys = _writable(path, keys, ini=False)
-    if not keys:
+    enforce = _writable(path, enforce, ini=False)
+    seed = _without_removals(_writable(path, seed, ini=False))
+    if not enforce and not seed:
         return False
 
     document = _read_document(path, ini=False)
     if document is None:
-        fresh = _without_removals(keys)
-        if not fresh and not _holds_something(path):
+        fresh = _without_removals(enforce)
+        if not fresh and not seed and not _holds_something(path):
             # The INI editor's guard, with the same reasoning: absent means
             # write nothing, unparseable means recreate, because only the
             # recreation drops a credential a parser cannot see. Unreachable
@@ -1213,21 +1373,31 @@ def set_retroarch_settings(path: Path, keys: Mapping[str, str | Removal]) -> boo
             # same rule so a later target cannot inherit the bug back.
             return False
         preamble = SectionNode(raw_header=None, name=None, children=[])
+        # A recreated file is missing every key, so both tiers are written
+        # together here, the same as the INI editor's recreate branch.
         for key, value in fresh.items():
-            quoted = f'"{value}"'
-            preamble.children.append(_make_assignment(key, quoted))
+            preamble.children.append(_make_assignment(key, f'"{value}"'))
+        for key, value in seed.items():
+            preamble.children.append(_make_assignment(key, f'"{value}"'))
         _write(path, _render_flat(Document(sections=[preamble])))
         return True
 
     changed = False
     # Removals first and file-wide, the INI editor's rule for the same
     # reasons. `None` for the section because this file has none.
-    for key, value in keys.items():
+    for key, value in enforce.items():
         if isinstance(value, Removal) and _sweep_key(document, key, None):
             changed = True
 
-    for key, value in _without_removals(keys).items():
+    for key, value in _without_removals(enforce).items():
         if _write_key(document, key, f'"{value}"', None):
+            changed = True
+
+    # Seeding runs last, excluded from every sweep above for the same reason
+    # it is in the INI editor: never a removal, never a duplicate this
+    # program collapses.
+    for key, value in seed.items():
+        if _seed_key(document, key, f'"{value}"', None):
             changed = True
 
     if changed:
@@ -1839,6 +2009,14 @@ def _target_validation_error(
                 f"{file_name!r} has format {file_format!r}, which cannot "
                 "carry a retroachievements key"
             )
+        # Whether an entry carries a `section` is validated here as a JSON
+        # entry's shape; the identical fact is re-derived twice more in the
+        # Nix modules that render this document - `raDisabledFiles`'s `off`
+        # helper in modules/emulators/default.nix and
+        # `raTargetSeedOverlaps`'s path construction in
+        # modules/kiosk/default.nix - each into a differently shaped value
+        # of its own. A field added alongside `section`/`key` in a later
+        # encoding has to be taught to all three.
         if file_format == "ini" and "section" not in entry:
             return (
                 f"retroachievements target {name!r}.{key_name}: "
@@ -1848,6 +2026,32 @@ def _target_validation_error(
             return (
                 f"retroachievements target {name!r}.{key_name}: "
                 f"{file_name!r} is a retroarch file and must not carry a 'section'"
+            )
+
+        # `_merge_target_key` writes this key's value into the file's
+        # `enforce` map, so a target that names a key the file already seeds
+        # would enforce and seed the same key - the module-side twin of the
+        # static overlap check `main` runs over the document's own two maps.
+        # Checked here, before the login, because both the plain value the
+        # enabled path would write and the `REMOVE` the disabled path merges
+        # instead are refused by the identical rule: neither may ever reach
+        # a seeded key.
+        seed_map = file_table.get("seed")
+        if file_format == "ini":
+            section_map = (
+                cast("Mapping[str, object]", seed_map).get(str(entry.get("section")))
+                if isinstance(seed_map, dict)
+                else None
+            )
+            if isinstance(section_map, dict) and key_spelling in section_map:
+                return (
+                    f"retroachievements target {name!r}.{key_name}: "
+                    f"{file_name!r} already seeds {entry['section']}.{key_spelling}"
+                )
+        elif isinstance(seed_map, dict) and key_spelling in seed_map:
+            return (
+                f"retroachievements target {name!r}.{key_name}: "
+                f"{file_name!r} already seeds {key_spelling}"
             )
 
     booleans = target.get("booleans")
@@ -1880,15 +2084,20 @@ def _target_validation_error(
 def _merge_target_key(
     files: dict[str, object], entry: Mapping[str, object], value: str | Removal
 ) -> None:
-    """Fold one key entry's value into its file's own keys table, in place.
+    """Fold one key entry's value into its file's own `enforce` map, in place.
 
-    The file's format decides the shape - ini's `{section: {key: value}}`,
-    retroarch's flat `{key: value}` - so the unmodified editors write it.
-    Only ever called after `_target_validation_error` has confirmed the
-    file is declared and the entry's shape matches its format.
+    Always `enforce`, never `seed`: a RetroAchievements login key is
+    corrected on drift and swept clean on every launch exactly like any
+    other enforced key, and `_target_validation_error` has already refused
+    any target whose key would otherwise land on a name the file's own
+    `seed` map claims. The file's format decides the shape - ini's
+    `{section: {key: value}}`, retroarch's flat `{key: value}` - so the
+    unmodified editors write it. Only ever called after
+    `_target_validation_error` has confirmed the file is declared and the
+    entry's shape matches its format.
     """
     file_table = cast("dict[str, object]", files[str(entry["file"])])
-    file_keys = cast("dict[str, object]", file_table.setdefault("keys", {}))
+    file_keys = cast("dict[str, object]", file_table.setdefault("enforce", {}))
     if file_table.get("format") == "ini":
         section = cast(
             "dict[str, object]", file_keys.setdefault(str(entry["section"]), {})
@@ -2183,62 +2392,121 @@ _EDITORS = {
     "retroarch": set_retroarch_settings,
 }
 
+# The exact fields a per-file table may carry - no more, no fewer, and no
+# alias for either. `keys`, the old single-map spelling, is deliberately not
+# here: there is no migration path from it, only a refusal, because a table
+# carrying it is a call site nothing in this program has understood since
+# the seed tier was added.
+_TABLE_FIELDS = frozenset({"format", "enforce", "seed"})
+
 
 def _owned_keys_error(table: Mapping[str, object]) -> str | None:
-    """Why this file's `keys` would crash its editor, or None if it will not.
+    """Why this file's `enforce` or `seed` map would crash its editor.
 
-    Shape checking that belongs to `main` rather than to the editors,
-    because `main` is what owes the journal a line instead of a stack
-    trace (module docstring). Everything below is an `AttributeError` or a
-    `TypeError` inside an editor, and the loop that calls the editors
-    catches `OSError` and nothing else - deliberately, so that a bug is
-    never mistaken for a full disk - so each of these would reach the top
-    of the program as a traceback an admin has to read.
+    None if neither will. Shape checking that belongs to `main` rather than
+    to the editors, because `main` is what owes the journal a line instead
+    of a stack trace (module docstring). Everything below is an
+    `AttributeError` or a `TypeError` inside an editor, and the loop that
+    calls the editors catches `OSError` and nothing else - deliberately, so
+    that a bug is never mistaken for a full disk - so each of these would
+    reach the top of the program as a traceback an admin has to read.
+
+    Both tiers are checked, and by the identical rule: an editor subscripts
+    or iterates a seeded entry exactly as it does an enforced one (see
+    `set_esde_settings`'s and `set_ini_settings`'s seed branches), so a
+    malformed seeded entry crashes the same way a malformed enforced one
+    always has.
 
     Reachable from a module rather than only from a hand-written document:
-    the Nix side types `ownedFiles.<file>.keys` as `attrsOf anything`, so a
-    module written later that spells an ES-DE key `value = 5` or
-    `value = true` renders a JSON number or boolean right here.
+    the Nix side types `ownedFiles.<file>.enforce` and `.seed` as `attrsOf
+    anything`, so a module written later that spells an ES-DE key
+    `value = 5` or `value = true` renders a JSON number or boolean right
+    here.
 
     Only what an editor subscripts or iterates is checked. An `ini` or
-    `retroarch` value that is not a string is left alone on purpose:
-    `_without_removals` keeps only the strings, so such a key is quietly
-    skipped rather than written - a poor answer, but not a traceback, and
+    `retroarch` value that is not a string is left alone on purpose, in
+    either tier: `_without_removals` keeps only the strings, applied to the
+    enforce map and the seed map alike, so such a key is quietly skipped
+    rather than written - a poor answer, but not a traceback, and
     tightening it here would reject documents that work on boxes today.
     """
-    raw = table["keys"]
-    if not isinstance(raw, dict):
-        return f"expected 'keys' to be an object, got {type(raw).__name__}"
-    # Cast rather than narrow: `isinstance` gives an empty dict type here,
-    # and every lookup below would be a type error against it.
-    keys = cast("dict[str, object]", raw)
+    fmt = table["format"]
+    for tier in ("enforce", "seed"):
+        raw = table[tier]
+        if not isinstance(raw, dict):
+            return f"expected {tier!r} to be an object, got {type(raw).__name__}"
+        # Cast rather than narrow: `isinstance` gives an empty dict type here,
+        # and every lookup below would be a type error against it.
+        keys = cast("dict[str, object]", raw)
+        if fmt == "ini":
+            # The INI editor iterates each section's own table.
+            for section, entries in keys.items():
+                if not isinstance(entries, dict):
+                    return (
+                        f"expected section {section!r} to be an object, "
+                        f"got {type(entries).__name__}"
+                    )
+            continue
+        if fmt != "esde-xml":
+            continue
+        for name, spec in keys.items():
+            # `ET.Element.set` stores whatever it is handed and `ET.tostring`
+            # is where a non-string finally raises, which is a long way from
+            # the document that carried it.
+            if not isinstance(spec, dict):
+                return (
+                    f"expected key {name!r} to be an object with 'type' and "
+                    f"'value', got {type(spec).__name__}"
+                )
+            typed = cast("dict[str, object]", spec)
+            for field in ("type", "value"):
+                if not isinstance(typed.get(field), str):
+                    return (
+                        f"expected key {name!r} to carry a string {field!r}, "
+                        f"got {type(typed.get(field)).__name__}"
+                    )
+    return None
+
+
+def _seed_enforce_overlap_error(table: Mapping[str, object]) -> str | None:
+    """Why one key owned in both tiers of one file is a broken call site.
+
+    None if no key is. Which tier a key belongs to has to be a fact about
+    the key, not something that depends on which map a reader checks first,
+    so a name declared in both is refused rather than resolved by a rule
+    (enforce wins, seed wins, whichever is scanned last) that would only
+    hide the module's own mistake. Checked statically, straight off the
+    parsed document, because the overlap is visible without merging
+    anything - unlike the RetroAchievements case (`_target_validation_error`),
+    where a target's key has to be checked against the file it names before
+    anything is merged into it.
+
+    Sectioned (`ini`) and flat (`esde-xml`, `retroarch`) formats disagree on
+    what "the same key" means - a section and a name together, or a name
+    alone - so each is checked its own way rather than through one shared
+    shape.
+    """
+    enforce = cast("dict[str, object]", table["enforce"])
+    seed = cast("dict[str, object]", table["seed"])
     if table["format"] == "ini":
-        # The INI editor iterates each section's own table.
-        for section, entries in keys.items():
-            if not isinstance(entries, dict):
+        for section, seed_entries in seed.items():
+            enforce_entries = enforce.get(section)
+            if not isinstance(enforce_entries, dict) or not isinstance(
+                seed_entries, dict
+            ):
+                # Already reported by `_owned_keys_error`, called ahead of
+                # this in `main`; nothing to add here.
+                continue
+            overlap = sorted(set(enforce_entries) & set(seed_entries))
+            if overlap:
                 return (
-                    f"expected section {section!r} to be an object, "
-                    f"got {type(entries).__name__}"
+                    f"{section}.{overlap[0]} is declared under both "
+                    "'enforce' and 'seed'"
                 )
         return None
-    if table["format"] != "esde-xml":
-        return None
-    for name, spec in keys.items():
-        # `ET.Element.set` stores whatever it is handed and `ET.tostring`
-        # is where a non-string finally raises, which is a long way from
-        # the document that carried it.
-        if not isinstance(spec, dict):
-            return (
-                f"expected key {name!r} to be an object with 'type' and "
-                f"'value', got {type(spec).__name__}"
-            )
-        typed = cast("dict[str, object]", spec)
-        for field in ("type", "value"):
-            if not isinstance(typed.get(field), str):
-                return (
-                    f"expected key {name!r} to carry a string {field!r}, "
-                    f"got {type(typed.get(field)).__name__}"
-                )
+    overlap = sorted(set(enforce) & set(seed))
+    if overlap:
+        return f"{overlap[0]} is declared under both 'enforce' and 'seed'"
     return None
 
 
@@ -2293,8 +2561,23 @@ def main(argv: Sequence[str]) -> int:
         )
         return 1
     for relative, table in tables.items():
-        if not isinstance(table, dict) or "format" not in table or "keys" not in table:
-            note(f"{relative}: expected an object with 'format' and 'keys'")
+        if not isinstance(table, dict):
+            note(f"{relative}: expected an object with 'format', 'enforce' and 'seed'")
+            return 1
+        missing = sorted(_TABLE_FIELDS - table.keys())
+        extra = sorted(table.keys() - _TABLE_FIELDS)
+        if missing or extra:
+            # Named separately, because a table carrying the old `keys` map
+            # is both at once - missing `enforce` and `seed`, carrying
+            # `keys` as its one unexpected field - and an admin fixing a
+            # broken module needs to see all of it, not just whichever the
+            # check happened to notice first.
+            problems = []
+            if missing:
+                problems.append(f"missing {missing}")
+            if extra:
+                problems.append(f"unexpected field(s) {extra}")
+            note(f"{relative}: {'; '.join(problems)}")
             return 1
         if table["format"] not in _EDITORS:
             note(f"{relative}: unknown format {table['format']!r}")
@@ -2302,6 +2585,10 @@ def main(argv: Sequence[str]) -> int:
         problem = _owned_keys_error(table)
         if problem is not None:
             note(f"{relative}: {problem}")
+            return 1
+        overlap = _seed_enforce_overlap_error(table)
+        if overlap is not None:
+            note(f"{relative}: {overlap}")
             return 1
 
     # Folded into `tables` before any editor runs, so the editors themselves
@@ -2334,7 +2621,7 @@ def main(argv: Sequence[str]) -> int:
     for relative, table in tables.items():
         editor = _EDITORS[table["format"]]
         try:
-            editor(root / relative, table["keys"])
+            editor(root / relative, table["enforce"], table["seed"])
         except OSError as error:
             # The recreate-not-fail policy this program applies everywhere
             # else, applied to the write itself. `/data` full, remounted

@@ -172,6 +172,10 @@
             inherit self;
             pkgs = pkgsFor system;
           };
+          perSystem.owned-key-tiers = import ./tests/owned-key-tiers.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
           perSystem.snapshots = import ./tests/snapshots.nix {
             inherit self;
             pkgs = pkgsFor system;
@@ -215,6 +219,17 @@
                 throw "flake.nix: expected exactly one session package providing `emubox`, found ${toString (lib.length ours)}; the checks.session selector is stale"
               else
                 lib.head ours;
+            # RetroArch is `meta.broken` on Darwin, so this has to live here
+            # under `hostOnly` rather than in the `perSystem` set above:
+            # anything `perSystem` offers gets evaluated (and rejected) for
+            # every system `nix flake check` and `just check-all` run on,
+            # including the admin's Mac. Built from `hostPkgs`, like `kiosk`
+            # and `session`, so it inspects the exact package the host
+            # configuration installs.
+            retroarch-settings = import ./tests/retroarch-settings.nix {
+              inherit self;
+              pkgs = hostPkgs;
+            };
             # No test secret value in any store path of the test closure.
             closure-no-secrets = import ./tests/closure-no-secrets.nix {
               pkgs = testHost.pkgs;

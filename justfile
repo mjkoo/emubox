@@ -31,6 +31,7 @@ eval:
     nix eval --raw .#checks.x86_64-linux.vm.drvPath
     nix eval --raw .#checks.x86_64-linux.kiosk.drvPath
     nix eval --raw .#checks.x86_64-linux.session.drvPath
+    nix eval --raw .#checks.x86_64-linux.retroarch-settings.drvPath
     nix eval --raw .#checks.x86_64-linux.closure-no-secrets.drvPath
 
 # Build the host closure (needs an x86_64-linux builder)
@@ -56,6 +57,11 @@ session-check:
 # Prove no test secret value is in the system closure (x86_64-linux builder)
 closure-check:
     nix build .#checks.x86_64-linux.closure-no-secrets --no-link
+
+# Prove the installed RetroArch package's launch-time settings match the
+# flake's own values (x86_64-linux builder, no KVM needed)
+retroarch-settings-check:
+    nix build .#checks.x86_64-linux.retroarch-settings --no-link
 
 # Push the cache roots (redistributable unfree cores, the packages pkgs/
 # builds) to the emubox Cachix

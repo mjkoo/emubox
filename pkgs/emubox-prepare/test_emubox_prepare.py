@@ -33,7 +33,11 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import emubox_prepare as ep
 
-# The owned ES-DE keys in the shape the module renders them.
+# A set of ES-DE keys in the shape an editor's `enforce` map takes - synthetic
+# direct-editor input, not a copy of what the module currently renders: the
+# module puts `Theme` and `ApplicationLanguage` under `seed` rather than
+# `enforce`, but every key below still exercises `set_esde_settings` the same
+# way regardless of which tier a caller passes it under.
 OWNED = {
     "UIMode": {"type": "string", "value": "kiosk"},
     "UIMode_passkey": {"type": "string", "value": "uuddlrlrba"},
@@ -71,7 +75,7 @@ def unwritten(path: Path) -> bool:
 def test_esde_creates_file_with_every_owned_key(tmp_path: Path) -> None:
     path = tmp_path / "es_settings.xml"
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     got = {name: (tag, value) for tag, name, value in esde_elements(path)}
     assert got == {k: (v["type"], v["value"]) for k, v in OWNED.items()}
@@ -82,7 +86,7 @@ def test_esde_creates_parent_directories(tmp_path: Path) -> None:
     # is what makes the parents on a box's first boot.
     path = tmp_path / "es-de" / "settings" / "es_settings.xml"
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     assert path.is_file()
     assert path.parent.stat().st_mode & 0o777 == 0o755
@@ -96,7 +100,7 @@ def test_esde_resets_a_drifted_owned_key(tmp_path: Path) -> None:
         '<string name="Theme" value="slate-es-de" />\n'
     )
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     assert esde_named(path, "UIMode") == ("string", "UIMode", "kiosk")
     assert esde_named(path, "Theme") == ("string", "Theme", "linear-es-de")
@@ -106,7 +110,7 @@ def test_esde_appends_a_missing_owned_key(tmp_path: Path) -> None:
     path = tmp_path / "es_settings.xml"
     path.write_text('<?xml version="1.0"?>\n<string name="UIMode" value="kiosk" />\n')
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     assert esde_named(path, "ShowQuitMenu") == ("bool", "ShowQuitMenu", "true")
 
@@ -122,7 +126,7 @@ def test_esde_leaves_an_unowned_element_and_its_position_alone(tmp_path: Path) -
     )
     before = esde_elements(path)
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     after = esde_elements(path)
     # The three unowned elements keep their values and their indices; the
@@ -141,7 +145,7 @@ def test_esde_preserves_typed_bool_and_int_elements(tmp_path: Path) -> None:
         '<int name="MaxVRAM" value="512" />\n'
     )
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     # The owned bool keeps its element type rather than becoming a string,
     # and the unowned int is untouched.
@@ -160,17 +164,17 @@ def test_esde_corrects_an_owned_key_stored_under_the_wrong_type(
         '<?xml version="1.0"?>\n<string name="ShowQuitMenu" value="true" />\n'
     )
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     assert esde_named(path, "ShowQuitMenu") == ("bool", "ShowQuitMenu", "true")
 
 
 def test_esde_does_not_write_when_nothing_changed(tmp_path: Path) -> None:
     path = tmp_path / "es_settings.xml"
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
     freeze(path)
 
-    assert ep.set_esde_settings(path, OWNED) is False
+    assert ep.set_esde_settings(path, OWNED, {}) is False
 
     assert unwritten(path)
 
@@ -186,7 +190,7 @@ def test_esde_recreates_a_document_truncated_mid_element(
         '<string name="Theme" val'
     )
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     got = {name: (tag, value) for tag, name, value in esde_elements(path)}
     assert got == {k: (v["type"], v["value"]) for k, v in OWNED.items()}
@@ -211,7 +215,7 @@ def test_ini_preserves_comments_order_and_unknown_keys(tmp_path: Path) -> None:
         "RenderToMain = True\n"
     )
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     lines = path.read_text().splitlines()
     assert lines[0] == "# written by the emulator"
@@ -229,7 +233,7 @@ def test_ini_sets_the_key_in_the_right_section(tmp_path: Path) -> None:
         "[Other]\nFullscreen = False\n[Display]\nFullscreen = False\n[Interface]\nConfirmStop = False\n"
     )
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "[Other]\nFullscreen = False\n" in text
@@ -240,7 +244,7 @@ def test_ini_creates_a_missing_section(tmp_path: Path) -> None:
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nConfirmStop = False\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "[Display]" in text
@@ -250,7 +254,7 @@ def test_ini_creates_a_missing_section(tmp_path: Path) -> None:
 def test_ini_creates_the_file_when_absent(tmp_path: Path) -> None:
     path = tmp_path / "sub" / "Dolphin.ini"
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "[Interface]" in text and "ConfirmStop = False" in text
@@ -259,10 +263,10 @@ def test_ini_creates_the_file_when_absent(tmp_path: Path) -> None:
 
 def test_ini_does_not_write_when_nothing_changed(tmp_path: Path) -> None:
     path = tmp_path / "Dolphin.ini"
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
     freeze(path)
 
-    assert ep.set_ini_settings(path, INI_OWNED) is False
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is False
 
     assert unwritten(path)
 
@@ -273,7 +277,7 @@ def test_ini_recreates_an_unreadable_file(
     path = tmp_path / "Dolphin.ini"
     path.write_bytes(b"[Interface]\n\xff\xfe not a line of this file's format\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "ConfirmStop = False" in text
@@ -291,7 +295,7 @@ def test_ini_recreates_a_file_with_a_line_that_is_not_a_setting(
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nConfirmStop = False\nthis line has no assignment\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "this line has no assignment" not in text
@@ -315,7 +319,7 @@ def test_ini_appends_a_key_into_a_section_ending_in_a_comment(
         "[Interface]\nConfirmStop = False\n[Display]\nRenderToMain = True\n; about the display\n"
     )
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "; about the display" in text
@@ -339,7 +343,7 @@ def test_retroarch_preserves_comments_order_and_unknown_keys(tmp_path: Path) -> 
         'video_fullscreen = "false"\n'
     )
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     lines = path.read_text().splitlines()
     assert lines[0] == "# RetroArch config"
@@ -352,7 +356,7 @@ def test_retroarch_appends_a_missing_key(tmp_path: Path) -> None:
     path = tmp_path / "retroarch.cfg"
     path.write_text('menu_driver = "ozone"\n')
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     assert 'video_fullscreen = "true"' in path.read_text()
 
@@ -360,7 +364,7 @@ def test_retroarch_appends_a_missing_key(tmp_path: Path) -> None:
 def test_retroarch_creates_the_file_when_absent(tmp_path: Path) -> None:
     path = tmp_path / "sub" / "retroarch.cfg"
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     text = path.read_text()
     assert 'menu_driver = "ozone"' in text
@@ -369,10 +373,10 @@ def test_retroarch_creates_the_file_when_absent(tmp_path: Path) -> None:
 
 def test_retroarch_does_not_write_when_nothing_changed(tmp_path: Path) -> None:
     path = tmp_path / "retroarch.cfg"
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
     freeze(path)
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is False
 
     assert unwritten(path)
 
@@ -383,12 +387,483 @@ def test_retroarch_recreates_an_unreadable_file(
     path = tmp_path / "retroarch.cfg"
     path.write_bytes(b'menu_driver = "ozone"\n\xff\xfe a line with no assignment\n')
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     text = path.read_text()
     assert 'menu_driver = "ozone"' in text
     assert 'video_fullscreen = "true"' in text
     assert "no assignment" not in text
+    assert "retroarch.cfg" in capsys.readouterr().err
+
+
+# --- The seed tier ----------------------------------------------------------
+#
+# A seeded key is written once, the first time the file is missing it
+# entirely, and never touched again: unlike an enforced key it is never
+# corrected, never swept for repeats, and never removed. "Absent" means no
+# assignment of the key exists anywhere among the places that belong to it -
+# a key present with an empty value is present, and is left exactly as
+# enforced keys leave everything they do not own.
+
+
+def test_esde_seeds_a_missing_key_with_the_default(tmp_path: Path) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text('<?xml version="1.0"?>\n<string name="UIMode" value="kiosk" />\n')
+
+    assert (
+        ep.set_esde_settings(
+            path, {}, {"Theme": {"type": "string", "value": "linear-es-de"}}
+        )
+        is True
+    )
+
+    assert esde_named(path, "Theme") == ("string", "Theme", "linear-es-de")
+
+
+def test_esde_leaves_a_seeded_key_already_set_to_something_else(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n<string name="Theme" value="slate-es-de" />\n'
+    )
+    freeze(path)
+
+    assert (
+        ep.set_esde_settings(
+            path, {}, {"Theme": {"type": "string", "value": "linear-es-de"}}
+        )
+        is False
+    )
+
+    assert esde_named(path, "Theme") == ("string", "Theme", "slate-es-de")
+    assert unwritten(path)
+
+
+def test_esde_leaves_a_seeded_key_already_set_to_an_empty_value(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text('<?xml version="1.0"?>\n<string name="Theme" value="" />\n')
+    freeze(path)
+
+    assert (
+        ep.set_esde_settings(
+            path, {}, {"Theme": {"type": "string", "value": "linear-es-de"}}
+        )
+        is False
+    )
+
+    assert esde_named(path, "Theme") == ("string", "Theme", "")
+    assert unwritten(path)
+
+
+def test_esde_keeps_every_repeat_of_a_seeded_key_while_correcting_an_enforced_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<string name="UIMode" value="full" />\n'
+        '<string name="Theme" value="slate-es-de" />\n'
+        '<string name="Theme" value="linear-es-de" />\n'
+    )
+
+    assert (
+        ep.set_esde_settings(
+            path,
+            {"UIMode": {"type": "string", "value": "kiosk"}},
+            {"Theme": {"type": "string", "value": "linear-es-de"}},
+        )
+        is True
+    )
+
+    elements = esde_elements(path)
+    assert elements.count(("string", "Theme", "slate-es-de")) == 1
+    assert elements.count(("string", "Theme", "linear-es-de")) == 1
+    assert esde_named(path, "UIMode") == ("string", "UIMode", "kiosk")
+
+
+def test_esde_recreation_writes_seeded_keys_alongside_enforced_ones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "es_settings.xml"
+    path.write_bytes(b"\xff\xfe not valid xml at all")
+
+    assert (
+        ep.set_esde_settings(
+            path,
+            {"UIMode": {"type": "string", "value": "kiosk"}},
+            {"Theme": {"type": "string", "value": "linear-es-de"}},
+        )
+        is True
+    )
+
+    assert esde_named(path, "UIMode") == ("string", "UIMode", "kiosk")
+    assert esde_named(path, "Theme") == ("string", "Theme", "linear-es-de")
+    assert "es_settings.xml" in capsys.readouterr().err
+
+
+# ES-DE has no per-name round-trip validation - a name and a value reach the
+# file as XML attributes, which safely escape anything they are given - so
+# there is no "does not read back as itself" failure mode for this format to
+# exercise the way the two flat editors have one; see `_writable`.
+
+
+def test_ini_seeds_a_missing_key_with_the_default(tmp_path: Path) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n")
+
+    assert ep.set_ini_settings(path, {}, {"Interface": {"Language": "0"}}) is True
+
+    assert "Language = 0" in path.read_text()
+
+
+def test_ini_leaves_a_seeded_key_already_set_to_something_else(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nLanguage = 5\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}, {"Interface": {"Language": "0"}}) is False
+
+    assert "Language = 5" in path.read_text()
+    assert unwritten(path)
+
+
+def test_ini_leaves_a_seeded_key_already_set_to_an_empty_value(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nLanguage = \n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}, {"Interface": {"Language": "0"}}) is False
+
+    assert "Language = \n" in path.read_text()
+    assert unwritten(path)
+
+
+def test_ini_leaves_a_seeded_key_alone_when_only_the_preamble_assigns_it(
+    tmp_path: Path,
+) -> None:
+    # The preamble is one of the places a sectioned key's presence is
+    # checked against, the same as for an enforced key, so an assignment
+    # sitting there counts as present and the key is never additionally
+    # seeded into its declared section.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("Language = 5\n[Interface]\nConfirmStop = True\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}, {"Interface": {"Language": "0"}}) is False
+
+    text = path.read_text()
+    assert "Language = 5" in text
+    assert "Language = 0" not in text
+    assert unwritten(path)
+
+
+def test_ini_keeps_every_repeat_of_a_seeded_key_while_correcting_an_enforced_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\nLanguage = 0\nLanguage = 1\n")
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {"Interface": {"ConfirmStop": "False"}},
+            {"Interface": {"Language": "0"}},
+        )
+        is True
+    )
+
+    settings = ini_settings(path)
+    assert ("Interface", "Language", "0") in settings
+    assert ("Interface", "Language", "1") in settings
+    assert ("Interface", "ConfirmStop", "False") in settings
+
+
+def test_ini_recreation_writes_seeded_keys_alongside_enforced_ones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "Dolphin.ini"
+    path.write_bytes(b"[Interface]\n\xff\xfe not a line of this file's format\n")
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {"Interface": {"ConfirmStop": "False"}},
+            {"Interface": {"Language": "0"}},
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert "ConfirmStop = False" in text
+    assert "Language = 0" in text
+    assert "Dolphin.ini" in capsys.readouterr().err
+
+
+def test_ini_drops_a_seeded_key_name_that_does_not_read_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "settings.ini"
+    path.write_text("[Achievements]\nUsername = old\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}, {"Achievements": {"Bad\nKey": "v"}}) is False
+
+    text = path.read_text()
+    assert "Bad" not in text
+    assert "does not read back as" in capsys.readouterr().err
+    assert unwritten(path)
+
+
+def test_retroarch_seeds_a_missing_key_with_the_default(tmp_path: Path) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "ozone"\n')
+
+    assert ep.set_retroarch_settings(path, {}, {"input_driver": "sdl"}) is True
+
+    assert 'input_driver = "sdl"' in path.read_text()
+
+
+def test_retroarch_leaves_a_seeded_key_already_set_to_something_else(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('input_driver = "udev"\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {}, {"input_driver": "sdl"}) is False
+
+    assert 'input_driver = "udev"' in path.read_text()
+    assert unwritten(path)
+
+
+def test_retroarch_leaves_a_seeded_key_already_set_to_an_empty_value(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('input_driver = ""\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {}, {"input_driver": "sdl"}) is False
+
+    assert 'input_driver = ""' in path.read_text()
+    assert unwritten(path)
+
+
+def test_retroarch_keeps_every_repeat_of_a_seeded_key_while_correcting_an_enforced_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text(
+        'menu_driver = "rgui"\ninput_driver = "sdl"\ninput_driver = "udev"\n'
+    )
+
+    assert (
+        ep.set_retroarch_settings(
+            path, {"menu_driver": "ozone"}, {"input_driver": "sdl"}
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert text.count('input_driver = "sdl"') == 1
+    assert text.count('input_driver = "udev"') == 1
+    assert 'menu_driver = "ozone"' in text
+
+
+def test_retroarch_recreation_writes_seeded_keys_alongside_enforced_ones(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_bytes(b'menu_driver = "ozone"\n\xff\xfe a line with no assignment\n')
+
+    assert (
+        ep.set_retroarch_settings(
+            path, {"menu_driver": "ozone"}, {"input_driver": "sdl"}
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert 'menu_driver = "ozone"' in text
+    assert 'input_driver = "sdl"' in text
+    assert "retroarch.cfg" in capsys.readouterr().err
+
+
+def test_retroarch_drops_a_seeded_key_name_that_does_not_read_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "rgui"\n')
+    freeze(path)
+
+    assert ep.set_retroarch_settings(path, {}, {"bad\nkey": "v"}) is False
+
+    text = path.read_text()
+    assert "bad" not in text
+    assert "does not read back as" in capsys.readouterr().err
+    assert unwritten(path)
+
+
+# --- The seed tier's type policy matches the enforce tier's own -------------
+#
+# `emubox.kiosk.ownedFiles.<file>.seed` is typed `attrsOf anything` because
+# Nix cannot check a value's type, so a module author writing
+# `seed."Core.CPUThread" = false;` instead of `"False";` is a mistake this
+# program has to survive, not one Nix catches first. The enforce tier already
+# has a policy for a wrong-typed `ini`/`retroarch` value - `_without_removals`
+# drops it silently, never coercing and never raising - and these tests pin
+# that the seed tier now shares it exactly, in both directions: a bad seed
+# value is dropped the same way, and a bad enforce value still is too.
+
+
+def test_ini_enforce_of_the_wrong_type_is_dropped_rather_than_written(
+    tmp_path: Path,
+) -> None:
+    # Pins the enforce tier's own existing policy as the parity target the
+    # seed tier's filter (below) now matches.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n")
+    freeze(path)
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            cast(
+                "dict[str, dict[str, str | ep.Removal]]",
+                {"Interface": {"Language": False}},
+            ),
+            {},
+        )
+        is False
+    )
+
+    text = path.read_text()
+    assert "Language" not in text
+    assert "ConfirmStop = True" in text
+    assert unwritten(path)
+
+
+def test_retroarch_enforce_of_the_wrong_type_is_dropped_rather_than_written(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "ozone"\n')
+    freeze(path)
+
+    assert (
+        ep.set_retroarch_settings(
+            path, cast("dict[str, str | ep.Removal]", {"input_driver": False}), {}
+        )
+        is False
+    )
+
+    text = path.read_text()
+    assert "input_driver" not in text
+    assert 'menu_driver = "ozone"' in text
+    assert unwritten(path)
+
+
+def test_ini_seed_of_the_wrong_type_is_dropped_rather_than_written(
+    tmp_path: Path,
+) -> None:
+    # Before the seed tier had this filter, a non-string seed value whose key
+    # was absent from the file reached `_seed_key`'s backstop assert
+    # uncaught - an `AssertionError` the editor loop's `except OSError` does
+    # not catch, escaping as a traceback and, because it fires inside the
+    # loop over every owned file, aborting every remaining file with it.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("[Interface]\nConfirmStop = True\n")
+    freeze(path)
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {},
+            cast("dict[str, dict[str, str]]", {"Interface": {"Language": False}}),
+        )
+        is False
+    )
+
+    text = path.read_text()
+    assert "Language" not in text
+    assert "ConfirmStop = True" in text
+    assert unwritten(path)
+
+
+def test_retroarch_seed_of_the_wrong_type_is_dropped_rather_than_coerced(
+    tmp_path: Path,
+) -> None:
+    # Before this filter, the retroarch editor wrapped every seed value in
+    # an f-string ahead of `_seed_key`, which coerces any type to a string
+    # rather than tripping the assert - so a wrong-typed seed value was
+    # written anyway, as `str()` of itself, where the enforce tier would
+    # have written nothing at all.
+    path = tmp_path / "retroarch.cfg"
+    path.write_text('menu_driver = "ozone"\n')
+    freeze(path)
+
+    assert (
+        ep.set_retroarch_settings(
+            path, {}, cast("dict[str, str]", {"input_driver": False})
+        )
+        is False
+    )
+
+    text = path.read_text()
+    assert "input_driver" not in text
+    assert 'menu_driver = "ozone"' in text
+    assert unwritten(path)
+
+
+def test_ini_recreation_drops_a_seed_value_of_the_wrong_type(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The recreate branch builds a fresh document carrying both tiers
+    # straight from the same maps, so it must not write a coerced or
+    # malformed seed value either.
+    path = tmp_path / "Dolphin.ini"
+    path.write_bytes(b"[Interface]\n\xff\xfe not a line of this file's format\n")
+
+    assert (
+        ep.set_ini_settings(
+            path,
+            {"Interface": {"ConfirmStop": "False"}},
+            cast("dict[str, dict[str, str]]", {"Interface": {"Language": False}}),
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert "ConfirmStop = False" in text
+    assert "Language" not in text
+    assert "Dolphin.ini" in capsys.readouterr().err
+
+
+def test_retroarch_recreation_drops_a_seed_value_of_the_wrong_type(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "retroarch.cfg"
+    path.write_bytes(b'menu_driver = "ozone"\n\xff\xfe a line with no assignment\n')
+
+    assert (
+        ep.set_retroarch_settings(
+            path,
+            {"menu_driver": "ozone"},
+            cast("dict[str, str]", {"input_driver": False}),
+        )
+        is True
+    )
+
+    text = path.read_text()
+    assert 'menu_driver = "ozone"' in text
+    assert "input_driver" not in text
     assert "retroarch.cfg" in capsys.readouterr().err
 
 
@@ -465,7 +940,11 @@ def owned_values_file(tmp_path: Path) -> Path:
         json.dumps(
             {
                 "files": {
-                    "settings/es_settings.xml": {"format": "esde-xml", "keys": OWNED}
+                    "settings/es_settings.xml": {
+                        "format": "esde-xml",
+                        "enforce": OWNED,
+                        "seed": {},
+                    }
                 },
                 "retroachievements": None,
             }
@@ -562,11 +1041,11 @@ def test_write_keeps_an_existing_files_mode(tmp_path: Path) -> None:
     # os.replace installs a new inode, so without carrying the old file's
     # mode across, a run by an admin would leave the frontend unable to save.
     path = tmp_path / "es_settings.xml"
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
     path.chmod(0o600)
 
     drifted = {**OWNED, "UIMode": {"type": "string", "value": "full"}}
-    assert ep.set_esde_settings(path, drifted) is True
+    assert ep.set_esde_settings(path, drifted, {}) is True
 
     assert path.stat().st_mode & 0o777 == 0o600
 
@@ -574,7 +1053,7 @@ def test_write_keeps_an_existing_files_mode(tmp_path: Path) -> None:
 def test_write_leaves_no_temporary_file_behind(tmp_path: Path) -> None:
     path = tmp_path / "settings" / "es_settings.xml"
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     assert [p.name for p in path.parent.iterdir()] == ["es_settings.xml"]
 
@@ -598,7 +1077,7 @@ def test_concurrent_writers_never_publish_a_mixed_document(tmp_path: Path) -> No
                 # the very code it exists to reject.
                 code = 0
                 try:
-                    ep.set_esde_settings(path, keys)
+                    ep.set_esde_settings(path, keys, {})
                 except BaseException:
                     code = 1
                 os._exit(code)
@@ -619,7 +1098,7 @@ def test_esde_recreates_an_empty_file_and_says_so(
     path = tmp_path / "es_settings.xml"
     path.write_text("")
 
-    assert ep.set_esde_settings(path, OWNED) is True
+    assert ep.set_esde_settings(path, OWNED, {}) is True
 
     got = {name: (tag, value) for tag, name, value in esde_elements(path)}
     assert got == {k: (v["type"], v["value"]) for k, v in OWNED.items()}
@@ -628,13 +1107,13 @@ def test_esde_recreates_an_empty_file_and_says_so(
 
 def test_esde_does_not_grow_a_blank_line_on_every_write(tmp_path: Path) -> None:
     path = tmp_path / "es_settings.xml"
-    ep.set_esde_settings(path, OWNED)
+    ep.set_esde_settings(path, OWNED, {})
     sizes = []
     # Equal-length values, so any difference in size is the file growing and
     # not just a shorter setting.
     for value in ("kiosk", "aaaaa", "kiosk", "aaaaa"):
         ep.set_esde_settings(
-            path, {**OWNED, "UIMode": {"type": "string", "value": value}}
+            path, {**OWNED, "UIMode": {"type": "string", "value": value}}, {}
         )
         sizes.append(len(path.read_text()))
 
@@ -654,7 +1133,7 @@ def test_ini_keeps_a_file_whose_section_header_carries_a_comment(
         "[Interface] ; the interface section\nKeepMe = yes\nConfirmStop = True\n"
     )
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "KeepMe = yes" in text
@@ -669,7 +1148,7 @@ def test_ini_keeps_a_value_containing_an_exotic_line_separator(
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nKeepMe = a b\nConfirmStop = True\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     assert "KeepMe = a b" in path.read_text()
 
@@ -688,7 +1167,9 @@ def test_ini_an_empty_file_owning_only_a_removal_writes_and_notes_nothing(
     path.write_text("")
     freeze(path)
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is False
+    )
 
     assert unwritten(path)
     assert capsys.readouterr().err == ""
@@ -704,7 +1185,7 @@ def test_ini_an_empty_file_owning_a_real_value_still_notes_the_recreation(
 
     assert (
         ep.set_ini_settings(
-            path, {"Achievements": {"Enabled": "true", "Token": ep.REMOVE}}
+            path, {"Achievements": {"Enabled": "true", "Token": ep.REMOVE}}, {}
         )
         is True
     )
@@ -738,7 +1219,7 @@ def test_ini_reads_a_marked_file_and_keeps_the_mark_leading(
         f"{BOM}[Interface]\nLanguage = 0\nConfirmStop = True\n[Display]\nFullscreen = False\n"
     )
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "Language = 0" in text
@@ -759,7 +1240,7 @@ def test_retroarch_reads_a_marked_file_and_keeps_the_mark_leading(
     path = tmp_path / "retroarch.cfg"
     path.write_text(f'{BOM}menu_driver = "rgui"\ninput_driver = "sdl"\n')
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     text = path.read_text()
     lines = text.removeprefix(BOM).splitlines()
@@ -782,8 +1263,8 @@ def test_retroarch_marked_settled_file_reports_no_write_twice(
     )
     freeze(path)
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is False
-    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is False
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is False
 
     assert unwritten(path)
     assert path.read_bytes().startswith(BOM_BYTES)
@@ -799,7 +1280,7 @@ def test_ini_recreates_a_file_with_a_mark_before_a_mid_file_header(
     path = tmp_path / "Dolphin.ini"
     path.write_text(f"[Interface]\nConfirmStop = True\n{BOM}[Display]\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     assert BOM not in path.read_text()
     assert "not a setting" in capsys.readouterr().err
@@ -813,7 +1294,7 @@ def test_ini_recreates_a_file_with_a_mark_alone_on_a_line(
     path = tmp_path / "Dolphin.ini"
     path.write_text(f"[Interface]\nConfirmStop = True\n{BOM}\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     assert BOM not in path.read_text()
     assert "not a setting" in capsys.readouterr().err
@@ -828,7 +1309,7 @@ def test_ini_recreates_a_doubly_marked_file_leading_with_a_header(
     path = tmp_path / "Dolphin.ini"
     path.write_text(f"{BOM}{BOM}[Interface]\nConfirmStop = True\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     assert BOM not in path.read_text()
     assert "not a setting" in capsys.readouterr().err
@@ -842,7 +1323,7 @@ def test_ini_keeps_a_mark_embedded_in_an_unowned_assignment(
     path = tmp_path / "Dolphin.ini"
     path.write_text(f"[Interface]\nKeepMe = a{BOM}b\nConfirmStop = True\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     assert f"KeepMe = a{BOM}b" in path.read_text()
 
@@ -859,7 +1340,7 @@ def test_ini_a_mark_only_file_owning_a_real_value_recreates_with_the_note(
 
     assert (
         ep.set_ini_settings(
-            path, {"Achievements": {"Enabled": "true", "Token": ep.REMOVE}}
+            path, {"Achievements": {"Enabled": "true", "Token": ep.REMOVE}}, {}
         )
         is True
     )
@@ -880,7 +1361,9 @@ def test_ini_a_mark_only_file_owning_only_removals_is_left_unwritten(
     path.write_text(BOM)
     freeze(path)
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is False
+    )
 
     assert unwritten(path)
     assert capsys.readouterr().err == ""
@@ -894,7 +1377,7 @@ def test_ini_a_removal_only_write_keeps_the_mark_and_settles(
     path = tmp_path / "secrets.ini"
     path.write_text(f"{BOM}[Achievements]\nKeepMe = yes\nToken = LIVE\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is True
 
     text = path.read_text()
     assert path.read_bytes().startswith(BOM_BYTES)
@@ -902,7 +1385,9 @@ def test_ini_a_removal_only_write_keeps_the_mark_and_settles(
     assert "Token" not in text
 
     freeze(path)
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is False
+    )
     assert unwritten(path)
 
 
@@ -914,7 +1399,7 @@ def test_ini_a_marked_unparseable_file_still_recreates_on_the_all_removals_path(
     path = tmp_path / "secrets.ini"
     path.write_text(f"{BOM}[Achievements]\nTok\nToken = LIVE\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is True
 
     assert "LIVE" not in path.read_text()
     assert "not a setting" in capsys.readouterr().err
@@ -930,7 +1415,7 @@ def test_retroarch_a_mark_only_file_gains_the_owned_keys_after_the_mark(
     path = tmp_path / "retroarch.cfg"
     path.write_text(BOM)
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     text = path.read_text()
     assert path.read_bytes().startswith(BOM_BYTES)
@@ -939,7 +1424,7 @@ def test_retroarch_a_mark_only_file_gains_the_owned_keys_after_the_mark(
     assert capsys.readouterr().err == ""
 
     freeze(path)
-    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is False
     assert unwritten(path)
 
 
@@ -954,7 +1439,7 @@ def test_retroarch_migrates_a_file_a_glued_key_reader_left_duplicated(
     path = tmp_path / "retroarch.cfg"
     path.write_text(f'{BOM}menu_driver = "rgui"\nmenu_driver = "ozone"\n')
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     text = path.read_text()
     assert path.read_bytes().startswith(BOM_BYTES)
@@ -962,7 +1447,7 @@ def test_retroarch_migrates_a_file_a_glued_key_reader_left_duplicated(
     assert 'menu_driver = "ozone"' in text
 
     freeze(path)
-    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is False
     assert unwritten(path)
 
 
@@ -999,7 +1484,7 @@ def test_a_marked_ppsspp_file_is_edited_not_recreated(
     path = tmp_path / "ppsspp.ini"
     path.write_text(ppsspp_file("False"))
 
-    assert ep.set_ini_settings(path, PPSSPP_OWNED) is True
+    assert ep.set_ini_settings(path, PPSSPP_OWNED, {}) is True
 
     text = path.read_text()
     assert path.read_bytes().startswith(BOM_BYTES)
@@ -1018,8 +1503,8 @@ def test_a_settled_marked_ppsspp_file_reports_no_write_twice(
     path.write_text(ppsspp_file("True"))
     freeze(path)
 
-    assert ep.set_ini_settings(path, PPSSPP_OWNED) is False
-    assert ep.set_ini_settings(path, PPSSPP_OWNED) is False
+    assert ep.set_ini_settings(path, PPSSPP_OWNED, {}) is False
+    assert ep.set_ini_settings(path, PPSSPP_OWNED, {}) is False
 
     assert unwritten(path)
     assert path.read_text() == ppsspp_file("True")
@@ -1089,7 +1574,8 @@ def test_main_survives_a_custom_systems_file_it_cannot_write(
                 "files": {
                     "settings/es_settings.xml": {
                         "format": "esde-xml",
-                        "keys": {"Theme": {"type": "string", "value": "slate"}},
+                        "enforce": {"Theme": {"type": "string", "value": "slate"}},
+                        "seed": {},
                     }
                 },
                 "retroachievements": None,
@@ -1151,7 +1637,9 @@ def test_main_reports_an_unknown_format_without_a_traceback(
 ) -> None:
     monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
     values = tmp_path / "owned.json"
-    values.write_text(json.dumps({"files": {"f.conf": {"format": "toml", "keys": {}}}}))
+    values.write_text(
+        json.dumps({"files": {"f.conf": {"format": "toml", "enforce": {}, "seed": {}}}})
+    )
 
     assert ep.main([str(values), ""]) == 1
 
@@ -1251,11 +1739,11 @@ def test_main_accepts_a_valid_non_null_retroachievements_object(
     assert ep.main([str(values), ""]) == 0
 
 
-def test_main_rejects_keys_that_is_not_an_object(
+def test_main_rejects_an_enforce_map_that_is_not_an_object(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # `keys` was checked for being present but never for being an object, so
-    # a list walked straight into the editor and died there with
+    # `enforce` was checked for being present but never for being an object,
+    # so a list walked straight into the editor and died there with
     # `AttributeError: 'list' object has no attribute 'values'` - outside
     # the editor loop's `except OSError`, so it reached the top as a
     # traceback. The session ends at the greeter either way; what this is
@@ -1263,12 +1751,14 @@ def test_main_rejects_keys_that_is_not_an_object(
     # `journalctl` gets a line rather than a stack trace.
     monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
     values = tmp_path / "owned.json"
-    values.write_text(json.dumps({"files": {"f.ini": {"format": "ini", "keys": []}}}))
+    values.write_text(
+        json.dumps({"files": {"f.ini": {"format": "ini", "enforce": [], "seed": {}}}})
+    )
 
     assert ep.main([str(values), ""]) == 1
 
     err = capsys.readouterr().err
-    assert "keys" in err
+    assert "enforce" in err
     assert "Traceback" not in err
 
 
@@ -1281,7 +1771,17 @@ def test_main_rejects_an_ini_section_table_that_is_not_an_object(
     monkeypatch.setenv("ESDE_APPDATA_DIR", str(tmp_path / "es-de"))
     values = tmp_path / "owned.json"
     values.write_text(
-        json.dumps({"files": {"f.ini": {"format": "ini", "keys": {"Main": "on"}}}})
+        json.dumps(
+            {
+                "files": {
+                    "f.ini": {
+                        "format": "ini",
+                        "enforce": {"Main": "on"},
+                        "seed": {},
+                    }
+                }
+            }
+        )
     )
 
     assert ep.main([str(values), ""]) == 1
@@ -1308,7 +1808,8 @@ def test_main_rejects_an_esde_value_that_is_not_a_string(
                 "files": {
                     "settings/es_settings.xml": {
                         "format": "esde-xml",
-                        "keys": {"MaxVRAM": {"type": "int", "value": 5}},
+                        "enforce": {"MaxVRAM": {"type": "int", "value": 5}},
+                        "seed": {},
                     }
                 }
             }
@@ -1336,7 +1837,8 @@ def test_main_rejects_an_esde_key_that_is_not_a_typed_object(
                 "files": {
                     "settings/es_settings.xml": {
                         "format": "esde-xml",
-                        "keys": {"Theme": "slate"},
+                        "enforce": {"Theme": "slate"},
+                        "seed": {},
                     }
                 }
             }
@@ -2073,7 +2575,9 @@ def retroachievements_namespace(
 def test_apply_writes_enabled_and_hardcore_even_without_a_resolved_token(
     tmp_path: Path,
 ) -> None:
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     target = plain_target("retroarch", "retroarch.cfg")
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [target], hardcore=True
@@ -2081,7 +2585,7 @@ def test_apply_writes_enabled_and_hardcore_even_without_a_resolved_token(
 
     assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    keys = files["retroarch.cfg"]["keys"]
+    keys = files["retroarch.cfg"]["enforce"]
     assert keys["cheevos_enable"] == "true"
     assert keys["cheevos_hardcore_mode_enable"] == "true"
     # Marked for removal rather than omitted: omitting them left
@@ -2093,14 +2597,14 @@ def test_apply_writes_enabled_and_hardcore_even_without_a_resolved_token(
 def test_apply_writes_username_and_token_for_a_plain_target(tmp_path: Path) -> None:
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-1"})) as url:
         files: dict[str, object] = {
-            "retroarch.cfg": {"format": "retroarch", "keys": {}}
+            "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
         }
         target = plain_target("retroarch", "retroarch.cfg")
         ra = retroachievements_namespace(tmp_path, url, [target])
 
         assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    keys = files["retroarch.cfg"]["keys"]
+    keys = files["retroarch.cfg"]["enforce"]
     assert keys["cheevos_username"] == "alice"
     assert keys["cheevos_token"] == "tok-1"
     assert keys["cheevos_enable"] == "true"
@@ -2111,13 +2615,15 @@ def test_apply_writes_a_dolphin_style_ini_target_with_its_own_boolean_spellings(
     tmp_path: Path,
 ) -> None:
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-2"})) as url:
-        files: dict[str, object] = {"Dolphin.ini": {"format": "ini", "keys": {}}}
+        files: dict[str, object] = {
+            "Dolphin.ini": {"format": "ini", "enforce": {}, "seed": {}}
+        }
         target = ini_target("dolphin", "Dolphin.ini")
         ra = retroachievements_namespace(tmp_path, url, [target], hardcore=True)
 
         assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    section = files["Dolphin.ini"]["keys"]["Cheevos"]
+    section = files["Dolphin.ini"]["enforce"]["Cheevos"]
     assert section == {
         "Enabled": "True",
         "ChallengeMode": "True",
@@ -2131,18 +2637,18 @@ def test_apply_splits_pcsx2_keys_across_two_files(tmp_path: Path) -> None:
     # `file` - but the design calls it out explicitly as worth proving.
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-3"})) as url:
         files: dict[str, object] = {
-            "PCSX2.ini": {"format": "ini", "keys": {}},
-            "secrets.ini": {"format": "ini", "keys": {}},
+            "PCSX2.ini": {"format": "ini", "enforce": {}, "seed": {}},
+            "secrets.ini": {"format": "ini", "enforce": {}, "seed": {}},
         }
         ra = retroachievements_namespace(tmp_path, url, [pcsx2_target()])
 
         assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    assert files["PCSX2.ini"]["keys"]["Achievements"] == {
+    assert files["PCSX2.ini"]["enforce"]["Achievements"] == {
         "Enabled": "true",
         "ChallengeMode": "false",
     }
-    assert files["secrets.ini"]["keys"]["Achievements"] == {
+    assert files["secrets.ini"]["enforce"]["Achievements"] == {
         "Username": "alice",
         "Token": "tok-3",
     }
@@ -2151,14 +2657,16 @@ def test_apply_splits_pcsx2_keys_across_two_files(tmp_path: Path) -> None:
 def test_apply_writes_a_secret_file_token_for_ppsspp(tmp_path: Path) -> None:
     token_file = tmp_path / "ppsspp_retroachievements.dat"
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-4"})) as url:
-        files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+        files: dict[str, object] = {
+            "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+        }
         ra = retroachievements_namespace(
             tmp_path, url, [secret_file_target(token_file)]
         )
 
         assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    section = files["ppsspp.ini"]["keys"]["Achievements"]
+    section = files["ppsspp.ini"]["enforce"]["Achievements"]
     assert section["AchievementsUserName"] == "alice"
     assert "token" not in {k.lower() for k in section}
     # No trailing newline: the file's entire content is the raw token bytes.
@@ -2173,7 +2681,9 @@ def test_apply_forces_the_secret_files_mode_even_if_it_pre_existed(
     token_file.write_bytes(b"stale-token")
     token_file.chmod(0o644)
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-5"})) as url:
-        files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+        files: dict[str, object] = {
+            "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+        }
         ra = retroachievements_namespace(
             tmp_path, url, [secret_file_target(token_file)]
         )
@@ -2189,7 +2699,9 @@ def test_apply_removes_a_stale_secret_file_when_no_token_resolves(
 ) -> None:
     token_file = tmp_path / "ppsspp_retroachievements.dat"
     token_file.write_bytes(b"stale-token")
-    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    files: dict[str, object] = {
+        "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [secret_file_target(token_file)]
     )
@@ -2202,7 +2714,9 @@ def test_apply_removes_a_stale_secret_file_when_no_token_resolves(
 def test_apply_never_leaks_the_password_into_the_secret_file(tmp_path: Path) -> None:
     token_file = tmp_path / "ppsspp_retroachievements.dat"
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-6"})) as url:
-        files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+        files: dict[str, object] = {
+            "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+        }
         ra = retroachievements_namespace(
             tmp_path, url, [secret_file_target(token_file)]
         )
@@ -2216,13 +2730,15 @@ def test_apply_writes_a_duckstation_target_end_to_end(tmp_path: Path) -> None:
     machine_id_file = tmp_path / "machine-id"
     machine_id_file.write_text("abc123\n")
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-7"})) as url:
-        files: dict[str, object] = {"settings.ini": {"format": "ini", "keys": {}}}
+        files: dict[str, object] = {
+            "settings.ini": {"format": "ini", "enforce": {}, "seed": {}}
+        }
         target = duckstation_target(machine_id_file, "settings.ini")
         ra = retroachievements_namespace(tmp_path, url, [target])
 
         assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    section = files["settings.ini"]["keys"]["Cheevos"]
+    section = files["settings.ini"]["enforce"]["Cheevos"]
     assert section["Username"] == "alice"
     assert section["Token"] == ep.encrypt_duckstation_token(
         b"abc123\n", "alice", "tok-7"
@@ -2255,7 +2771,9 @@ def test_apply_rejects_a_target_key_naming_an_undeclared_file(
 def test_apply_rejects_an_ini_key_missing_a_section(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"Dolphin.ini": {"format": "ini", "keys": {}}}
+    files: dict[str, object] = {
+        "Dolphin.ini": {"format": "ini", "enforce": {}, "seed": {}}
+    }
     # plain_target's key entries have no "section", which an ini file needs.
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [plain_target("dolphin", "Dolphin.ini")]
@@ -2268,7 +2786,9 @@ def test_apply_rejects_an_ini_key_missing_a_section(
 def test_apply_rejects_a_retroarch_key_carrying_a_section(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     # ini_target's key entries carry a "section", which a retroarch file must not.
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [ini_target("retroarch-ish", "retroarch.cfg")]
@@ -2281,7 +2801,9 @@ def test_apply_rejects_a_retroarch_key_carrying_a_section(
 def test_apply_rejects_a_target_key_naming_an_esde_xml_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"es_settings.xml": {"format": "esde-xml", "keys": {}}}
+    files: dict[str, object] = {
+        "es_settings.xml": {"format": "esde-xml", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [plain_target("bogus", "es_settings.xml")]
     )
@@ -2293,7 +2815,9 @@ def test_apply_rejects_a_target_key_naming_an_esde_xml_file(
 def test_apply_rejects_a_secret_file_target_that_declares_a_token_key(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    files: dict[str, object] = {
+        "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+    }
     target = secret_file_target(tmp_path / "ppsspp.dat")
     keys = cast("dict[str, object]", target["keys"])
     keys["token"] = {"file": "ppsspp.ini", "section": "Achievements", "key": "Token"}
@@ -2306,7 +2830,9 @@ def test_apply_rejects_a_secret_file_target_that_declares_a_token_key(
 def test_apply_rejects_a_secret_file_target_missing_token_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    files: dict[str, object] = {
+        "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+    }
     target = secret_file_target(tmp_path / "ppsspp.dat")
     del target["token_file"]
     ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
@@ -2318,7 +2844,9 @@ def test_apply_rejects_a_secret_file_target_missing_token_file(
 def test_apply_rejects_a_plain_target_that_carries_a_token_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     target = plain_target("retroarch", "retroarch.cfg")
     target["token_file"] = "/should/not/be/here"
     ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
@@ -2330,7 +2858,9 @@ def test_apply_rejects_a_plain_target_that_carries_a_token_file(
 def test_apply_rejects_an_unknown_encoding(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     target = plain_target("retroarch", "retroarch.cfg")
     target["encoding"] = "rot13"
     ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
@@ -2351,7 +2881,8 @@ def test_main_null_retroachievements_changes_nothing_beyond_ordinary_files(
                 "files": {
                     "retroarch.cfg": {
                         "format": "retroarch",
-                        "keys": {"menu_driver": "ozone"},
+                        "enforce": {"menu_driver": "ozone"},
+                        "seed": {},
                     }
                 },
                 "retroachievements": None,
@@ -2381,7 +2912,13 @@ def test_main_end_to_end_with_retroachievements_never_leaks_the_password(
         values.write_text(
             json.dumps(
                 {
-                    "files": {"retroarch.cfg": {"format": "retroarch", "keys": {}}},
+                    "files": {
+                        "retroarch.cfg": {
+                            "format": "retroarch",
+                            "enforce": {},
+                            "seed": {},
+                        }
+                    },
                     "retroachievements": {
                         "api_url": url,
                         "username_file": str(username_file),
@@ -2448,7 +2985,9 @@ def test_apply_and_editors_leave_the_duckstation_file_untouched_when_the_token_i
     ini_path = tmp_path / "settings.ini"
 
     def run_once() -> None:
-        files: dict[str, object] = {"settings.ini": {"format": "ini", "keys": {}}}
+        files: dict[str, object] = {
+            "settings.ini": {"format": "ini", "enforce": {}, "seed": {}}
+        }
         target = duckstation_target(machine_id_file, "settings.ini")
         with ra_server(
             _json_handler(200, {"Success": True, "Token": "tok-stable"})
@@ -2456,7 +2995,11 @@ def test_apply_and_editors_leave_the_duckstation_file_untouched_when_the_token_i
             ra = retroachievements_namespace(tmp_path, url, [target])
             assert ep.apply_retroachievements(files, ra, tmp_path) == 0
         table = cast("dict[str, object]", files["settings.ini"])
-        ep.set_ini_settings(ini_path, cast("dict[str, dict[str, str]]", table["keys"]))
+        ep.set_ini_settings(
+            ini_path,
+            cast("dict[str, dict[str, str]]", table["enforce"]),
+            cast("dict[str, dict[str, str]]", table["seed"]),
+        )
 
     run_once()
     freeze(ini_path)
@@ -2472,7 +3015,9 @@ def test_apply_folds_the_cached_token_into_the_owned_tables_when_offline(
     # The resolve layer's cache fallback is covered on its own, but the
     # "Offline with a cached token" spec scenario is about what actually
     # lands in the emulator configs.
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     target = plain_target("retroarch", "retroarch.cfg")
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [target], cache="cached-tok"
@@ -2480,7 +3025,7 @@ def test_apply_folds_the_cached_token_into_the_owned_tables_when_offline(
 
     assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    keys = files["retroarch.cfg"]["keys"]
+    keys = files["retroarch.cfg"]["enforce"]
     assert keys["cheevos_username"] == "alice"
     assert keys["cheevos_token"] == "cached-tok"
 
@@ -2518,7 +3063,9 @@ def test_apply_rejects_a_non_boolean_hardcore(
     # Every other malformed field in this namespace is a call-site
     # failure; a JSON string like "false" being silently truthy under a
     # bare bool(...) would be the one exception.
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
     )
@@ -2540,12 +3087,12 @@ def test_apply_never_leaks_the_password_across_every_target_shape(
 
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-sweep"})) as url:
         files: dict[str, object] = {
-            "retroarch.cfg": {"format": "retroarch", "keys": {}},
-            "Dolphin.ini": {"format": "ini", "keys": {}},
-            "PCSX2.ini": {"format": "ini", "keys": {}},
-            "secrets.ini": {"format": "ini", "keys": {}},
-            "ppsspp.ini": {"format": "ini", "keys": {}},
-            "settings.ini": {"format": "ini", "keys": {}},
+            "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}},
+            "Dolphin.ini": {"format": "ini", "enforce": {}, "seed": {}},
+            "PCSX2.ini": {"format": "ini", "enforce": {}, "seed": {}},
+            "secrets.ini": {"format": "ini", "enforce": {}, "seed": {}},
+            "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}},
+            "settings.ini": {"format": "ini", "enforce": {}, "seed": {}},
         }
         targets = [
             plain_target("retroarch", "retroarch.cfg"),
@@ -2561,9 +3108,464 @@ def test_apply_never_leaks_the_password_across_every_target_shape(
     for relative, raw_table in files.items():
         assert isinstance(raw_table, dict)
         table = cast("dict[str, object]", raw_table)
-        assert "hunter2" not in json.dumps(table["keys"]), relative
+        assert "hunter2" not in json.dumps(table["enforce"]), relative
     assert b"hunter2" not in ppsspp_token_file.read_bytes()
     assert "hunter2" not in capsys.readouterr().err
+
+
+# --- The two-tier owned-values contract -------------------------------------
+#
+# A per-file table carries exactly `format`, `enforce` and `seed` - both maps
+# present, `{}` allowed, no alias for the old single `keys` map. Every case
+# below is a broken call site: non-zero exit, a diagnostic naming the file and
+# the offending field, and nothing downstream ever runs - not a write to any
+# configuration file, not a write to any credential, and not a login attempt,
+# which each test proves with a server that counts what it is asked.
+
+
+def _pristine_credentials(tmp_path: Path) -> tuple[Path, Path]:
+    """A pre-existing PPSSPP token file and login cache, to prove untouched."""
+    token_file = tmp_path / "ppsspp_retroachievements.dat"
+    token_file.write_bytes(b"pre-existing-token")
+    cache_file = tmp_path / "cache" / "ra-token"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text("pre-existing-cache")
+    return token_file, cache_file
+
+
+def _document_beside_a_valid_retroachievements_setup(
+    malformed_relative: str,
+    malformed_table: dict[str, object],
+    tmp_path: Path,
+    api_url: str,
+) -> dict[str, object]:
+    """A document pairing one malformed per-file table with an otherwise valid
+    RetroAchievements setup, so a test can prove the malformed table is
+    refused before the login it would otherwise trigger. `malformed_relative`
+    must not be "retroarch.cfg" - that name is the companion file the
+    RetroAchievements target itself declares.
+    """
+    return {
+        "files": {
+            malformed_relative: malformed_table,
+            "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}},
+        },
+        "retroachievements": retroachievements_namespace(
+            tmp_path, api_url, [plain_target("retroarch", "retroarch.cfg")]
+        ),
+    }
+
+
+def test_main_rejects_the_old_single_keys_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "old.cfg", {"format": "retroarch", "keys": {}}, tmp_path, url
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "old.cfg" in err
+    assert "keys" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_file_table_missing_enforce(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "bad.cfg", {"format": "retroarch", "seed": {}}, tmp_path, url
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "bad.cfg" in err
+    assert "enforce" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_file_table_missing_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "bad.cfg", {"format": "retroarch", "enforce": {}}, tmp_path, url
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "bad.cfg" in err
+    assert "seed" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_file_table_with_an_unexpected_extra_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Without this refusal a misspelled map - `seedKeys` here, instead of
+    # `seed` - would pass alongside both real maps and its keys would be
+    # silently ignored rather than reported.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "bad.cfg",
+                    {
+                        "format": "retroarch",
+                        "enforce": {},
+                        "seed": {},
+                        "seedKeys": {},
+                    },
+                    tmp_path,
+                    url,
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "bad.cfg" in err
+    assert "seedKeys" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_malformed_seeded_ini_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The existing ini inner-shape diagnostic names the section, not the key,
+    # and that stays true when the malformed entry sits under `seed` rather
+    # than `enforce`.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "f.ini",
+                    {"format": "ini", "enforce": {}, "seed": {"Main": "on"}},
+                    tmp_path,
+                    url,
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "Main" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_malformed_seeded_esde_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "settings/es_settings.xml",
+                    {
+                        "format": "esde-xml",
+                        "enforce": {},
+                        "seed": {"Theme": "slate"},
+                    },
+                    tmp_path,
+                    url,
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "Theme" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_seeded_esde_value_that_is_not_a_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The sibling to test_main_rejects_a_malformed_seeded_esde_entry above:
+    # that one trips on an entry that is not an object at all, this one on
+    # an entry whose 'value' is a well-typed object but not a string.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "settings/es_settings.xml",
+                    {
+                        "format": "esde-xml",
+                        "enforce": {},
+                        "seed": {"MaxVRAM": {"type": "int", "value": 5}},
+                    },
+                    tmp_path,
+                    url,
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "MaxVRAM" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+# --- Enforcing and seeding the same key is a broken call site ---------------
+
+
+def test_main_rejects_a_key_enforced_and_seeded_in_the_same_flat_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The overlap is visible in the document as parsed, so it is caught
+    # before the RetroAchievements login is ever attempted - proved here with
+    # the feature enabled and a server that counts what it is asked.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        ra = retroachievements_namespace(
+            tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
+        )
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "retroarch.cfg": {
+                            "format": "retroarch",
+                            "enforce": {"menu_driver": "ozone"},
+                            "seed": {"menu_driver": "rgui"},
+                        }
+                    },
+                    "retroachievements": ra,
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "retroarch.cfg" in err
+    assert "menu_driver" in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_key_enforced_and_seeded_in_the_same_ini_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        ra = retroachievements_namespace(
+            tmp_path, url, [ini_target("dolphin", "Dolphin.ini")]
+        )
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "Dolphin.ini": {
+                            "format": "ini",
+                            "enforce": {"Interface": {"ConfirmStop": "True"}},
+                            "seed": {"Interface": {"ConfirmStop": "False"}},
+                        }
+                    },
+                    "retroachievements": ra,
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "Dolphin.ini" in err
+    assert "ConfirmStop" in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_retroachievements_target_key_the_file_already_seeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # cheevos_username is both a plain target's login key and, here, a name
+    # the file's own seed map already claims - refused by the target
+    # validation before the login is attempted.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        ra = retroachievements_namespace(
+            tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
+        )
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "retroarch.cfg": {
+                            "format": "retroarch",
+                            "enforce": {},
+                            "seed": {"cheevos_username": "someone"},
+                        }
+                    },
+                    "retroachievements": ra,
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "retroarch.cfg" in err
+    assert "cheevos_username" in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
+def test_main_rejects_a_seeded_target_key_even_with_retroachievements_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The disabled path merges a REMOVE into every login key rather than a
+    # value, so this is the proof that a REMOVE on a seeded key is refused
+    # the same way, before any editor runs. The counting server is what
+    # proves the refusal precedes the login: a request reaching it would be
+    # recorded rather than passing unnoticed.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        ra = retroachievements_namespace(
+            tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
+        )
+        ra["enabled"] = False
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "retroarch.cfg": {
+                            "format": "retroarch",
+                            "enforce": {},
+                            "seed": {"cheevos_username": "someone"},
+                        }
+                    },
+                    "retroachievements": ra,
+                }
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "retroarch.cfg" in err
+    assert "cheevos_username" in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
 
 
 # --- The crash boundary: what must never reach main as a traceback ---------
@@ -2593,7 +3595,9 @@ def test_main_survives_a_settings_ini_that_is_not_valid_utf8(
         values.write_text(
             json.dumps(
                 {
-                    "files": {"settings.ini": {"format": "ini", "keys": {}}},
+                    "files": {
+                        "settings.ini": {"format": "ini", "enforce": {}, "seed": {}}
+                    },
                     "retroachievements": retroachievements_namespace(
                         tmp_path,
                         url,
@@ -2608,6 +3612,47 @@ def test_main_survives_a_settings_ini_that_is_not_valid_utf8(
     # Recreated by the editors' ordinary policy, carrying the owned keys.
     assert "Username = alice" in ini_path.read_text()
     assert "unreadable" in capsys.readouterr().err
+
+
+def test_main_survives_an_ini_seed_value_of_the_wrong_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `emubox.kiosk.ownedFiles.<file>.seed` is typed `attrsOf anything`
+    # because Nix cannot check its values, so a module written later that
+    # spells a seed value `false` instead of `"False"` reaches this program
+    # as a JSON boolean under `seed` - and with the file on disk already
+    # missing that key, it used to reach `_seed_key`'s backstop assert
+    # uncaught: an `AssertionError` the editor loop's `except OSError` does
+    # not catch, ending the session at a traceback rather than a greeter
+    # with a journal line, and aborting every other owned file in the same
+    # loop with it.
+    appdata = tmp_path / "es-de"
+    appdata.mkdir()
+    ini_path = appdata / "Dolphin.ini"
+    ini_path.write_text("[Interface]\nConfirmStop = True\n")
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+
+    values = tmp_path / "owned.json"
+    values.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "Dolphin.ini": {
+                        "format": "ini",
+                        "enforce": {},
+                        "seed": {"Interface": {"Language": False}},
+                    }
+                },
+                "retroachievements": None,
+            }
+        )
+    )
+
+    assert ep.main([str(values), ""]) == 0
+
+    text = ini_path.read_text()
+    assert "Language" not in text
+    assert "ConfirmStop = True" in text
 
 
 def test_login2_bounds_a_dribbling_server_by_wall_clock() -> None:
@@ -2807,7 +3852,8 @@ def test_main_absorbs_an_unexpected_failure_in_the_retroachievements_step(
                 "files": {
                     "retroarch.cfg": {
                         "format": "retroarch",
-                        "keys": {"menu_driver": "ozone"},
+                        "enforce": {"menu_driver": "ozone"},
+                        "seed": {},
                     }
                 },
                 "retroachievements": retroachievements_namespace(
@@ -2840,7 +3886,9 @@ def test_main_still_refuses_a_malformed_retroachievements_document(
     values.write_text(
         json.dumps(
             {
-                "files": {"retroarch.cfg": {"format": "retroarch", "keys": {}}},
+                "files": {
+                    "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+                },
                 "retroachievements": retroachievements_namespace(
                     tmp_path, closed_port_url(), [target]
                 ),
@@ -2916,7 +3964,9 @@ def test_apply_does_not_rewrite_an_unchanged_secret_file(tmp_path: Path) -> None
 
     def run_once() -> None:
         with ra_server(_json_handler(200, {"Success": True, "Token": "tok-same"})) as u:
-            files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+            files: dict[str, object] = {
+                "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+            }
             ra = retroachievements_namespace(
                 tmp_path, u, [secret_file_target(token_file)]
             )
@@ -2940,7 +3990,9 @@ def test_apply_corrects_the_secret_files_mode_without_rewriting_it(
     freeze(token_file)
 
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-same"})) as url:
-        files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+        files: dict[str, object] = {
+            "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+        }
         ra = retroachievements_namespace(
             tmp_path, url, [secret_file_target(token_file)]
         )
@@ -2963,7 +4015,7 @@ def test_apply_keeps_the_token_when_the_cache_cannot_be_written(
         _json_handler(200, {"Success": True, "Token": "tok-nocache"})
     ) as url:
         files: dict[str, object] = {
-            "retroarch.cfg": {"format": "retroarch", "keys": {}}
+            "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
         }
         ra = retroachievements_namespace(
             tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
@@ -2973,7 +4025,7 @@ def test_apply_keeps_the_token_when_the_cache_cannot_be_written(
 
         assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    keys = files["retroarch.cfg"]["keys"]
+    keys = files["retroarch.cfg"]["enforce"]
     assert keys["cheevos_token"] == "tok-nocache"
     assert "could not be written" in capsys.readouterr().err
 
@@ -2986,7 +4038,9 @@ def test_apply_survives_a_secret_file_that_cannot_be_removed(
     # straight out of the step that runs before every launch.
     token_file = tmp_path / "ppsspp_retroachievements.dat"
     token_file.mkdir()
-    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    files: dict[str, object] = {
+        "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [secret_file_target(token_file)]
     )
@@ -3003,8 +4057,8 @@ def test_ini_does_not_create_a_file_when_nothing_is_owned(
     # back as empty and log "is empty; recreating it" - forever.
     path = tmp_path / "secrets.ini"
 
-    assert ep.set_ini_settings(path, {}) is False
-    assert ep.set_ini_settings(path, {"Achievements": {}}) is False
+    assert ep.set_ini_settings(path, {}, {}) is False
+    assert ep.set_ini_settings(path, {"Achievements": {}}, {}) is False
 
     assert not path.exists()
     assert capsys.readouterr().err == ""
@@ -3017,7 +4071,7 @@ def test_ini_leaves_an_existing_file_alone_when_nothing_is_owned(
     path.write_text("[Achievements]\nUsername = someone\n")
     freeze(path)
 
-    assert ep.set_ini_settings(path, {}) is False
+    assert ep.set_ini_settings(path, {}, {}) is False
 
     assert unwritten(path)
     assert capsys.readouterr().err == ""
@@ -3029,8 +4083,8 @@ def test_retroarch_and_esde_also_leave_a_file_they_own_nothing_in_alone(
     cfg = tmp_path / "retroarch.cfg"
     settings = tmp_path / "es_settings.xml"
 
-    assert ep.set_retroarch_settings(cfg, {}) is False
-    assert ep.set_esde_settings(settings, {}) is False
+    assert ep.set_retroarch_settings(cfg, {}, {}) is False
+    assert ep.set_esde_settings(settings, {}, {}) is False
 
     assert not cfg.exists()
     assert not settings.exists()
@@ -3049,8 +4103,8 @@ def test_main_leaves_a_keyless_secrets_file_alone_on_an_offline_box(
         json.dumps(
             {
                 "files": {
-                    "PCSX2.ini": {"format": "ini", "keys": {}},
-                    "secrets.ini": {"format": "ini", "keys": {}},
+                    "PCSX2.ini": {"format": "ini", "enforce": {}, "seed": {}},
+                    "secrets.ini": {"format": "ini", "enforce": {}, "seed": {}},
                 },
                 "retroachievements": retroachievements_namespace(
                     tmp_path, closed_port_url(), [pcsx2_target()]
@@ -3115,14 +4169,18 @@ def test_a_config_neither_grows_nor_loses_keys_to_an_injected_token(
     def run_once() -> None:
         with ra_server(_json_handler(200, {"Success": True, "Token": token})) as url:
             files: dict[str, object] = {
-                "retroarch.cfg": {"format": "retroarch", "keys": {}}
+                "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
             }
             ra = retroachievements_namespace(
                 tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
             )
             assert ep.apply_retroachievements(files, ra, tmp_path) == 0
         table = cast("dict[str, object]", files["retroarch.cfg"])
-        ep.set_retroarch_settings(cfg, cast("dict[str, str]", table["keys"]))
+        ep.set_retroarch_settings(
+            cfg,
+            cast("dict[str, str]", table["enforce"]),
+            cast("dict[str, str]", table["seed"]),
+        )
 
     run_once()
     first = cfg.read_text()
@@ -3148,7 +4206,9 @@ def test_apply_rejects_a_namespace_missing_a_required_field(
     # with `KeyError 'password_file'` - a stack trace in the journal, which
     # is exactly what `_target_validation_error`'s docstring promises an
     # admin will never have to read.
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
     )
@@ -3161,7 +4221,9 @@ def test_apply_rejects_a_namespace_missing_a_required_field(
 def test_apply_rejects_a_duckstation_target_without_a_machine_id_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"settings.ini": {"format": "ini", "keys": {}}}
+    files: dict[str, object] = {
+        "settings.ini": {"format": "ini", "enforce": {}, "seed": {}}
+    }
     target = duckstation_target(tmp_path / "machine-id", "settings.ini")
     del target["machine_id_file"]
     ra = retroachievements_namespace(tmp_path, closed_port_url(), [target])
@@ -3174,7 +4236,9 @@ def test_apply_rejects_a_key_entry_that_carries_no_key(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # Passed validation and then died with `KeyError 'key'` in the merge.
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     target = plain_target("retroarch", "retroarch.cfg")
     keys = cast("dict[str, object]", target["keys"])
     keys["token"] = {"file": "retroarch.cfg"}
@@ -3193,7 +4257,7 @@ def test_ini_removes_an_owned_key_and_keeps_everything_else(tmp_path: Path) -> N
         "# a comment\n[Cheevos]\nEnabled = true\nToken = stale\n# trailing note\n"
     )
 
-    assert ep.set_ini_settings(path, {"Cheevos": {"Token": ep.REMOVE}}) is True
+    assert ep.set_ini_settings(path, {"Cheevos": {"Token": ep.REMOVE}}, {}) is True
 
     text = path.read_text()
     assert "Token" not in text
@@ -3209,7 +4273,7 @@ def test_ini_removing_a_key_that_is_not_there_reports_no_write(
     path.write_text("[Cheevos]\nEnabled = true\n")
     freeze(path)
 
-    assert ep.set_ini_settings(path, {"Cheevos": {"Token": ep.REMOVE}}) is False
+    assert ep.set_ini_settings(path, {"Cheevos": {"Token": ep.REMOVE}}, {}) is False
 
     assert unwritten(path)
 
@@ -3220,7 +4284,7 @@ def test_retroarch_removes_an_owned_key_and_keeps_everything_else(
     path = tmp_path / "retroarch.cfg"
     path.write_text('# a comment\nvideo_fullscreen = "true"\ncheevos_token = "stale"\n')
 
-    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}, {}) is True
 
     text = path.read_text()
     assert "cheevos_token" not in text
@@ -3235,7 +4299,7 @@ def test_retroarch_removing_a_key_that_is_not_there_reports_no_write(
     path.write_text('video_fullscreen = "true"\n')
     freeze(path)
 
-    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is False
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}, {}) is False
 
     assert unwritten(path)
 
@@ -3258,7 +4322,7 @@ def test_ini_removal_sweeps_a_duplicated_section(tmp_path: Path) -> None:
         "[Achievements]\nToken = TOKENsecond\n"
     )
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is True
 
     text = path.read_text()
     assert "TOKENfirst" not in text
@@ -3273,7 +4337,7 @@ def test_ini_removal_sweeps_a_key_repeated_within_one_section(tmp_path: Path) ->
     path = tmp_path / "secrets.ini"
     path.write_text("[Achievements]\nToken = TOKENone\nToken = TOKENtwo\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is True
 
     assert "TOKEN" not in path.read_text()
 
@@ -3288,7 +4352,7 @@ def test_ini_removal_sweeps_a_key_written_above_every_section_header(
     path = tmp_path / "secrets.ini"
     path.write_text("Token = TOKENstray\n[Achievements]\nUsername = alice\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is True
 
     text = path.read_text()
     assert "TOKENstray" not in text
@@ -3302,7 +4366,9 @@ def test_ini_removal_still_reports_no_write_when_only_other_sections_match(
     path.write_text("[Other]\nToken = not-ours\n[Achievements]\nUsername = alice\n")
     freeze(path)
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is False
+    )
 
     assert unwritten(path)
 
@@ -3314,7 +4380,7 @@ def test_retroarch_removal_sweeps_every_occurrence(tmp_path: Path) -> None:
         'cheevos_token = "TOKENtwo"\n'
     )
 
-    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}, {}) is True
 
     text = path.read_text()
     assert "TOKEN" not in text
@@ -3349,7 +4415,9 @@ def test_ini_write_leaves_no_stale_twin_in_a_duplicated_section(
         "[Achievements]\nUsername = stale-second\n"
     )
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {}) is True
+    )
 
     text = path.read_text()
     assert text.count("Username = correct") == 1
@@ -3371,7 +4439,9 @@ def test_ini_write_sweeps_a_stray_assignment_above_every_section_header(
     path = tmp_path / "settings.ini"
     path.write_text("Username = stray\n[Achievements]\nUsername = stale\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {}) is True
+    )
 
     text = path.read_text()
     assert "stray" not in text
@@ -3385,10 +4455,13 @@ def test_ini_write_is_idempotent_after_collapsing_a_duplicate(tmp_path: Path) ->
     path.write_text(
         "[Achievements]\nUsername = stale-first\n[Achievements]\nUsername = stale-second\n"
     )
-    ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}})
+    ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {})
     freeze(path)
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {})
+        is False
+    )
 
     assert unwritten(path)
 
@@ -3400,7 +4473,7 @@ def test_retroarch_write_leaves_no_stale_twin(tmp_path: Path) -> None:
         'cheevos_username = "stale-last"\n'
     )
 
-    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}, {}) is True
 
     text = path.read_text()
     assert text.count('cheevos_username = "correct"') == 1
@@ -3413,10 +4486,10 @@ def test_retroarch_write_is_idempotent_after_collapsing_a_duplicate(
 ) -> None:
     path = tmp_path / "retroarch.cfg"
     path.write_text('cheevos_username = "one"\ncheevos_username = "two"\n')
-    ep.set_retroarch_settings(path, {"cheevos_username": "correct"})
+    ep.set_retroarch_settings(path, {"cheevos_username": "correct"}, {})
     freeze(path)
 
-    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is False
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}, {}) is False
 
     assert unwritten(path)
 
@@ -3434,7 +4507,9 @@ def test_esde_write_collapses_a_repeated_owned_element(tmp_path: Path) -> None:
     )
 
     assert (
-        ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+        ep.set_esde_settings(
+            path, {"Theme": {"type": "string", "value": "correct"}}, {}
+        )
         is True
     )
 
@@ -3456,7 +4531,7 @@ def test_esde_write_leaves_a_repeated_unowned_element_alone(tmp_path: Path) -> N
         '<string name="Theme" value="stale" />\n'
     )
 
-    ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+    ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}}, {})
 
     names = [(n, v) for _, n, v in esde_elements(path)]
     assert ("Unowned", "one") in names
@@ -3470,11 +4545,13 @@ def test_esde_write_is_idempotent_after_collapsing_a_duplicate(tmp_path: Path) -
         '<string name="Theme" value="one" />\n'
         '<string name="Theme" value="two" />\n'
     )
-    ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+    ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}}, {})
     freeze(path)
 
     assert (
-        ep.set_esde_settings(path, {"Theme": {"type": "string", "value": "correct"}})
+        ep.set_esde_settings(
+            path, {"Theme": {"type": "string", "value": "correct"}}, {}
+        )
         is False
     )
 
@@ -3498,7 +4575,7 @@ def test_ini_a_torn_file_owning_only_a_removal_is_recreated_without_the_token(
     path = tmp_path / "secrets.ini"
     path.write_text("[Achievements]\nTok\nToken = TOKENabc123DEADBEEF\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is True
 
     assert "TOKENabc123DEADBEEF" not in path.read_text()
     # The note the load helper already printed is now true: the recreation
@@ -3518,10 +4595,10 @@ def test_ini_recreating_a_torn_removal_only_file_reaches_a_steady_state(
         "Achievements": {"Token": ep.REMOVE}
     }
 
-    assert ep.set_ini_settings(path, sections) is True
+    assert ep.set_ini_settings(path, sections, {}) is True
     freeze(path)
 
-    assert ep.set_ini_settings(path, sections) is False
+    assert ep.set_ini_settings(path, sections, {}) is False
     assert unwritten(path)
 
 
@@ -3539,7 +4616,10 @@ def test_ini_an_unreadable_file_owning_only_a_removal_is_recreated(
     unreadable.chmod(0o000)
 
     for path in (undecodable, unreadable):
-        assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+        assert (
+            ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {})
+            is True
+        )
 
     assert b"TOKEN" not in undecodable.read_bytes()
     # `_write` carries the old file's mode onto the replacement, so the
@@ -3559,11 +4639,11 @@ def test_retroarch_a_torn_file_owning_only_a_removal_is_recreated(
     path = tmp_path / "retroarch.cfg"
     path.write_text('torn line with no separator\ncheevos_token = "TOKENabc123"\n')
 
-    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}, {}) is True
 
     assert "TOKENabc123" not in path.read_text()
     freeze(path)
-    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is False
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}, {}) is False
     assert unwritten(path)
 
 
@@ -3577,14 +4657,18 @@ def test_a_rejected_login_leaves_no_token_behind_in_retroarch(tmp_path: Path) ->
     def run_once(payload: object) -> None:
         with ra_server(_json_handler(200, payload)) as url:
             files: dict[str, object] = {
-                "retroarch.cfg": {"format": "retroarch", "keys": {}}
+                "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
             }
             ra = retroachievements_namespace(
                 tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
             )
             assert ep.apply_retroachievements(files, ra, tmp_path) == 0
         table = cast("dict[str, object]", files["retroarch.cfg"])
-        ep.set_retroarch_settings(cfg, cast("dict[str, str]", table["keys"]))
+        ep.set_retroarch_settings(
+            cfg,
+            cast("dict[str, str]", table["enforce"]),
+            cast("dict[str, str]", table["seed"]),
+        )
 
     run_once({"Success": True, "Token": "tok-before"})
     assert 'cheevos_token = "tok-before"' in cfg.read_text()
@@ -3607,13 +4691,19 @@ def test_an_offline_boot_with_no_cache_clears_a_duckstation_login(
     ini_path = tmp_path / "settings.ini"
 
     def run_once(url: str) -> None:
-        files: dict[str, object] = {"settings.ini": {"format": "ini", "keys": {}}}
+        files: dict[str, object] = {
+            "settings.ini": {"format": "ini", "enforce": {}, "seed": {}}
+        }
         ra = retroachievements_namespace(
             tmp_path, url, [duckstation_target(machine_id_file, "settings.ini")]
         )
         assert ep.apply_retroachievements(files, ra, tmp_path) == 0
         table = cast("dict[str, object]", files["settings.ini"])
-        ep.set_ini_settings(ini_path, cast("dict[str, dict[str, str]]", table["keys"]))
+        ep.set_ini_settings(
+            ini_path,
+            cast("dict[str, dict[str, str]]", table["enforce"]),
+            cast("dict[str, dict[str, str]]", table["seed"]),
+        )
 
     with ra_server(_json_handler(200, {"Success": True, "Token": "tok-ds"})) as url:
         run_once(url)
@@ -3641,14 +4731,16 @@ def test_a_run_with_no_token_leaves_the_ppsspp_username_out_too(
     # already deleted when no token resolved, but the username key beside
     # it in ppsspp.ini was merely omitted, so it stayed on disk.
     token_file = tmp_path / "ppsspp_retroachievements.dat"
-    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    files: dict[str, object] = {
+        "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [secret_file_target(token_file)]
     )
 
     assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    keys = cast("dict[str, object]", files["ppsspp.ini"])["keys"]
+    keys = cast("dict[str, object]", files["ppsspp.ini"])["enforce"]
     achievements = cast("dict[str, object]", keys)["Achievements"]
     assert cast("dict[str, object]", achievements)["AchievementsUserName"] is ep.REMOVE
 
@@ -3707,7 +4799,9 @@ def test_the_login_posts_a_password_with_its_whitespace_intact(
 def test_apply_rejects_a_non_boolean_enabled(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
     )
@@ -3725,8 +4819,8 @@ def test_apply_disabled_removes_login_keys_but_leaves_enabled_and_hardcore_alone
     # writing them again from here would just be a second, redundant source
     # for the same fact.
     files: dict[str, object] = {
-        "retroarch.cfg": {"format": "retroarch", "keys": {}},
-        "Dolphin.ini": {"format": "ini", "keys": {}},
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}},
+        "Dolphin.ini": {"format": "ini", "enforce": {}, "seed": {}},
     }
     ra = retroachievements_namespace(
         tmp_path,
@@ -3740,13 +4834,15 @@ def test_apply_disabled_removes_login_keys_but_leaves_enabled_and_hardcore_alone
 
     assert ep.apply_retroachievements(files, ra, tmp_path) == 0
 
-    retroarch_keys = cast("dict[str, object]", files["retroarch.cfg"]["keys"])
+    retroarch_keys = cast("dict[str, object]", files["retroarch.cfg"]["enforce"])
     assert retroarch_keys["cheevos_username"] is ep.REMOVE
     assert retroarch_keys["cheevos_token"] is ep.REMOVE
     assert "cheevos_enable" not in retroarch_keys
     assert "cheevos_hardcore_mode_enable" not in retroarch_keys
 
-    dolphin_section = cast("dict[str, object]", files["Dolphin.ini"]["keys"]["Cheevos"])
+    dolphin_section = cast(
+        "dict[str, object]", files["Dolphin.ini"]["enforce"]["Cheevos"]
+    )
     assert dolphin_section["Username"] is ep.REMOVE
     assert dolphin_section["Token"] is ep.REMOVE
     assert "Enabled" not in dolphin_section
@@ -3762,7 +4858,9 @@ def test_apply_disabled_deletes_the_secret_file_token_and_the_cache(
     cache_file.parent.mkdir()
     cache_file.write_text("stale-cache-token")
 
-    files: dict[str, object] = {"ppsspp.ini": {"format": "ini", "keys": {}}}
+    files: dict[str, object] = {
+        "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [secret_file_target(token_file)]
     )
@@ -3773,7 +4871,7 @@ def test_apply_disabled_deletes_the_secret_file_token_and_the_cache(
 
     assert not token_file.exists()
     assert not cache_file.exists()
-    keys = cast("dict[str, object]", files["ppsspp.ini"]["keys"]["Achievements"])
+    keys = cast("dict[str, object]", files["ppsspp.ini"]["enforce"]["Achievements"])
     assert keys["AchievementsUserName"] is ep.REMOVE
 
 
@@ -3788,7 +4886,9 @@ def test_apply_disabled_prunes_the_directory_the_cache_lived_in(
     cache_file.parent.mkdir()
     cache_file.write_text("stale-cache-token")
 
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
     )
@@ -3849,7 +4949,9 @@ def test_apply_disabled_keeps_a_cache_directory_that_holds_anything_else(
     neighbour = cache_file.parent / "someone-elses.dat"
     neighbour.write_text("not ours")
 
-    files: dict[str, object] = {"retroarch.cfg": {"format": "retroarch", "keys": {}}}
+    files: dict[str, object] = {
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}}
+    }
     ra = retroachievements_namespace(
         tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
     )
@@ -3875,8 +4977,8 @@ def test_apply_disabled_stages_its_removals_and_says_nothing(
     # rather than here.
     token_file = tmp_path / "ppsspp_retroachievements.dat"
     files: dict[str, object] = {
-        "retroarch.cfg": {"format": "retroarch", "keys": {}},
-        "ppsspp.ini": {"format": "ini", "keys": {}},
+        "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}},
+        "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}},
     }
     ra = retroachievements_namespace(
         tmp_path,
@@ -3934,8 +5036,8 @@ def test_main_survives_a_credential_removal_it_cannot_write(
         json.dumps(
             {
                 "files": {
-                    "pcsx2/secrets.ini": {"format": "ini", "keys": {}},
-                    "retroarch.cfg": {"format": "retroarch", "keys": {}},
+                    "pcsx2/secrets.ini": {"format": "ini", "enforce": {}, "seed": {}},
+                    "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}},
                 },
                 "retroachievements": ra,
             }
@@ -3983,7 +5085,9 @@ def test_main_still_fails_the_session_on_a_malformed_document(
     values.write_text(
         json.dumps(
             {
-                "files": {"pcsx2/secrets.ini": {"format": "ini", "keys": {}}},
+                "files": {
+                    "pcsx2/secrets.ini": {"format": "ini", "enforce": {}, "seed": {}}
+                },
                 "retroachievements": ra,
             }
         )
@@ -4028,11 +5132,11 @@ def test_main_disabled_on_a_never_enabled_box_writes_nothing_at_all(
         json.dumps(
             {
                 "files": {
-                    "retroarch.cfg": {"format": "retroarch", "keys": {}},
-                    "Dolphin.ini": {"format": "ini", "keys": {}},
-                    "PCSX2.ini": {"format": "ini", "keys": {}},
-                    "secrets.ini": {"format": "ini", "keys": {}},
-                    "ppsspp.ini": {"format": "ini", "keys": {}},
+                    "retroarch.cfg": {"format": "retroarch", "enforce": {}, "seed": {}},
+                    "Dolphin.ini": {"format": "ini", "enforce": {}, "seed": {}},
+                    "PCSX2.ini": {"format": "ini", "enforce": {}, "seed": {}},
+                    "secrets.ini": {"format": "ini", "enforce": {}, "seed": {}},
+                    "ppsspp.ini": {"format": "ini", "enforce": {}, "seed": {}},
                 },
                 "retroachievements": ra,
             }
@@ -4075,7 +5179,13 @@ def test_main_disabled_attempts_no_login_at_all(
         values.write_text(
             json.dumps(
                 {
-                    "files": {"retroarch.cfg": {"format": "retroarch", "keys": {}}},
+                    "files": {
+                        "retroarch.cfg": {
+                            "format": "retroarch",
+                            "enforce": {},
+                            "seed": {},
+                        }
+                    },
                     "retroachievements": ra,
                 }
             )
@@ -4117,8 +5227,8 @@ def test_main_disabled_recreates_a_torn_secrets_file_without_the_live_token(
         json.dumps(
             {
                 "files": {
-                    "PCSX2.ini": {"format": "ini", "keys": {}},
-                    "secrets.ini": {"format": "ini", "keys": {}},
+                    "PCSX2.ini": {"format": "ini", "enforce": {}, "seed": {}},
+                    "secrets.ini": {"format": "ini", "enforce": {}, "seed": {}},
                 },
                 "retroachievements": ra,
             }
@@ -4166,7 +5276,8 @@ def test_main_enabled_then_disabled_removes_every_credential_and_stays_idempoten
             "files": {
                 name: {
                     "format": "retroarch" if name == "retroarch.cfg" else "ini",
-                    "keys": {},
+                    "enforce": {},
+                    "seed": {},
                 }
                 for name in config_files
             },
@@ -4258,7 +5369,9 @@ def test_ini_appending_a_key_to_an_unterminated_file_keeps_the_last_line(
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nToken = keepme")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "alice"}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "alice"}}, {}) is True
+    )
 
     lines = path.read_text().split("\n")
     assert "Token = keepme" in lines
@@ -4271,7 +5384,7 @@ def test_retroarch_appending_a_key_to_an_unterminated_file_keeps_the_last_line(
     path = tmp_path / "retroarch.cfg"
     path.write_text('cheevos_token = "keepme"')
 
-    assert ep.set_retroarch_settings(path, {"cheevos_username": "alice"}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "alice"}, {}) is True
 
     lines = path.read_text().split("\n")
     assert 'cheevos_token = "keepme"' in lines
@@ -4291,7 +5404,7 @@ def test_ini_keeps_an_indented_comment_through_a_write(tmp_path: Path) -> None:
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nConfirmStop = True\n  # note\nKeepMe = 3\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "  # note" in text
@@ -4303,7 +5416,7 @@ def test_ini_keeps_an_indented_assignment_through_a_write(tmp_path: Path) -> Non
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nConfirmStop = True\n  Indented = 9\nKeepMe = 3\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "  Indented = 9" in text
@@ -4318,7 +5431,7 @@ def test_ini_keeps_an_indented_section_header_through_a_write(tmp_path: Path) ->
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nConfirmStop = True\n  [Later]\nKeepMe = 3\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "  [Later]" in text
@@ -4338,7 +5451,7 @@ def test_ini_keeps_a_line_indented_by_any_whitespace(
     path = tmp_path / "Dolphin.ini"
     path.write_text(f"[Interface]\nConfirmStop = True\n{indent}KeepMe = 3\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert f"{indent}KeepMe = 3" in text
@@ -4358,7 +5471,7 @@ def test_ini_removes_a_token_under_a_header_indented_by_exotic_whitespace(
     path = tmp_path / "secrets.ini"
     path.write_text(f"{indent}[Achievements] ; was [Cheevos]\nToken = TOKENlive\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}) is True
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": ep.REMOVE}}, {}) is True
 
     assert "TOKENlive" not in path.read_text()
 
@@ -4384,7 +5497,7 @@ def test_ini_keeps_a_header_whose_trailing_comment_carries_a_bracket(
         "[Achievements] ; was [Cheevos]\nToken = TOKENlive\nUserPref = keepme\n"
     )
 
-    assert ep.set_ini_settings(path, RA_SECRET) is True
+    assert ep.set_ini_settings(path, RA_SECRET, {}) is True
 
     text = path.read_text()
     assert "TOKENlive" not in text
@@ -4400,7 +5513,7 @@ def test_ini_keeps_a_header_whose_hash_comment_carries_a_bracket(
         "[Achievements] # old [name]\nToken = TOKENlive\nUserPref = keepme\n"
     )
 
-    assert ep.set_ini_settings(path, RA_SECRET) is True
+    assert ep.set_ini_settings(path, RA_SECRET, {}) is True
 
     text = path.read_text()
     assert "TOKENlive" not in text
@@ -4420,7 +5533,7 @@ def test_ini_recreates_a_header_shape_two_grammars_name_differently(
     path = tmp_path / "secrets.ini"
     path.write_text(f"{header}\nToken = TOKENlive\n")
 
-    assert ep.set_ini_settings(path, RA_SECRET) is True
+    assert ep.set_ini_settings(path, RA_SECRET, {}) is True
 
     assert "TOKENlive" not in path.read_text()
 
@@ -4436,7 +5549,7 @@ def test_ini_recreates_a_file_with_an_empty_section_name(
     path = tmp_path / "secrets.ini"
     path.write_text(f"{header}\nToken = TOKENlive\n")
 
-    assert ep.set_ini_settings(path, RA_SECRET) is True
+    assert ep.set_ini_settings(path, RA_SECRET, {}) is True
 
     assert "TOKENlive" not in path.read_text()
 
@@ -4451,7 +5564,7 @@ def test_ini_keeps_a_bracketed_line_neither_grammar_reads_as_a_header(
     path = tmp_path / "secrets.ini"
     path.write_text("[Achievements]\nToken = TOKENlive\n[foo bar = baz\n")
 
-    assert ep.set_ini_settings(path, RA_SECRET) is True
+    assert ep.set_ini_settings(path, RA_SECRET, {}) is True
 
     text = path.read_text()
     assert "TOKENlive" not in text
@@ -4463,7 +5576,7 @@ def test_ini_edits_an_ordinary_header_in_place(tmp_path: Path, header: str) -> N
     path = tmp_path / "secrets.ini"
     path.write_text(f"{header}\nToken = TOKENlive\nUserPref = keepme\n")
 
-    assert ep.set_ini_settings(path, RA_SECRET) is True
+    assert ep.set_ini_settings(path, RA_SECRET, {}) is True
 
     text = path.read_text()
     assert "TOKENlive" not in text
@@ -4480,7 +5593,7 @@ def test_retroarch_recreates_a_file_carrying_a_section_header(tmp_path: Path) ->
     path = tmp_path / "retroarch.cfg"
     path.write_text('video_fullscreen = "true"\n[Foo]\ncheevos_token = "TOKENlive"\n')
 
-    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}, {}) is True
 
     assert "TOKENlive" not in path.read_text()
 
@@ -4491,7 +5604,7 @@ def test_retroarch_recreates_a_bracketed_line_carrying_an_assignment(
     path = tmp_path / "retroarch.cfg"
     path.write_text('[something] = "x"\ncheevos_token = "TOKENlive"\n')
 
-    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}, {}) is True
 
     assert "TOKENlive" not in path.read_text()
 
@@ -4527,7 +5640,7 @@ def test_ini_edits_a_file_carrying_a_wrapper_named_section_in_place(
     path = tmp_path / "secrets.ini"
     path.write_text(f"{spelling}\nKeepMe = precious\n[Achievements]\nToken = old\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Token": "fresh"}}) is True
+    assert ep.set_ini_settings(path, {"Achievements": {"Token": "fresh"}}, {}) is True
 
     text = path.read_text()
     assert spelling in text
@@ -4544,7 +5657,7 @@ def test_ini_still_recreates_a_wrapper_named_line_that_is_not_a_header(
     path = tmp_path / "secrets.ini"
     path.write_text(f"{spelling}\nToken = TOKENlive\n")
 
-    assert ep.set_ini_settings(path, RA_SECRET) is True
+    assert ep.set_ini_settings(path, RA_SECRET, {}) is True
 
     text = path.read_text()
     assert "TOKENlive" not in text
@@ -4564,7 +5677,7 @@ def test_retroarch_recreates_a_file_spelling_the_wrapper_header(
     path = tmp_path / "retroarch.cfg"
     path.write_text(f'{spelling}\ncheevos_token = "TOKENlive"\n')
 
-    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_token": ep.REMOVE}, {}) is True
 
     text = path.read_text()
     assert "TOKENlive" not in text
@@ -4584,7 +5697,7 @@ def test_ini_recreates_a_whitespace_only_file_with_its_own_note(
     path = tmp_path / "settings.ini"
     path.write_text(text)
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     assert "Fullscreen = True" in path.read_text()
     assert "is empty; recreating it" in capsys.readouterr().err
@@ -4612,7 +5725,7 @@ def test_ini_recreates_every_shape_of_a_non_setting_line(
     path = tmp_path / "Dolphin.ini"
     path.write_text(f"[Interface]\nConfirmStop = True\n{line}\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "ConfirmStop = False" in text
@@ -4628,7 +5741,7 @@ def test_retroarch_recreates_every_shape_of_a_non_setting_line(
     path = tmp_path / "retroarch.cfg"
     path.write_text(f'menu_driver = "rgui"\n{line}\n')
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     text = path.read_text()
     assert 'menu_driver = "ozone"' in text
@@ -4650,7 +5763,9 @@ def test_ini_edits_only_the_key_spelled_with_the_declared_case(
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nUsername = capital\nusername = lower\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {}) is True
+    )
 
     settings = ini_settings(path)
     assert ("Achievements", "Username", "correct") in settings
@@ -4665,7 +5780,7 @@ def ini_written(path: Path, source: str | None) -> str:
     if source is not None:
         path.write_text(source)
     ep.set_ini_settings(
-        path, {"Achievements": {"Username": "alice", "Token": ep.REMOVE}}
+        path, {"Achievements": {"Username": "alice", "Token": ep.REMOVE}}, {}
     )
     return path.read_text()
 
@@ -4674,7 +5789,7 @@ def retroarch_written(path: Path, source: str | None) -> str:
     if source is not None:
         path.write_text(source)
     ep.set_retroarch_settings(
-        path, {"cheevos_username": "alice", "cheevos_token": ep.REMOVE}
+        path, {"cheevos_username": "alice", "cheevos_token": ep.REMOVE}, {}
     )
     return path.read_text()
 
@@ -4724,7 +5839,7 @@ def test_an_all_removals_pass_writes_no_wrapper_header(tmp_path: Path) -> None:
     path = tmp_path / "secrets.ini"
     path.write_text("[Achievements]\ntorn\nToken = TOKENlive\n")
 
-    assert ep.set_ini_settings(path, RA_SECRET) is True
+    assert ep.set_ini_settings(path, RA_SECRET, {}) is True
 
     text = path.read_text()
     assert "TOKENlive" not in text
@@ -4833,10 +5948,10 @@ def test_ini_leaves_a_spaceless_file_holding_the_flake_values_unwritten(
     path.write_text(source)
     freeze(path)
 
-    assert ep.set_ini_settings(path, owned) is False
+    assert ep.set_ini_settings(path, owned, {}) is False
     assert unwritten(path)
 
-    assert ep.set_ini_settings(path, owned) is False
+    assert ep.set_ini_settings(path, owned, {}) is False
     assert unwritten(path)
 
 
@@ -4852,7 +5967,9 @@ def test_ini_reduces_a_key_repeated_inside_one_section_instance(
         "[Achievements]\nUsername = stale-one\nUsername = stale-two\nKeepMe = yes\n"
     )
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {}) is True
+    )
 
     settings = ini_settings(path)
     assert [e for e in settings if e[1] == "Username"] == [
@@ -4861,7 +5978,10 @@ def test_ini_reduces_a_key_repeated_inside_one_section_instance(
     assert ("Achievements", "KeepMe", "yes") in settings
 
     freeze(path)
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {})
+        is False
+    )
     assert unwritten(path)
 
 
@@ -4876,7 +5996,9 @@ def test_ini_reduces_a_preamble_twin_when_the_section_is_absent(
     path = tmp_path / "settings.ini"
     path.write_text("Username = stale\nUnowned = keepme\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {}) is True
+    )
 
     settings = ini_settings(path)
     assert [entry for entry in settings if entry[1] == "Username"] == [
@@ -4885,7 +6007,10 @@ def test_ini_reduces_a_preamble_twin_when_the_section_is_absent(
     assert (None, "Unowned", "keepme") in settings
 
     freeze(path)
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {})
+        is False
+    )
     assert unwritten(path)
 
 
@@ -4906,7 +6031,9 @@ def test_ini_keeps_every_assignment_of_a_key_the_flake_does_not_own(
         "Unowned = third\n"
     )
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {}) is True
+    )
 
     settings = ini_settings(path)
     assert [entry for entry in settings if entry[1] == "Unowned"] == [
@@ -4929,7 +6056,7 @@ def test_ini_edits_a_file_with_a_duplicated_section_header_in_place(
         "[Interface]\nConfirmStop = True\nKeepMe = yes\n[Interface]\nAlso = kept\n"
     )
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "KeepMe = yes" in text
@@ -4940,7 +6067,7 @@ def test_ini_edits_a_file_with_a_headerless_preamble_in_place(tmp_path: Path) ->
     path = tmp_path / "Dolphin.ini"
     path.write_text("Orphan = kept\n[Interface]\nConfirmStop = True\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     text = path.read_text()
     assert "Orphan = kept" in text
@@ -4991,7 +6118,7 @@ def test_ini_keeps_every_unowned_setting_through_an_edit(
     path.write_text(MIXED)
     before = unowned_ini(path, MIXED_OWNED_NAMES)
 
-    assert ep.set_ini_settings(path, owned) is wrote
+    assert ep.set_ini_settings(path, owned, {}) is wrote
 
     assert unowned_ini(path, MIXED_OWNED_NAMES) == before
 
@@ -5002,7 +6129,7 @@ def test_ini_keeps_the_previous_line_intact_when_seeding_into_an_unterminated_fi
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nConfirmStop = False\n[Display]\nRenderToMain = True")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     settings = ini_settings(path)
     assert ("Display", "RenderToMain", "True") in settings
@@ -5117,14 +6244,14 @@ def test_retroarch_reduces_a_key_repeated_in_the_flat_file(tmp_path: Path) -> No
         'cheevos_username = "one"\nkeepme = "yes"\ncheevos_username = "two"\n'
     )
 
-    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is True
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}, {}) is True
 
     settings = retroarch_settings(path)
     assert [v for k, v in settings if k == "cheevos_username"] == ['"correct"']
     assert ("keepme", '"yes"') in settings
 
     freeze(path)
-    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}) is False
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "correct"}, {}) is False
     assert unwritten(path)
 
 
@@ -5135,10 +6262,10 @@ def test_retroarch_leaves_a_file_holding_the_flake_values_unwritten(
     path.write_text('menu_driver = "ozone"\nvideo_fullscreen = "true"\nkeep = "me"\n')
     freeze(path)
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is False
     assert unwritten(path)
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is False
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is False
     assert unwritten(path)
 
 
@@ -5161,7 +6288,7 @@ def test_retroarch_keeps_every_unowned_setting_through_an_edit(
         if entry[0] not in RA_MIXED_OWNED_NAMES
     ]
 
-    assert ep.set_retroarch_settings(path, owned) is wrote
+    assert ep.set_retroarch_settings(path, owned, {}) is wrote
 
     after = [
         entry
@@ -5177,7 +6304,7 @@ def test_retroarch_keeps_the_previous_line_intact_when_appending_a_key(
     path = tmp_path / "retroarch.cfg"
     path.write_text('menu_driver = "ozone"\ninput_driver = "sdl"')
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     settings = retroarch_settings(path)
     assert ("input_driver", '"sdl"') in settings
@@ -5196,7 +6323,7 @@ def test_retroarch_recreates_a_file_with_a_semicolon_line_that_is_not_a_setting(
     path = tmp_path / "retroarch.cfg"
     path.write_text('menu_driver = "rgui"\n; a note with no assignment\n')
 
-    assert ep.set_retroarch_settings(path, RA_OWNED) is True
+    assert ep.set_retroarch_settings(path, RA_OWNED, {}) is True
 
     text = path.read_text()
     assert "a note with no assignment" not in text
@@ -5210,7 +6337,7 @@ def test_ini_keeps_a_semicolon_comment_because_ini_has_them(tmp_path: Path) -> N
     path = tmp_path / "Dolphin.ini"
     path.write_text("[Interface]\nConfirmStop = True\n; a note with no assignment\n")
 
-    assert ep.set_ini_settings(path, INI_OWNED) is True
+    assert ep.set_ini_settings(path, INI_OWNED, {}) is True
 
     assert "; a note with no assignment" in path.read_text()
 
@@ -5229,7 +6356,7 @@ def test_ini_keeps_every_setting_of_a_file_in_scummvms_own_shape(
     path.write_text(SCUMMVM)
     before = unowned_ini(path, {("scummvm", "fullscreen")})
 
-    assert ep.set_ini_settings(path, {"scummvm": {"fullscreen": "false"}}) is True
+    assert ep.set_ini_settings(path, {"scummvm": {"fullscreen": "false"}}, {}) is True
 
     assert unowned_ini(path, {("scummvm", "fullscreen")}) == before
     assert [e for e in ini_settings(path) if e[1] == "fullscreen"] == [
@@ -5241,7 +6368,7 @@ def test_ini_keeps_every_setting_of_a_file_in_scummvms_own_shape(
     assert "vga  \n" in path.read_text()
 
     freeze(path)
-    assert ep.set_ini_settings(path, {"scummvm": {"fullscreen": "false"}}) is False
+    assert ep.set_ini_settings(path, {"scummvm": {"fullscreen": "false"}}, {}) is False
     assert unwritten(path)
 
 
@@ -5274,7 +6401,7 @@ def test_ini_refuses_an_owned_value_spanning_more_than_one_line(
     path.write_text("[Achievements]\nUsername = old\nKeepMe = yes\n")
     freeze(path)
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": value}}) is False
+    assert ep.set_ini_settings(path, {"Achievements": {"Username": value}}, {}) is False
 
     assert unwritten(path)
     assert "Username = old" in path.read_text()
@@ -5288,7 +6415,7 @@ def test_retroarch_refuses_an_owned_value_spanning_more_than_one_line(
     path.write_text('cheevos_username = "old"\n')
     freeze(path)
 
-    assert ep.set_retroarch_settings(path, {"cheevos_username": "a\nb"}) is False
+    assert ep.set_retroarch_settings(path, {"cheevos_username": "a\nb"}, {}) is False
 
     assert unwritten(path)
     assert "does not read back as" in capsys.readouterr().err
@@ -5305,7 +6432,9 @@ def test_ini_refuses_a_multi_line_value_for_a_key_the_file_does_not_carry(
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nKeepMe = yes\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "a\nb"}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "a\nb"}}, {}) is False
+    )
 
     assert "a\nb" not in path.read_text()
 
@@ -5326,7 +6455,7 @@ def test_a_username_with_a_trailing_newline_does_not_end_the_session(
 
     assert (
         ep.set_ini_settings(
-            path, {"Achievements": {"Username": "player\n", "Hardcore": "false"}}
+            path, {"Achievements": {"Username": "player\n", "Hardcore": "false"}}, {}
         )
         is True
     )
@@ -5348,7 +6477,7 @@ def test_ini_refuses_an_owned_key_name_that_is_not_one_line(
     path.write_text("[Achievements]\nUsername = old\n")
 
     assert (
-        ep.set_ini_settings(path, {"Achievements": {"Bad\nKey": "v", "Good": "x"}})
+        ep.set_ini_settings(path, {"Achievements": {"Bad\nKey": "v", "Good": "x"}}, {})
         is True
     )
 
@@ -5369,7 +6498,7 @@ def test_ini_refuses_an_owned_section_name_that_is_not_one_line(
     owned = {"Sec\ntion": {"K": "v"}, "Achievements": {"Username": "u"}}
     path.write_text("[Achievements]\nUsername = old\n")
 
-    assert ep.set_ini_settings(path, owned) is True
+    assert ep.set_ini_settings(path, owned, {}) is True
 
     text = path.read_text()
     assert "Username = u" in text
@@ -5381,7 +6510,7 @@ def test_ini_refuses_an_owned_section_name_that_is_not_one_line(
     # The file must still be readable: a second run against a settled file
     # must not report a recreation, which is what a broken header would
     # force on every launch.
-    assert ep.set_ini_settings(path, owned) is False
+    assert ep.set_ini_settings(path, owned, {}) is False
 
 
 def test_retroarch_refuses_an_owned_key_name_that_is_not_one_line(
@@ -5390,7 +6519,9 @@ def test_retroarch_refuses_an_owned_key_name_that_is_not_one_line(
     path = tmp_path / "retroarch.cfg"
     path.write_text('menu_driver = "rgui"\n')
 
-    assert ep.set_retroarch_settings(path, {"bad\nkey": "v", "good_key": "w"}) is True
+    assert (
+        ep.set_retroarch_settings(path, {"bad\nkey": "v", "good_key": "w"}, {}) is True
+    )
 
     text = path.read_text()
     assert 'menu_driver = "rgui"' in text
@@ -5410,12 +6541,16 @@ def test_ini_settles_an_owned_value_declared_with_surrounding_whitespace(
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nUsername = old\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": " spaced "}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": " spaced "}}, {})
+        is True
+    )
     assert "Username =  spaced \n" in path.read_text()
 
     freeze(path)
     assert (
-        ep.set_ini_settings(path, {"Achievements": {"Username": " spaced "}}) is False
+        ep.set_ini_settings(path, {"Achievements": {"Username": " spaced "}}, {})
+        is False
     )
     assert unwritten(path)
 
@@ -5432,6 +6567,7 @@ def test_ini_honors_an_owned_table_naming_a_wrapper_like_section(
         ep.set_ini_settings(
             path,
             {WRAPPER: {"Key": "value"}, "Achievements": {"Username": "correct"}},
+            {},
         )
         is True
     )
@@ -5449,7 +6585,7 @@ def test_ini_recreating_a_file_owning_only_a_wrapper_like_section_writes_it(
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\ntorn\n")
 
-    assert ep.set_ini_settings(path, {WRAPPER: {"Key": "value"}}) is True
+    assert ep.set_ini_settings(path, {WRAPPER: {"Key": "value"}}, {}) is True
 
     text = path.read_text()
     assert f"[{WRAPPER}]" in text
@@ -5476,6 +6612,7 @@ def test_ini_recreating_a_file_never_writes_a_multi_line_value(
                     "Hardcore": "true",
                 }
             },
+            {},
         )
         is True
     )
@@ -5499,12 +6636,17 @@ def test_ini_collapses_a_repeat_whose_live_assignment_is_already_right(
     path.write_text("[Achievements]\nUsername = stale\nUsername = correct\n")
     freeze(path)
 
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is True
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {}) is True
+    )
 
     assert ini_settings(path) == [("Achievements", "Username", "correct")]
 
     freeze(path)
-    assert ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}) is False
+    assert (
+        ep.set_ini_settings(path, {"Achievements": {"Username": "correct"}}, {})
+        is False
+    )
     assert unwritten(path)
 
 
@@ -5522,8 +6664,8 @@ def test_ini_refuses_an_owned_value_carrying_a_carriage_return(
         "Achievements": {"Username": "a\rb"}
     }
 
-    assert ep.set_ini_settings(path, owned) is False
-    assert ep.set_ini_settings(path, owned) is False
+    assert ep.set_ini_settings(path, owned, {}) is False
+    assert ep.set_ini_settings(path, owned, {}) is False
 
     settings = ini_settings(path)
     assert ("Achievements", "KeepMe", "precious") in settings
@@ -5543,7 +6685,7 @@ def test_ini_refuses_an_owned_key_name_carrying_a_delimiter(
         "Achievements": {"a=b": "v", "Username": "u"}
     }
 
-    assert ep.set_ini_settings(path, owned) is True
+    assert ep.set_ini_settings(path, owned, {}) is True
 
     text = path.read_text()
     assert "Username = u" in text
@@ -5553,7 +6695,7 @@ def test_ini_refuses_an_owned_key_name_carrying_a_delimiter(
     # Settled: the second run must find nothing to do, where the unguarded
     # editor appended another copy here.
     freeze(path)
-    assert ep.set_ini_settings(path, owned) is False
+    assert ep.set_ini_settings(path, owned, {}) is False
     assert unwritten(path)
 
 
@@ -5564,7 +6706,7 @@ def test_retroarch_refuses_an_owned_key_name_carrying_a_delimiter(
     path.write_text('menu_driver = "rgui"\n')
     owned: dict[str, str | ep.Removal] = {"bad=key": "v", "good_key": "w"}
 
-    assert ep.set_retroarch_settings(path, owned) is True
+    assert ep.set_retroarch_settings(path, owned, {}) is True
 
     text = path.read_text()
     assert 'good_key = "w"' in text
@@ -5572,7 +6714,7 @@ def test_retroarch_refuses_an_owned_key_name_carrying_a_delimiter(
     assert "does not read back as" in capsys.readouterr().err
 
     freeze(path)
-    assert ep.set_retroarch_settings(path, owned) is False
+    assert ep.set_retroarch_settings(path, owned, {}) is False
     assert unwritten(path)
 
 
@@ -5590,7 +6732,7 @@ def test_ini_refuses_an_owned_section_name_carrying_a_closing_bracket(
         "Achievements": {"Username": "u"},
     }
 
-    assert ep.set_ini_settings(path, owned) is True
+    assert ep.set_ini_settings(path, owned, {}) is True
 
     text = path.read_text()
     assert "Username = u" in text
@@ -5601,7 +6743,7 @@ def test_ini_refuses_an_owned_section_name_carrying_a_closing_bracket(
     # The file must still parse: a second run against a settled file must
     # not report a write, which a refused header would force forever.
     freeze(path)
-    assert ep.set_ini_settings(path, owned) is False
+    assert ep.set_ini_settings(path, owned, {}) is False
     assert unwritten(path)
 
 
@@ -5617,7 +6759,8 @@ def test_ini_refuses_an_owned_key_name_that_reads_back_as_something_else(
     path.write_text("[Achievements]\nUsername = old\n")
 
     assert (
-        ep.set_ini_settings(path, {"Achievements": {key: "v", "Username": "u"}}) is True
+        ep.set_ini_settings(path, {"Achievements": {key: "v", "Username": "u"}}, {})
+        is True
     )
 
     text = path.read_text()
@@ -5636,7 +6779,7 @@ def test_retroarch_keeps_a_semicolon_prefixed_key_and_refuses_a_hash_one(
     path = tmp_path / "retroarch.cfg"
     path.write_text('menu_driver = "rgui"\n')
 
-    assert ep.set_retroarch_settings(path, {";semi": "s", "#hash": "h"}) is True
+    assert ep.set_retroarch_settings(path, {";semi": "s", "#hash": "h"}, {}) is True
 
     text = path.read_text()
     assert ';semi = "s"' in text
@@ -5644,7 +6787,7 @@ def test_retroarch_keeps_a_semicolon_prefixed_key_and_refuses_a_hash_one(
     assert "does not read back as" in capsys.readouterr().err
 
     freeze(path)
-    assert ep.set_retroarch_settings(path, {";semi": "s", "#hash": "h"}) is False
+    assert ep.set_retroarch_settings(path, {";semi": "s", "#hash": "h"}, {}) is False
     assert unwritten(path)
 
 
@@ -5657,7 +6800,7 @@ def test_ini_drops_a_removal_under_a_key_name_that_does_not_read_back(
     path = tmp_path / "settings.ini"
     path.write_text("[Achievements]\nUsername = old\n")
 
-    assert ep.set_ini_settings(path, {"Achievements": {"a=b": ep.REMOVE}}) is False
+    assert ep.set_ini_settings(path, {"Achievements": {"a=b": ep.REMOVE}}, {}) is False
 
     assert "Username = old" in path.read_text()
     assert "does not read back as" in capsys.readouterr().err

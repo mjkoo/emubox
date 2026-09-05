@@ -8,8 +8,8 @@
 #
 # 1. Paths and packages. Each emulator's own config file path, verified
 #    against that emulator's source at the pinned revision, bound exactly
-#    once so no two call sites can drift apart; the RetroArch build and the
-#    cores directory that follows from it.
+#    once so no two call sites can drift apart; the RetroArch build, wrapped
+#    with the settings it needs delivered before every launch.
 # 2. Frontend overrides. Every system whose assigned emulator
 #    differs from ES-DE's bundled default, copied verbatim from the pinned
 #    upstream `es_systems.xml` with only the command order rewritten, and
@@ -114,15 +114,42 @@ let
   # proves only that the module agrees with itself.
   biosDirectory = "/data/bios";
 
-  # The flake's own cores bundle - the one source `libretro_directory`
-  # below is allowed to name (spec: "the flake's packaged cores and no
-  # other source"). Every `libretro-*` core derivation installs its .so
-  # into `$out/lib/retroarch/cores` by default (mkLibretroCore.nix); with
-  # no cores of its own, `symlinkJoin` folds every core named here plus
-  # retroarch-bare into one `$out`, so this literal subpath is where all of
-  # them land together - not a path this module invents.
-  retroarchWithCores = pkgs.retroarch.withCores (
-    cores: with cores; [
+  # RetroArch's own launch-time settings, delivered as a flake-owned append
+  # file every launch passes ahead of `retroarch.cfg` itself
+  # (`--appendconfig`, retroarch-bare's own wrapper.nix). Only the settings
+  # that must win over whatever a player or a prior session left in
+  # `retroarch.cfg` live here; everything a player is meant to keep tuning
+  # session to session - the menu driver, the hotkeys - stays a seeded key
+  # in `ownedFiles` below instead, written once and never overwritten by a
+  # later launch. Nor do `savefile_directory`/`savestate_directory` move
+  # here even though they are equally static: the saves capability's route
+  # table needs each one to remain a parsed, owned `retroarch.cfg` key so
+  # it can order migration before the value is written, and an
+  # append-config entry is delivered before `emubox-prepare` ever parses
+  # the file at all - so those two stay put in `ownedFiles` below.
+  #
+  # `libretro_directory` is pinned to the literal
+  # `/run/current-system/sw/lib/retroarch/cores`, not this build's own
+  # `$out/lib/retroarch/cores`: the file these settings render into is
+  # itself a build input of this same derivation (retroarch-bare's
+  # `wrapper.nix` renders it with `runCommand` and appends it via
+  # `makeBinaryWrapper`), so a value naming this derivation's own output
+  # would make the derivation depend on its own output, and evaluation
+  # would fail with infinite recursion. The literal still resolves through
+  # `environment.systemPackages` below to this build and no other source -
+  # every `libretro-*` core derivation installs its .so into
+  # `$out/lib/retroarch/cores` by default (mkLibretroCore.nix), and with no
+  # cores of its own, `symlinkJoin` folds every core named here plus
+  # retroarch-bare into one `$out`, so that subpath is where all of them
+  # land together. It is also the exact path ES-DE's bundled find rules
+  # resolve `%CORE_RETROARCH%` against (see the frontend-overrides comment
+  # below), and the wrapper passes `-L <this build's own $out>/lib/retroarch/cores`
+  # on every launch regardless of what `libretro_directory` names - so
+  # RetroArch always loads its cores from its own output, and the literal
+  # here only ever has to satisfy ES-DE's placeholder resolution, never the
+  # wrapper's own `-L` flag.
+  retroarchWithCores = pkgs.wrapRetroArch {
+    cores = with pkgs.libretro; [
       stella
       prosystem
       handy
@@ -149,9 +176,61 @@ let
       bluemsx
       vecx
       freeintv
-    ]
-  );
-  coresDirectory = "${retroarchWithCores}/lib/retroarch/cores";
+    ];
+    settings = {
+      video_fullscreen = "true";
+      libretro_directory = "/run/current-system/sw/lib/retroarch/cores";
+      # The literal "default" is magic in RetroArch's own parser and
+      # gets cleared back to empty (configuration.c:4346-4347) - never
+      # spell the BIOS directory that way.
+      system_directory = biosDirectory;
+      autosave_interval = "30";
+      # Both entries a family could otherwise use to pull unvetted
+      # cores or content onto the box over the network - the "Online
+      # Updater" submenu and the separate top-level "Core Downloader"
+      # shortcut.
+      menu_show_online_updater = "false";
+      menu_show_core_updater = "false";
+      # The gamepad-combo counterparts, device-independent (no `_btn`
+      # binding needed). Both keys are plain `SETTING_UINT`s against
+      # RetroArch's `enum input_combo_type` (configuration.c:2558,2560),
+      # whose full membership, read at the pinned v1.22.2 source
+      # (`input/input_defines.h:211-225`), is: `NONE`=0,
+      # `DOWN_Y_L_R`=1, `L3_R3`=2, `L1_R1_START_SELECT`=3,
+      # `START_SELECT`=4, `L3_R`=5, `L_R`=6, `HOLD_START`=7,
+      # `HOLD_SELECT`=8, `DOWN_SELECT`=9, `L2_R2`=10, `LAST`=11.
+      # The desktop build's own default for both is `INPUT_COMBO_NONE`
+      # (config.def.h:939,942) - with nothing pinned here a player who
+      # entered a core would have no controller-only way back to the
+      # frontend, which is exactly the gap a quit combo exists to close.
+      #
+      # The two values must differ, and not merely for tidiness.
+      # `runloop.c` evaluates them independently against the same frame's
+      # button bits: the menu combo sets `RARCH_MENU_TOGGLE`
+      # (runloop.c:5648-5653) and the quit combo sets `trig_quit_key`
+      # (runloop.c:5889-5895) with no exclusion between them, and the
+      # quit block runs first (line 5880 vs. the menu-toggle hotkey's
+      # own check at line 6003). Giving both keys `4` therefore made
+      # Start+Select quit and left the menu combo dead - one knob doing
+      # nothing while looking configured.
+      #
+      # Menu toggle is `L3_R3` = 2: the two stick clicks share no button
+      # with Start+Select, so no single press can satisfy both bindings
+      # and the collision cannot come back. That rules out the three
+      # values that do share one (`L1_R1_START_SELECT`=3 is a superset
+      # of the quit combo, `HOLD_START`=7 and `HOLD_SELECT`=8 each hold
+      # one of its two buttons), and among the remaining disjoint ones
+      # `L_R`=6 and `L2_R2`=10 are shoulder pairs games press constantly
+      # and `DOWN_Y_L_R`=1 needs four buttons at once; L3+R3 is both the
+      # least likely to fire mid-game and RetroArch's own default menu
+      # combo on the console platforms that have two sticks
+      # (config.def.h:930-931). It does need a pad with clickable
+      # sticks; a pad without them still reaches the frontend through
+      # the quit combo, which is the route the design actually requires.
+      input_menu_toggle_gamepad_combo = "2";
+      input_quit_gamepad_combo = "4";
+    };
+  };
 
   # ---------------------------------------------------------------------
   # Frontend overrides: every system whose assigned emulator
@@ -880,10 +959,16 @@ let
     let
       off =
         ra: keyDef:
+        # Whether `keyDef` carries a `section` decides the shape written
+        # below; the identical fact is re-derived twice more, each into a
+        # differently shaped value - `raTargetSeedOverlaps`'s path list in
+        # modules/kiosk/default.nix, and prepare's own per-target validation
+        # in emubox_prepare.py. A field added alongside `section`/`key` in a
+        # later encoding has to be taught to all three.
         if keyDef ? section then
-          { ${keyDef.file}.keys.${keyDef.section}.${keyDef.key} = ra.booleans."false"; }
+          { ${keyDef.file}.enforce.${keyDef.section}.${keyDef.key} = ra.booleans."false"; }
         else
-          { ${keyDef.file}.keys.${keyDef.key} = ra.booleans."false"; };
+          { ${keyDef.file}.enforce.${keyDef.key} = ra.booleans."false"; };
     in
     lib.foldl' (
       acc: ra:
@@ -990,30 +1075,33 @@ in
     emubox.kiosk.ownedFiles = lib.recursiveUpdate {
       "${retroarchConfigFile}" = {
         format = "retroarch";
-        keys = {
-          video_fullscreen = "true";
-          libretro_directory = coresDirectory;
-          # The literal "default" is magic in RetroArch's own parser and
-          # gets cleared back to empty (configuration.c:4346-4347) - never
-          # spell the BIOS directory that way.
-          system_directory = biosDirectory;
-          # The save-route declaration owns these destinations. Migration is
-          # ordered before emubox-prepare writes this file at kiosk startup.
+        # Everything else this box pins for RetroArch is delivered ahead of
+        # this file instead, as `retroarchWithCores`'s own append-config
+        # settings above: those are launch-time values with no dependency
+        # on parsing or migration ordering. These two survive as ordinary
+        # owned keys because the saves capability's route table needs them
+        # to remain parsed, owned `retroarch.cfg` keys, so it can order
+        # migration before `emubox-prepare` writes either value.
+        enforce = {
           savefile_directory = "/data/saves/retroarch/saves";
           savestate_directory = "/data/saves/retroarch/states";
-          autosave_interval = "30";
+        };
+        # Written once and left alone afterward: a player who rebinds a menu
+        # driver or a hotkey through RetroArch's own settings keeps that
+        # choice across a reboot, which enforcing any of these would undo.
+        seed = {
           menu_driver = "ozone";
-          # Both entries a family could otherwise use to pull unvetted
-          # cores or content onto the box over the network - the "Online
-          # Updater" submenu and the separate top-level "Core Downloader"
-          # shortcut.
-          menu_show_online_updater = "false";
-          menu_show_core_updater = "false";
-          # The uniform hotkey set, uniform across every emulator on purpose.
-          # These are *keyboard* key-name strings - RetroArch's separate
-          # per-pad `_btn` keys are written by autoconfig per controller,
-          # which is controller work still to come, so none appears here
-          # on purpose.
+          # One set of actions - menu, save, load, fast-forward,
+          # screenshot - bound the same way everywhere RetroArch runs,
+          # which is every core-based system but none of the standalones:
+          # they declare no hotkey of their own and keep their upstream
+          # defaults. These are *keyboard* key-name strings, and a
+          # keyboard is not part of the box, so they are a first-boot
+          # default rather than a guarantee; the controller-only routes
+          # out of a running game are the two gamepad combos above, which
+          # stay enforced. RetroArch's separate per-pad `_btn` keys are
+          # written by autoconfig per controller, which is controller
+          # work still to come, so none appears here on purpose.
           input_menu_toggle = "f1";
           input_save_state = "f2";
           input_load_state = "f4";
@@ -1022,56 +1110,13 @@ in
           # RetroArch has no single key that means both.
           input_toggle_fast_forward = "space";
           input_screenshot = "f8";
-          # The gamepad-combo counterparts, device-independent (no `_btn`
-          # binding needed). Both keys are plain `SETTING_UINT`s against
-          # RetroArch's `enum input_combo_type` (configuration.c:2558,2560),
-          # whose full membership, read at the pinned v1.22.2 source
-          # (`input/input_defines.h:211-225`), is: `NONE`=0,
-          # `DOWN_Y_L_R`=1, `L3_R3`=2, `L1_R1_START_SELECT`=3,
-          # `START_SELECT`=4, `L3_R`=5, `L_R`=6, `HOLD_START`=7,
-          # `HOLD_SELECT`=8, `DOWN_SELECT`=9, `L2_R2`=10, `LAST`=11.
-          # The desktop build's own default for both is `INPUT_COMBO_NONE`
-          # (config.def.h:939,942) - with nothing pinned here a player who
-          # entered a core would have no controller-only way back to the
-          # frontend, which is exactly the gap a quit combo exists to close.
-          #
-          # The two values must differ, and not merely for tidiness.
-          # `runloop.c` evaluates them independently against the same frame's
-          # button bits: the menu combo sets `RARCH_MENU_TOGGLE`
-          # (runloop.c:5648-5653) and the quit combo sets `trig_quit_key`
-          # (runloop.c:5889-5895) with no exclusion between them, and the
-          # quit block runs first (line 5880 vs. the menu-toggle hotkey's
-          # own check at line 6003). Giving both keys `4` therefore made
-          # Start+Select quit and left the menu combo dead - one knob doing
-          # nothing while looking configured.
-          #
-          # Menu toggle is `L3_R3` = 2: the two stick clicks share no button
-          # with Start+Select, so no single press can satisfy both bindings
-          # and the collision cannot come back. That rules out the three
-          # values that do share one (`L1_R1_START_SELECT`=3 is a superset
-          # of the quit combo, `HOLD_START`=7 and `HOLD_SELECT`=8 each hold
-          # one of its two buttons), and among the remaining disjoint ones
-          # `L_R`=6 and `L2_R2`=10 are shoulder pairs games press constantly
-          # and `DOWN_Y_L_R`=1 needs four buttons at once; L3+R3 is both the
-          # least likely to fire mid-game and RetroArch's own default menu
-          # combo on the console platforms that have two sticks
-          # (config.def.h:930-931). It does need a pad with clickable
-          # sticks; a pad without them still reaches the frontend through
-          # the quit combo, which is the route the design actually requires.
-          input_menu_toggle_gamepad_combo = "2";
-          input_quit_gamepad_combo = "4";
         };
       };
 
       "${dolphinConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           Display.Fullscreen = "True";
-          # "Wii dual core off": Dolphin's own writer emits `True`/`False`
-          # capitalized (StringUtil.cpp:290-293); `CPUThread = False` is
-          # dual core *off* - the UI's "Enable Dual Core" checkbox is this
-          # same key inverted (DolphinQt/Settings/GeneralPane.cpp:144).
-          Core.CPUThread = "False";
           # Dolphin's first-run analytics consent dialog, the third
           # instance of the same shape PCSX2's `UI.SetupWizardIncomplete`
           # and DuckStation's `Main.SetupWizardIncomplete` already close:
@@ -1122,21 +1167,32 @@ in
           # next bump. False is also what `ShowAnalyticsPrompt` writes for
           # a "No", so this is the declined answer, stated declaratively.
           # `True`/`False` capitalized, per `Core.CPUThread`'s own citation
-          # of `StringUtil.cpp:290-293` above - the same writer emits both.
+          # of `StringUtil.cpp:290-293` below - the same writer emits both.
           Analytics.PermissionAsked = "True";
           Analytics.Enabled = "False";
+        };
+        # Written once and left alone afterward: a player who turns dual
+        # core back on through Dolphin's own settings keeps that choice
+        # across a reboot, which enforcing this would undo.
+        seed = {
+          # "Wii dual core off": Dolphin's own writer emits `True`/`False`
+          # capitalized (StringUtil.cpp:290-293); `CPUThread = False` is
+          # dual core *off* - the UI's "Enable Dual Core" checkbox is this
+          # same key inverted (DolphinQt/Settings/GeneralPane.cpp:144).
+          Core.CPUThread = "False";
         };
       };
       # No performance keys of its own - see the comment on
       # `dolphinAchievementsFile` above for why this file exists at all.
       "${dolphinAchievementsFile}" = {
         format = "ini";
-        keys = { };
+        enforce = { };
+        seed = { };
       };
 
       "${pcsx2ConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           UI.StartFullscreen = "true";
           # UI.SetupWizardIncomplete: PCSX2/pcsx2 pcsx2-qt/QtHost.cpp
           # (v2.6.3) sets this true whenever the base settings layer is
@@ -1158,35 +1214,43 @@ in
           # root, never `/data/bios`, so `emubox-check-bios` reporting OK
           # would not mean PS2 can actually boot a game.
           Folders.Bios = biosDirectory;
+        };
+        # Written once and left alone afterward: a player who changes the
+        # internal resolution through PCSX2's own settings keeps that
+        # choice across a reboot, which enforcing this would undo.
+        seed = {
           # Native internal resolution. PCSX2 serializes this float with
           # plain `ostringstream` formatting - the shortest decimal, `1`,
-          # never `1.000000` - so this exact literal is what has to be
-          # asserted, or every launch would see a spurious diff and rewrite
-          # the file (Pcsx2Config.cpp:908,1021; INISettingsInterface.cpp).
+          # never `1.000000` - and that is the exact literal to seed:
+          # `1.000000` would still parse, but it is not the value PCSX2
+          # itself would ever write here, so the seeded file would read as
+          # already carrying a player-chosen value that never was one
+          # (Pcsx2Config.cpp:908,1021; INISettingsInterface.cpp).
           "EmuCore/GS".upscale_multiplier = "1";
         };
       };
       # No performance keys of its own - see the comment on
       # `pcsx2SecretsFile` above; only the RA token, when enabled, ever
-      # lands here. Kept declared with an empty `keys` table rather than
-      # dropped from `ownedFiles` even though nothing here is ever static:
-      # prepare's `_target_validation_error` requires every retroachievements
-      # target key's `file` to already be a key of the rendered `files` map
-      # (emubox_prepare.py), and the pcsx2 target's `token` key names this
-      # file - removing the declaration would fail that check the moment RA
-      # is enabled, not just leave a spurious-write cost when it is off. The
-      # spurious recreate-on-every-launch this empty declaration causes when
-      # no token resolves is prepare's to fix (its own file-format editor
-      # deciding "no static keys and nothing merged in" means "no write"),
-      # not this module's.
+      # lands here. Kept declared with empty `enforce`/`seed` tables rather
+      # than dropped from `ownedFiles` even though nothing here is ever
+      # static: prepare's `_target_validation_error` requires every
+      # retroachievements target key's `file` to already be a key of the
+      # rendered `files` map (emubox_prepare.py), and the pcsx2 target's
+      # `token` key names this file - removing the declaration would fail
+      # that check the moment RA is enabled, not just leave a
+      # spurious-write cost when it is off. The spurious recreate-on-every-
+      # launch this empty declaration causes when no token resolves is
+      # prepare's to fix (its own file-format editor deciding "no static
+      # keys and nothing merged in" means "no write"), not this module's.
       "${pcsx2SecretsFile}" = {
         format = "ini";
-        keys = { };
+        enforce = { };
+        seed = { };
       };
 
       "${ppssppConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           Graphics.FullScreen = "True";
           # No suppressible splash or first-run dialog exists in PPSSPP's
           # source to own a "quiet-start" key for, checked rather than
@@ -1231,7 +1295,7 @@ in
         # this module's own idempotency check and never clean it up. The
         # backslash spelling is what prepare must actually assert to be
         # the same key QSettings itself reads and writes.
-        keys = {
+        enforce = {
           UI = {
             fullscreen = "true";
             "fullscreen\\default" = "false";
@@ -1273,7 +1337,7 @@ in
 
       "${duckstationConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           Main.StartFullscreen = "true";
           # Main.SetupWizardIncomplete: stenzek/duckstation
           # src/duckstation-qt/qthost.cpp (v0.1-11752),
@@ -1289,18 +1353,6 @@ in
           # Forcing it false here is the same fix Azahar's
           # `firstStart = false` already applies for the same reason.
           Main.SetupWizardIncomplete = "false";
-          GPU = {
-            # "PGXP geometry correction": `PGXPEnable` is the one setting
-            # that key names in the design - `PGXPCulling` etc. are
-            # distinct add-ons layered on top of it, not part of it.
-            PGXPEnable = "true";
-            # A 1080p-appropriate upscale: PS1 renders natively around
-            # 320x240 (up to 512x480 in hi-res modes), and 4x lands around
-            # 1280x960-2048x1920 - close to 1080p without wildly
-            # overshooting it. Config data, not a source-verified fact;
-            # revisit at the hardware bring-up checklist if it disappoints.
-            ResolutionScale = "4";
-          };
           # BIOS.SearchDirectory: stenzek/duckstation src/core/settings.cpp
           # (v0.1-11752), `Bios = LoadPathFromSettings(si, DataRoot, "BIOS",
           # "SearchDirectory", "bios")`, and `LoadPathFromSettings` uses the
@@ -1313,11 +1365,29 @@ in
           # PS1 can actually boot a game.
           BIOS.SearchDirectory = biosDirectory;
         };
+        # Written once and left alone afterward: a player who turns PGXP off
+        # or changes the internal resolution through DuckStation's own
+        # settings keeps that choice across a reboot, which enforcing
+        # either would undo.
+        seed = {
+          GPU = {
+            # "PGXP geometry correction": `PGXPEnable` is the one setting
+            # that key names in the design - `PGXPCulling` etc. are
+            # distinct add-ons layered on top of it, not part of it.
+            PGXPEnable = "true";
+            # A 1080p-appropriate upscale: PS1 renders natively around
+            # 320x240 (up to 512x480 in hi-res modes), and 4x lands around
+            # 1280x960-2048x1920 - close to 1080p without wildly
+            # overshooting it. Config data, not a source-verified fact;
+            # revisit at the hardware bring-up checklist if it disappoints.
+            ResolutionScale = "4";
+          };
+        };
       };
 
       "${scummvmConfigFile}" = {
         format = "ini";
-        keys = {
+        enforce = {
           scummvm = {
             fullscreen = "true";
             savepath = "/data/saves/scummvm/saves";

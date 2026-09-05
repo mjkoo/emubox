@@ -753,6 +753,31 @@ assert lib.assertMsg
                   return v.strip()
           return None
 
+      def retroarch_all_values(text, key):
+          """Every assignment of `key` in a RetroArch-format file, in file
+          order - not merely the first, the way `ini_value` above
+          deliberately returns. `config_save_on_exit` (default on) rewrites
+          `retroarch.cfg` from RetroArch's own effective settings at exit,
+          which is what makes a read after a launch an observable of the
+          settings that launch actually used - but nothing here has
+          independently confirmed that rewrite can never leave a stale
+          assignment sitting alongside the new one, so a caller checking
+          what a launch actually applied needs the full list rather than a
+          single value that might be the wrong one of several: a stale
+          first line could otherwise satisfy a naive check while the
+          effective value sits further down. Quoted the same way
+          `owned_file_value` already unwraps a `retroarch`-format value.
+          """
+          values = []
+          for line in text.splitlines():
+              stripped = line.strip()
+              if "=" not in stripped:
+                  continue
+              k, _, v = stripped.partition("=")
+              if k.strip() == key:
+                  values.append(v.strip().strip('"'))
+          return values
+
       def resolve(root, value):
           """A path from the retroachievements namespace, root-relative or
           absolute - the same convention emubox_prepare.py's `_resolve_path`
@@ -963,7 +988,8 @@ assert lib.assertMsg
           target_names = {t["name"] for t in ra["targets"]}
           assert target_names == {"retroarch", "dolphin", "pcsx2", "ppsspp", "duckstation"}, target_names
 
-          keys = owned["files"]["settings/es_settings.xml"]["keys"]
+          keys_enforce = owned["files"]["settings/es_settings.xml"]["enforce"]
+          keys_seed = owned["files"]["settings/es_settings.xml"]["seed"]
 
           # Pinned here, literally, and deliberately not derived from the
           # module: the loop below compares the settings file against this
@@ -973,34 +999,42 @@ assert lib.assertMsg
           # "kiosk UI mode, the unlock sequence, the ROM and media
           # directories under /data, the theme, the en_US language and the
           # quit menu enabled" - so a key leaving the module has to be a
-          # deliberate edit here too.
-          assert keys == {
+          # deliberate edit here too. Theme and ApplicationLanguage are
+          # seeded, not enforced: a player who picks a different one in
+          # ES-DE's own menus keeps that choice, so only their presence,
+          # never their value, is asserted below.
+          assert keys_enforce == {
               "UIMode": {"type": "string", "value": "kiosk"},
               "UIMode_passkey": {"type": "string", "value": ${py passkey}},
               "ROMDirectory": {"type": "string", "value": "/data/roms"},
               "MediaDirectory": {"type": "string", "value": "/data/media"},
+              "ShowQuitMenu": {"type": "bool", "value": "true"},
+          }, keys_enforce
+          assert keys_seed == {
               "Theme": {"type": "string", "value": "linear-es-de"},
               "ApplicationLanguage": {"type": "string", "value": "en_US"},
-              "ShowQuitMenu": {"type": "bool", "value": "true"},
-          }, keys
+          }, keys_seed
 
           got = settings_elements()
-          for name, spec in keys.items():
+          for name, spec in keys_enforce.items():
               assert got.get(name) == (spec["type"], spec["value"]), (
                   f"{name}: {got.get(name)} != {(spec['type'], spec['value'])}"
               )
+          for name in keys_seed:
+              assert name in got, f"{name}: missing from the settings file (seeded key)"
           # Named separately because this is what proves the option is wired
           # rather than that ES-DE's own default happens to be in the file.
           assert got["UIMode_passkey"] == ("string", ${py passkey}), got["UIMode_passkey"]
           assert got["UIMode"] == ("string", "kiosk"), got["UIMode"]
 
-      # PINNED_OWNED_KEYS. The emulators spec's
-      # headline requirement - the owned values "SHALL pin at least" the
-      # core directory, `/data/bios`, the 30 s autosave interval,
+      # PINNED_OWNED_KEYS_ENFORCE and PINNED_OWNED_KEYS_SEED. The emulators
+      # spec's headline requirement - the enforced values "SHALL pin at
+      # least" the core directory, `/data/bios`, the 30 s autosave interval,
       # fullscreen, the two online/core-download menu entries disabled and
-      # the uniform hotkey set for RetroArch, and fullscreen plus each
-      # standalone's own performance choice for every standalone - was
-      # unasserted by anything before this: the ES-DE settings file above
+      # the two gamepad combos for RetroArch, and fullscreen for every
+      # standalone, with the seeded defaults holding RetroArch's menu skin
+      # and keyboard hotkeys and each standalone's own performance choice -
+      # was unasserted by anything before this: the ES-DE settings file above
       # had its own pin-then-walk, but it was never extended to the ~150
       # keys `modules/emulators` owns across RetroArch and five
       # standalones. A literal, hand-typed subset here, not the loop's own
@@ -1009,7 +1043,11 @@ assert lib.assertMsg
       # right and unapplied, or applied and wrong" reasoning the ES-DE pin
       # above already applies). `None` in place of a section name is
       # RetroArch's own flat, sectionless format (`ini_value`'s own
-      # convention above).
+      # convention above). Split in two because the two tiers are checked
+      # differently against DISK below: an enforced key's value is asserted
+      # there, a seeded key's presence is, since a seeded value on disk is
+      # whatever a player last chose. Against the rendered contract, which
+      # is what `check_pins` reads, both tiers are checked by value.
       #
       # A later review round found this table guarded key PRESENCE only -
       # `names - actual.keys()` - never the value sitting behind a present
@@ -1025,15 +1063,25 @@ assert lib.assertMsg
       # against `modules/emulators` rather than read from it, so a wrong
       # value fails here exactly the way a dropped key already did.
       #
-      # One exception: RetroArch's `libretro_directory`. Its value is
-      # `coresDirectory`, a content-addressed Nix store path
-      # (`modules/emulators`'s own `retroarchWithCores` build) - there is no
-      # literal to hand-type for it that would not itself be a rebuild of
-      # that same derivation under a different name, which would just be
-      # the module agreeing with itself again, one layer further out. It
-      # stays a presence-only pin (`UNPINNED_VALUE` below), the one key in
-      # this table for which "guard presence, not value" is still the
-      # honest thing to assert, not an oversight.
+      # Eight RetroArch keys are checked nowhere in this file any more:
+      # `video_fullscreen`, `libretro_directory`, `system_directory`,
+      # `autosave_interval`, `menu_show_online_updater`,
+      # `menu_show_core_updater`, `input_menu_toggle_gamepad_combo`, and
+      # `input_quit_gamepad_combo` are delivered through the launch-time
+      # append file `modules/emulators`'s own `wrapRetroArch` call builds,
+      # so they left that module's `enforce` table entirely - which is why
+      # the walk below does not reach them either: it reads the rendered
+      # contract, and the contract no longer names them. Their values are
+      # pinned by `tests/retroarch-settings.nix`, the builder-side check
+      # that reads the append file out of the very binary this node runs;
+      # the runtime half - that the file wins over a stale
+      # `retroarch.cfg` - is proven by the headless RetroArch subtest
+      # further down this same file. `libretro_directory`'s own
+      # presence-only pin - it names a content-addressed Nix store path
+      # (`modules/emulators`'s own `retroarchWithCores` build), so there was
+      # never a literal to hand-type for it that would not itself be a
+      # rebuild of that same derivation under a different name - went with
+      # them, since the key it guarded is one of the eight.
       #
       # DuckStation's `BIOS.SearchDirectory`, PCSX2's `Folders.Bios` and
       # both emulators' own `SetupWizardIncomplete` keys are pinned here
@@ -1066,38 +1114,9 @@ assert lib.assertMsg
       # (its own comment on `azaharConfigFile` records why - the setting is
       # compiled out of this flake's Azahar build, so there was nothing
       # left to pin).
-      UNPINNED_VALUE = ...  # presence only - see `libretro_directory` above
-
-      PINNED_OWNED_KEYS = {
-          f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg": {
-              None: {
-                  "video_fullscreen": "true",
-                  "libretro_directory": UNPINNED_VALUE,
-                  "system_directory": "/data/bios",
-                  "autosave_interval": "30",
-                  "menu_driver": "ozone",
-                  "menu_show_online_updater": "false",
-                  "menu_show_core_updater": "false",
-                  "input_menu_toggle": "f1",
-                  "input_save_state": "f2",
-                  "input_load_state": "f4",
-                  "input_toggle_fast_forward": "space",
-                  "input_screenshot": "f8",
-                  # Two DIFFERENT enum values on purpose. RetroArch
-                  # evaluates the menu and quit combos independently
-                  # against the same frame and handles quit first, so the
-                  # same value in both makes the menu combo dead code -
-                  # `modules/emulators` carries the source citation. Pinned
-                  # as distinct literals here so a future edit that
-                  # collapses them back to one value fails this test rather
-                  # than shipping a knob that does nothing.
-                  "input_menu_toggle_gamepad_combo": "2",
-                  "input_quit_gamepad_combo": "4",
-              },
-          },
+      PINNED_OWNED_KEYS_ENFORCE = {
           f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
               "Display": {"Fullscreen": "True"},
-              "Core": {"CPUThread": "False"},
               # The emulators spec's "no emulator setup screen in the path
               # from choosing a game to playing it", for the third emulator
               # that has one: Dolphin's analytics consent dialog is modal
@@ -1109,7 +1128,6 @@ assert lib.assertMsg
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
               "UI": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
               "Folders": {"Bios": "/data/bios"},
-              "EmuCore/GS": {"upscale_multiplier": "1"},
           },
           f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini": {
               "Graphics": {"FullScreen": "True"},
@@ -1124,7 +1142,6 @@ assert lib.assertMsg
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
               "Main": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
-              "GPU": {"PGXPEnable": "true", "ResolutionScale": "4"},
               "BIOS": {"SearchDirectory": "/data/bios"},
           },
           f"{PLAYER_HOME}/.config/scummvm/scummvm.ini": {
@@ -1136,47 +1153,89 @@ assert lib.assertMsg
           },
       }
 
+      PINNED_OWNED_KEYS_SEED = {
+          f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg": {
+              None: {
+                  "menu_driver": "ozone",
+                  "input_menu_toggle": "f1",
+                  "input_save_state": "f2",
+                  "input_load_state": "f4",
+                  "input_toggle_fast_forward": "space",
+                  "input_screenshot": "f8",
+              },
+          },
+          f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
+              "Core": {"CPUThread": "False"},
+          },
+          f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
+              "EmuCore/GS": {"upscale_multiplier": "1"},
+          },
+          f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
+              "GPU": {"PGXPEnable": "true", "ResolutionScale": "4"},
+          },
+      }
+
       with subtest("Every owned emulator config key holds the flake's value"):
           _MISSING = object()  # distinct from any real value, including None/False-ish strings
-          for path, sections in PINNED_OWNED_KEYS.items():
-              entry = owned["files"].get(path)
-              assert entry is not None, f"{path}: pinned in this test but not in emubox.kiosk.ownedFiles at all"
-              for section, keys in sections.items():
-                  actual = entry["keys"] if section is None else entry["keys"].get(section, {})
-                  for name, expected in keys.items():
-                      got = actual.get(name, _MISSING)
-                      if got is _MISSING:
-                          raise AssertionError(f"{path} [{section}]: pinned key dropped from the module: {name}")
-                      if expected is UNPINNED_VALUE:
-                          continue  # presence only, see UNPINNED_VALUE's own comment above
-                      assert got == expected, f"{path} [{section}]: {name}: {got!r} != {expected!r}"
+
+          def check_pins(pinned, tier):
+              for path, sections in pinned.items():
+                  entry = owned["files"].get(path)
+                  assert entry is not None, f"{path}: pinned in this test but not in emubox.kiosk.ownedFiles at all"
+                  for section, keys in sections.items():
+                      actual = entry[tier] if section is None else entry[tier].get(section, {})
+                      for name, expected in keys.items():
+                          got = actual.get(name, _MISSING)
+                          if got is _MISSING:
+                              raise AssertionError(
+                                  f"{path} [{section}] ({tier}): pinned key dropped from the module: {name}"
+                              )
+                          # Both tiers by value, because this walk reads the
+                          # rendered contract rather than the disk: what the
+                          # module declares is the same on every boot, so a
+                          # seeded default that drifted here is a module edit,
+                          # not a player's choice. Presence-only belongs to the
+                          # on-disk walk below, and stays there. The ES-DE pin
+                          # above checks its own seeded pair the same way.
+                          assert got == expected, f"{path} [{section}] ({tier}): {name}: {got!r} != {expected!r}"
+
+          check_pins(PINNED_OWNED_KEYS_ENFORCE, "enforce")
+          check_pins(PINNED_OWNED_KEYS_SEED, "seed")
 
           # The walk: every file the rendered JSON actually names (not just
           # the pinned subset above), so a key a concurrent change adds is
           # checked against disk automatically rather than silently
-          # unverified until someone remembers to update this test.
-          for path, entry in owned["files"].items():
-              if path == "settings/es_settings.xml":
-                  continue  # its own pin-then-walk above already covers it
-              fmt = entry["format"]
+          # unverified until someone remembers to update this test. Every
+          # enforced key is checked by value, every seeded key only by
+          # presence - a seeded key is never corrected, so its on-disk
+          # value can legitimately be whatever a player last set it to.
+          def owned_paths(fmt, path, keys):
               if fmt == "retroarch":
-                  assertions = [(None, key, expected) for key, expected in entry["keys"].items()]
+                  return [(None, key, expected) for key, expected in keys.items()]
               elif fmt == "ini":
-                  assertions = [
+                  return [
                       (section, key, expected)
-                      for section, keys in entry["keys"].items()
-                      for key, expected in keys.items()
+                      for section, section_keys in keys.items()
+                      for key, expected in section_keys.items()
                   ]
               else:
                   raise AssertionError(f"{path}: unhandled owned-file format {fmt!r}")
 
-              if not assertions:
+          for path, entry in owned["files"].items():
+              if path == "settings/es_settings.xml":
+                  continue  # its own pin-then-walk above already covers it
+              fmt = entry["format"]
+              enforce_assertions = owned_paths(fmt, path, entry["enforce"])
+              seed_assertions = owned_paths(fmt, path, entry["seed"])
+
+              if not enforce_assertions and not seed_assertions:
                   # A file the flake owns zero static keys in - PCSX2's
                   # `secrets.ini` and Dolphin's `RetroAchievements.ini`, both
-                  # declared with `keys = { }` in modules/emulators because
-                  # their only content is retroachievements namespace keys
-                  # (token, or enabled/hardcore/username/token) written at
-                  # runtime rather than through this static table. There
+                  # declared with empty `enforce`/`seed` tables in
+                  # modules/emulators because their only content is
+                  # retroachievements namespace keys (token, or
+                  # enabled/hardcore/username/token) written at runtime
+                  # rather than through this static table. There
                   # is nothing this walk could check here even
                   # if the file existed, and the matching prepare-side fix
                   # (the ini/retroarch editors now leave a file alone
@@ -1191,7 +1250,7 @@ assert lib.assertMsg
                   # to exist and carry it, unconditionally, below.
                   #
                   # Not asserted absent here either, deliberately: Dolphin's
-                  # `RetroAchievements.ini` has the same empty static table
+                  # `RetroAchievements.ini` has the same empty static tables
                   # but is not reliably absent at this point - its
                   # enabled/hardcore keys are written unconditionally by
                   # `apply_retroachievements` regardless of network, unlike
@@ -1203,9 +1262,12 @@ assert lib.assertMsg
                   continue
 
               text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
-              for section, key, expected in assertions:
+              for section, key, expected in enforce_assertions:
                   got = owned_file_value(fmt, text, section, key)
                   assert got == expected, f"{path} [{section}]: {key}: {got!r} != {expected!r}"
+              for section, key, _expected in seed_assertions:
+                  got = owned_file_value(fmt, text, section, key)
+                  assert got is not None, f"{path} [{section}]: {key}: missing from disk (seeded key)"
 
       # --- kiosk: custom systems, both branches -----------------------------
 
@@ -1312,6 +1374,43 @@ assert lib.assertMsg
           # cannot be player's at the same time.
           assert not session_on_seat("player")
 
+      with subtest("A seeded setting edited while the frontend is stopped survives the next boot"):
+          # Run here, not inside the reboot subtest below: the session is at
+          # the greeter and no es-de process exists at this point (the
+          # crash-loop subtest above just finished proving exactly that), so
+          # this is the one place in the file where editing the settings
+          # file cannot race the frontend's own writer. ApplicationLanguage
+          # is seeded rather than enforced, so `emubox-prepare` only ever
+          # writes it once, if absent - a player's own later choice is
+          # never corrected. Proving that survives a boot needs a value the
+          # frontend genuinely keeps rather than one it would silently
+          # replace on its own next start, which is exactly what makes the
+          # value chosen here load-bearing: en_GB is one of the locales
+          # ES-DE 3.4.1 actually bundles (share/es-de/resources/locale), so
+          # ES-DE accepts it as a real selection rather than falling back to
+          # its own default the way an unrecognised locale would.
+          assert not esde_pids(), "the frontend must be stopped before this edit"
+
+          # The line is matched by the `name` attribute alone, not a fixed
+          # attribute order: ES-DE's own writer, not this project's code,
+          # decides where `value` sits relative to `name` on the line, and a
+          # pattern anchored to a specific order would be betting on that
+          # incidentally rather than on anything this test controls.
+          edit = (
+              "sed -i '/name=\"ApplicationLanguage\"/"
+              "s/value=\"en_US\"/value=\"en_GB\"/' " + SETTINGS
+          )
+          # As `player`, not through the driver's own root `machine.succeed`:
+          # ES-DE and emubox-prepare both run as `player`, and a root-owned
+          # settings file here would break the frontend's own writes for
+          # the rest of the run - the same ownership hazard the
+          # append-config precedence bake below (the headless RetroArch
+          # launches) exists to avoid for retroarch.cfg.
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(edit)}")
+
+          before = settings_elements()
+          assert before.get("ApplicationLanguage") == ("string", "en_GB"), before.get("ApplicationLanguage")
+
       with subtest("A reboot from the greeter restores the kiosk"):
           # Last, so that the reboot is genuinely from the greeter and this
           # proves that ending there does not outlive the boot.
@@ -1327,6 +1426,17 @@ assert lib.assertMsg
           machine.wait_for_unit("display-manager.service")
           retry(lambda _: session_on_seat("player"), timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)
+
+          # The subtest above changed ApplicationLanguage while the frontend
+          # was stopped and already confirmed the edit itself took; this
+          # reads the same key back now that ES-DE has started fresh from
+          # the reboot. Splitting the read across the two subtests, rather
+          # than asserting only here, is what lets a failure at this
+          # specific line mean "the frontend reverted the value on
+          # startup" - a failure in "the edit did not take" would already
+          # have shown up in the subtest above instead.
+          after = settings_elements()
+          assert after.get("ApplicationLanguage") == ("string", "en_GB"), after.get("ApplicationLanguage")
 
           # Every route's fixture was written through the emulator's own save
           # path before the reboot; each must still read back from beneath
@@ -1635,6 +1745,44 @@ assert lib.assertMsg
 
       # --- emulators: BIOS-free core families launch headless ---------------
 
+      def retroarch_appendconfig_path():
+          """The flake's own launch-time append-config file, recovered from
+          the RetroArch binary the node actually runs rather than
+          re-rendered from `modules/emulators`'s settings attrset - a copy
+          built here from that same attrset would land on the same store
+          path whenever the rendering agrees with itself, which would only
+          prove the module agrees with itself, never that the wrapper the
+          node actually installs still passes this exact file.
+
+          The distinct-path rule mirrors tests/retroarch-settings.nix's own
+          builder-side check against the identical binary: `makeBinaryWrapper`
+          repeats the flag on purpose for any correctly-built wrapper, once
+          as the NUL-terminated argv literal it actually execs and once more
+          inside its own generator docstring (a comment embedded in the
+          binary restating the `--add-flags` call that produced it) - so two
+          raw occurrences of the *same* path is the expected, healthy case,
+          and tightening this to a raw count of one would fail every
+          correctly-built wrapper. What must never happen is two *different*
+          paths, so every match is deduplicated before counting. The
+          terminator excludes whitespace and quote characters so a
+          docstring's own closing quote is never captured into the path.
+          `grep -a -o`, not `strings`: the latter is a binutils tool this
+          test has no reason to believe is installed on the node, while
+          `grep` already is known to be.
+          """
+          out = machine.succeed(
+              r"""tr '\0' '\n' < /run/current-system/sw/bin/retroarch """
+              r"""| { grep -a -o -- "--appendconfig=/nix/store/[^[:space:]'\"]*" || true; } """
+              r"""| sed -e 's/^--appendconfig=//' """
+              r"""| sort -u"""
+          )
+          paths = [line for line in out.splitlines() if line]
+          assert len(paths) == 1, (
+              "expected exactly one distinct --appendconfig path in the "
+              f"node's retroarch binary, found {paths!r}"
+          )
+          return paths[0]
+
       with subtest("Every BIOS-free core family with a licensed ROM runs headless"):
           # Every driver RetroArch would otherwise try to open a real device
           # for is overridden to "null" (video_driver overridden for the run,
@@ -1684,6 +1832,71 @@ assert lib.assertMsg
               f"> {override}"
           )
 
+          # A second `--appendconfig` flag on this command line would
+          # replace the flake's own append file rather than add to it
+          # (RetroArch 1.22.2's source: the flag's handling is a plain copy
+          # into the append-path variable, not an append to a list already
+          # there), which would silently discard every one of the eight
+          # settings `retroarchWithCores` pins ahead of `retroarch.cfg` for
+          # the whole of every launch below. The two files are joined into
+          # the *one* flag every launch actually gets instead, with `|` as
+          # the separator: RetroArch's own append-path parser
+          # (`retroarch.c`'s `parse_config_file`, pinned 1.22.2 source)
+          # splits on `|`, not the comma RetroArch's own man page and
+          # docs.libretro.com both document for this flag. Order between
+          # the two paths carries no meaning here - the override above and
+          # `retroarchWithCores`'s settings share no key - but the flake's
+          # file is listed first as the box's own baseline, with this
+          # test's launch-only overrides layered after it.
+          #
+          # Recovered from the binary rather than re-rendered: this test
+          # must never derive its own copy of the flake's settings, since
+          # that would only prove a `writeText` built here from the same
+          # attrset agrees with itself, not that the append file this join
+          # relies on is the one the node's own wrapper actually passes.
+          appendconfig_path = retroarch_appendconfig_path()
+          joined_appendconfig = f"{appendconfig_path}|{override}"
+
+          # The precedence proof: bake a stale value for one of the seven
+          # launch-delivered settings directly into `retroarch.cfg` before
+          # any launch below runs, then let the very first launch's own
+          # exit write-back answer whether the joined flag actually won.
+          # `libretro_directory` cannot serve this purpose - the wrapper's
+          # own `-L` flag overrides that key at runtime regardless of what
+          # any config names, so its write-back would show the wrapper's
+          # own store path rather than either config file's literal -
+          # `video_fullscreen` is used instead, matching
+          # tests/retroarch-settings.nix's own pinned literal for it
+          # ("true"). Appended, not edited in place: this key hasn't been
+          # enforced in `retroarch.cfg` itself since it moved to the
+          # append file above, and `emubox-prepare` only ever writes the
+          # keys its own owned-files table names - there is no existing
+          # `video_fullscreen` line here yet for an in-place substitution
+          # to match, and a `sed` replace against an absent line would
+          # silently do nothing, leaving this bake never having taken at
+          # all.
+          retroarch_cfg = f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg"
+          bake = (
+              "printf '%s\\n' "
+              "'video_fullscreen = \"false\"' "
+              f">> {retroarch_cfg}"
+          )
+          # As `player`, not through the driver's own root `machine.succeed`:
+          # RetroArch itself launches as `player` and rewrites this file on
+          # exit as `player` too (`config_save_on_exit`, on by default), so
+          # a root-owned file here would make that write-back fail
+          # silently - the precedence assertion below would then fail for
+          # a reason unrelated to precedence, and every enforced write
+          # `emubox-prepare` makes into this same file for the rest of the
+          # run would fail right along with it.
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(bake)}")
+          owner = machine.succeed(f"stat -c '%U' {shlex.quote(retroarch_cfg)}").strip()
+          assert owner == "player", (
+              f"retroarch.cfg must stay player-owned before this launch, "
+              f"or RetroArch's own exit write-back fails silently: got "
+              f"owner {owner!r}"
+          )
+
           # Two markers, not the bare exit-0-and-a-log-line the pinned
           # source shows is vacuous: runloop.c:3712-3713 logs
           # "Loading dynamic libretro core from" by echoing straight back
@@ -1716,19 +1929,23 @@ assert lib.assertMsg
           # even if a future RetroArch version's fallback path let
           # `--max-frames` exit 0 with the dummy core silently substituted,
           # this line would still have been logged on the way there.
-          for fixture in ${
+          for index, fixture in enumerate(${
             py (
               map (f: {
                 inherit (f) family core;
                 rom = "${f.rom}";
               }) homebrewFixtures
             )
-          }:
+          }):
               cmd = (
                   "retroarch "
                   f"-L /run/current-system/sw/lib/retroarch/cores/{fixture['core']} "
                   f"{shlex.quote(fixture['rom'])} "
-                  f"--appendconfig {override} --max-frames 60 --verbose 2>&1"
+                  # The joined path list carries a `|`, a shell pipe
+                  # character - left unquoted here it would split this
+                  # command in two at the shell that parses it, rather than
+                  # reaching RetroArch as a single argument.
+                  f"--appendconfig {shlex.quote(joined_appendconfig)} --max-frames 60 --verbose 2>&1"
               )
               # 60 frames is enough to prove the core loaded and ran without
               # paying more than a couple of seconds of CI time per family;
@@ -1747,6 +1964,37 @@ assert lib.assertMsg
               out = machine.succeed(
                   f"su player -s /bin/sh -c {shlex.quote(cmd)}", timeout=60
               )
+
+              if index == 0:
+                  # The precedence bake above only needs one launch to
+                  # answer it, and this is the first one to run - reusing
+                  # it rather than paying for a dedicated thirteenth
+                  # RetroArch process for the same proof.
+                  #
+                  # Not the "[Config] Appending config" log line: RetroArch
+                  # only emits that line when `first_load` is false
+                  # (`retroarch.c`'s own append-file loader), so it is
+                  # never logged on this file's first-ever load and would
+                  # be no evidence at all here. `retroarch.cfg`'s own
+                  # exit write-back is the observable this proof actually
+                  # has: `config_save_on_exit` (on by default) rewrites the
+                  # file from RetroArch's effective settings when the
+                  # process exits, and `--appendconfig` alone does not set
+                  # the separate overrides-active flag that would instead
+                  # suppress that rewrite.
+                  cfg_text = machine.succeed(f"cat {retroarch_cfg}")
+                  values = retroarch_all_values(cfg_text, "video_fullscreen")
+                  assert len(values) == 1, (
+                      "expected a single video_fullscreen assignment in "
+                      f"retroarch.cfg after this launch's own exit "
+                      f"write-back, found {values}"
+                  )
+                  assert values[0] == "true", (
+                      "the flake's append-config value did not win over "
+                      f"the stale value baked into retroarch.cfg before "
+                      f"this launch: {values}"
+                  )
+
               assert "[Core] Geometry:" in out, (
                   f"{fixture['family']}: the core never reached a real "
                   f"retro_get_system_av_info() call - content did not load\n{out}"

@@ -261,12 +261,13 @@ assert lib.assertMsg
   '';
 assert lib.assertMsg
   (
-    owned."${home}/.config/retroarch/retroarch.cfg".keys.savefile_directory
+    owned."${home}/.config/retroarch/retroarch.cfg".enforce.savefile_directory
     == "/data/saves/retroarch/saves"
     &&
-      owned."${home}/.config/retroarch/retroarch.cfg".keys.savestate_directory
+      owned."${home}/.config/retroarch/retroarch.cfg".enforce.savestate_directory
       == "/data/saves/retroarch/states"
-    && owned."${home}/.config/scummvm/scummvm.ini".keys.scummvm.savepath == "/data/saves/scummvm/saves"
+    &&
+      owned."${home}/.config/scummvm/scummvm.ini".enforce.scummvm.savepath == "/data/saves/scummvm/saves"
   )
   ''
     tests/saves.nix: every setting-directed route must have its owned setting.

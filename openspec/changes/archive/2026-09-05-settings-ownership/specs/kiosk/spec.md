@@ -1,41 +1,4 @@
-## Purpose
-
-What the box shows and does from power-on to the frontend: the automatic session, the loop that keeps the frontend up and the failure state when it cannot, the frontend's restricted configuration and where its data lives, which settings the flake owns and which it leaves to the frontend, and power off and reboot from the frontend.
-
-## Requirements
-
-### Requirement: Power-on lands in the frontend without a login
-The box SHALL log the `player` user into the kiosk session automatically at boot and SHALL start the frontend, full screen, under a Wayland compositor. What the screen shows between power-on and the session is the `base-system` capability's silent-boot guarantee, not this one's. The frontend SHALL read and write its application data under `/data/es-de`, its ROMs under `/data/roms` and its media under `/data/media`, which is where the `persistence` capability's root-wipe guarantee applies.
-
-#### Scenario: Frontend up after boot
-- **WHEN** the box is powered on
-- **THEN** within 60 seconds of the graphical target the frontend is running as `player` inside the compositor, and `player` holds the seat's active session
-
-#### Scenario: Frontend data is persistent
-- **WHEN** the frontend writes its settings, gamelists or collections
-- **THEN** the files land under `/data/es-de`, where the `persistence` capability's guarantee that `/data` survives the root wipe applies to them
-
-### Requirement: The frontend runs restricted
-The frontend SHALL run in its kiosk UI mode: the main menu reduced to volume and the quit entry the power-off requirement below defines, with no metadata editor, no collection editing, no scraper access and no favourites toggling; every game remains launchable. The full menu SHALL be reachable only by entering the unlock sequence declared by the configuration (`emubox.kiosk.passkey`, the frontend's own default sequence unless the host sets another), and the restriction SHALL be reasserted before every launch of the frontend, including each relaunch after it exits - the anchor every requirement in this capability means by "before the frontend launches".
-
-#### Scenario: Kiosk mode at every start
-- **WHEN** the frontend launches, including after the admin unlocked the full menu during an earlier launch
-- **THEN** it is in kiosk mode
-
-#### Scenario: Unlock sequence from the configuration
-- **WHEN** the host sets `emubox.kiosk.passkey`
-- **THEN** that sequence, and not the frontend's default, unlocks the full menu
-
-### Requirement: Power off and reboot from the frontend
-In kiosk mode the frontend's menu SHALL offer power off and reboot, each behind a confirmation, and choosing one SHALL power the box off or reboot it as `player` without a password. The menu SHALL NOT offer to quit the frontend or to suspend the box in kiosk mode.
-
-#### Scenario: Power off from the menu
-- **WHEN** `player` chooses power off in the frontend's menu and confirms
-- **THEN** the box powers off cleanly
-
-#### Scenario: No quit or suspend in kiosk mode
-- **WHEN** the frontend's quit menu is opened in kiosk mode
-- **THEN** it lists power off and reboot and nothing else
+## MODIFIED Requirements
 
 ### Requirement: The flake owns some frontend settings and leaves the rest
 The flake owns a frontend setting in one of two tiers. An **enforced**
@@ -139,33 +102,3 @@ its entries, repeats included.
 - **THEN** it is replaced by a settings file carrying every owned value
   of both tiers before the frontend launches, and the session goes on to
   launch the frontend rather than ending
-
-### Requirement: Custom systems come from the configuration
-The configuration SHALL accept a custom systems definition (`emubox.kiosk.customSystems`) that the frontend reads as its custom systems file, complementing the bundled systems. When it is empty, no custom systems file SHALL exist.
-
-#### Scenario: Definition present
-- **WHEN** `emubox.kiosk.customSystems` is non-empty and the frontend is about to launch
-- **THEN** the frontend's custom systems file under `/data/es-de` holds exactly that definition
-
-#### Scenario: Definition empty
-- **WHEN** `emubox.kiosk.customSystems` is empty and a custom systems file exists from an earlier configuration
-- **THEN** the file is removed before the frontend launches
-
-#### Scenario: Definition empty and no file present
-- **WHEN** `emubox.kiosk.customSystems` is empty and no custom systems file exists
-- **THEN** none is created, and the session goes on to launch the frontend rather than treating the absent file as a failure
-
-### Requirement: The frontend is kept up, and a broken frontend ends at the greeter
-When the frontend exits, the session SHALL relaunch it. A frontend that exits within 60 seconds of launch counts as a crash; after three consecutive crashes the session SHALL end and the display manager SHALL show its login greeter, with no further automatic login for as long as that display manager keeps running. A frontend that ran longer than 60 seconds resets the count. A reboot SHALL restore automatic login.
-
-#### Scenario: Relaunch after exit
-- **WHEN** the frontend process ends after running for more than 60 seconds
-- **THEN** a new frontend process is running within 15 seconds
-
-#### Scenario: Crash loop ends at the greeter
-- **WHEN** the frontend exits within 60 seconds of launch three times in a row
-- **THEN** the session ends, the greeter is shown, and no automatic login happens while that display manager keeps running
-
-#### Scenario: Reboot restores the kiosk
-- **WHEN** the box is rebooted from the greeter
-- **THEN** it logs `player` in automatically and starts the frontend

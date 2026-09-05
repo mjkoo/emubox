@@ -541,6 +541,25 @@ def test_ini_leaves_a_seeded_key_already_set_to_an_empty_value(
     assert unwritten(path)
 
 
+def test_ini_leaves_a_seeded_key_alone_when_only_the_preamble_assigns_it(
+    tmp_path: Path,
+) -> None:
+    # The preamble is one of the places a sectioned key's presence is
+    # checked against, the same as for an enforced key, so an assignment
+    # sitting there counts as present and the key is never additionally
+    # seeded into its declared section.
+    path = tmp_path / "Dolphin.ini"
+    path.write_text("Language = 5\n[Interface]\nConfirmStop = True\n")
+    freeze(path)
+
+    assert ep.set_ini_settings(path, {}, {"Interface": {"Language": "0"}}) is False
+
+    text = path.read_text()
+    assert "Language = 5" in text
+    assert "Language = 0" not in text
+    assert unwritten(path)
+
+
 def test_ini_keeps_every_repeat_of_a_seeded_key_while_correcting_an_enforced_one(
     tmp_path: Path,
 ) -> None:
@@ -2999,6 +3018,7 @@ def test_main_rejects_the_old_single_keys_map(
 
     err = capsys.readouterr().err
     assert "old.cfg" in err
+    assert "keys" in err
     assert "Traceback" not in err
     assert requests == []
     assert not appdata.exists()
@@ -3178,6 +3198,45 @@ def test_main_rejects_a_malformed_seeded_esde_entry(
     assert cache_file.read_text() == "pre-existing-cache"
 
 
+def test_main_rejects_a_seeded_esde_value_that_is_not_a_string(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The sibling to test_main_rejects_a_malformed_seeded_esde_entry above:
+    # that one trips on an entry that is not an object at all, this one on
+    # an entry whose 'value' is a well-typed object but not a string.
+    appdata = tmp_path / "es-de"
+    monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
+    token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
+    values = tmp_path / "owned.json"
+
+    with ra_server(_counting_handler(requests)) as url:
+        values.write_text(
+            json.dumps(
+                _document_beside_a_valid_retroachievements_setup(
+                    "settings/es_settings.xml",
+                    {
+                        "format": "esde-xml",
+                        "enforce": {},
+                        "seed": {"MaxVRAM": {"type": "int", "value": 5}},
+                    },
+                    tmp_path,
+                    url,
+                )
+            )
+        )
+
+        assert ep.main([str(values), ""]) == 1
+
+    err = capsys.readouterr().err
+    assert "MaxVRAM" in err
+    assert "Traceback" not in err
+    assert requests == []
+    assert not appdata.exists()
+    assert token_file.read_bytes() == b"pre-existing-token"
+    assert cache_file.read_text() == "pre-existing-cache"
+
+
 # --- Enforcing and seeding the same key is a broken call site ---------------
 
 
@@ -3314,32 +3373,35 @@ def test_main_rejects_a_seeded_target_key_even_with_retroachievements_disabled(
     appdata = tmp_path / "es-de"
     monkeypatch.setenv("ESDE_APPDATA_DIR", str(appdata))
     token_file, cache_file = _pristine_credentials(tmp_path)
+    requests: list[str] = []
     values = tmp_path / "owned.json"
 
-    ra = retroachievements_namespace(
-        tmp_path, closed_port_url(), [plain_target("retroarch", "retroarch.cfg")]
-    )
-    ra["enabled"] = False
-    values.write_text(
-        json.dumps(
-            {
-                "files": {
-                    "retroarch.cfg": {
-                        "format": "retroarch",
-                        "enforce": {},
-                        "seed": {"cheevos_username": "someone"},
-                    }
-                },
-                "retroachievements": ra,
-            }
+    with ra_server(_counting_handler(requests)) as url:
+        ra = retroachievements_namespace(
+            tmp_path, url, [plain_target("retroarch", "retroarch.cfg")]
         )
-    )
+        ra["enabled"] = False
+        values.write_text(
+            json.dumps(
+                {
+                    "files": {
+                        "retroarch.cfg": {
+                            "format": "retroarch",
+                            "enforce": {},
+                            "seed": {"cheevos_username": "someone"},
+                        }
+                    },
+                    "retroachievements": ra,
+                }
+            )
+        )
 
-    assert ep.main([str(values), ""]) == 1
+        assert ep.main([str(values), ""]) == 1
 
     err = capsys.readouterr().err
     assert "retroarch.cfg" in err
     assert "cheevos_username" in err
+    assert requests == []
     assert not appdata.exists()
     assert token_file.read_bytes() == b"pre-existing-token"
     assert cache_file.read_text() == "pre-existing-cache"

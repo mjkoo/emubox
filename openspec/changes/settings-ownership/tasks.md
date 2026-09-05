@@ -2,7 +2,7 @@
 
 ## 1. Seed tier in emubox-prepare
 
-- [ ] 1.1 Add failing unit tests for the seed contract, per format
+- [x] 1.1 Add failing unit tests for the seed contract, per format
       (ES-DE XML, ini, RetroArch flat): a seeded key absent from the
       file is written with the flake's default; a seeded key present
       with a different value is left alone and the file is not written;
@@ -44,7 +44,7 @@
       (missing seed support, missing validation, `keys` still accepted,
       extra fields and a malformed seed map not refused), recorded in
       the test run output.
-- [ ] 1.2 Teach prepare the two-map contract as a hard cutover: a
+- [x] 1.2 Teach prepare the two-map contract as a hard cutover: a
       per-file table carries exactly `format`, `enforce` and `seed`,
       both maps present, `{}` allowed, no alias for the old spelling.
       The per-file shape check of the rendered document refuses a table

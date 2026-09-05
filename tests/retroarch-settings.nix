@@ -106,13 +106,19 @@ pkgs.runCommand "emubox-retroarch-settings" { } ''
   # *different* paths, so every match is deduplicated before counting.
   # The terminator excludes whitespace and quote characters so the
   # docstring's own closing quote is never captured into the path.
+  # Both greps below are guarded: a zero-match `grep` exits non-zero, and
+  # under the `set -e`/`pipefail` every check phase inherits that would
+  # abort the assignment itself, losing the count message to a bare
+  # pipeline failure. A wrapper carrying no `--appendconfig` at all is
+  # precisely the regression worth naming out loud, so the guards let
+  # control reach the count check with its diagnostic intact.
   distinct_paths="$(
     tr '\0' '\n' < "$binary" \
-      | grep -a -o -- '--appendconfig=/nix/store/[^[:space:]'"'"'"]*' \
+      | { grep -a -o -- '--appendconfig=/nix/store/[^[:space:]'"'"'"]*' || true; } \
       | sed -e 's/^--appendconfig=//' \
       | sort -u
   )"
-  path_count="$(printf '%s\n' "$distinct_paths" | grep -c .)"
+  path_count="$(printf '%s\n' "$distinct_paths" | { grep -c . || true; })"
   if [ "$path_count" -ne 1 ]; then
     echo "expected exactly one distinct --appendconfig path in $binary, found $path_count:" >&2
     printf '%s\n' "$distinct_paths" >&2

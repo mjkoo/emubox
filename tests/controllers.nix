@@ -209,6 +209,12 @@ in
       PLAYER_HOME = ${py home}
       FIXTURE_PADS = ${py fixturePads}
       FIXTURE_PORTS = ${py fixturePorts}
+      # udevd's own vendor rules - the kernel's input classification among
+      # them - are compiled in from systemd's own store path rather than
+      # copied into /etc/udev/rules.d; NixOS never stages them there. All
+      # rules from both places are still sorted together by basename alone,
+      # regardless of which directory holds them.
+      SYSTEMD_PACKAGE = ${py nodes.machine.systemd.package}
 
       def rerun_prepare():
           """Re-run emubox-prepare as player against this node's own
@@ -223,13 +229,21 @@ in
       machine.wait_for_unit("multi-user.target")
 
       with subtest("The fixture udev rule sorts after the kernel's input classification and before the module's own"):
-          rules = sorted(machine.succeed("ls /etc/udev/rules.d").split())
+          # udevd sorts every rules file it reads by basename alone across
+          # every directory it reads from, so the kernel's classification
+          # rules (in systemd's own store path) and this project's rules
+          # (staged into /etc/udev/rules.d) are compared as one sequence
+          # even though neither directory holds the other's files.
+          etc_rules = sorted(machine.succeed("ls /etc/udev/rules.d").split())
+          vendor_rules = sorted(
+              machine.succeed(f"ls {SYSTEMD_PACKAGE}/lib/udev/rules.d").split()
+          )
           fixture_rule = "73-emubox-test-fixture.rules"
-          assert fixture_rule in rules, rules
-          kernel_rules = [r for r in rules if r.startswith("60-") and "input" in r]
-          assert kernel_rules, rules
+          assert fixture_rule in etc_rules, etc_rules
+          kernel_rules = [r for r in vendor_rules if r.startswith("60-") and "input" in r]
+          assert kernel_rules, vendor_rules
           assert all(r < fixture_rule for r in kernel_rules), (kernel_rules, fixture_rule)
-          assert "99-local.rules" in rules, rules
+          assert "99-local.rules" in etc_rules, etc_rules
           assert fixture_rule < "99-local.rules"
 
       with subtest("Every emubox-pN resolves to its fixture pad in recorded order"):

@@ -45,6 +45,14 @@ let
   ];
   emptyPort = lib.elemAt fixturePorts 3;
 
+  # The fixture value recorded for the pad-identity fact Dolphin's route
+  # back and gameplay `Device` lines depend on, so this node exercises the
+  # identity-gated keys the same way it exercises everything else recorded
+  # beside the fixture ports - a value distinct from any real SDL device
+  # name, so a test that passed by accident against a placeholder or
+  # another host's value would be obvious on sight.
+  fixtureSdlGamepadName = "emubox-test-sdl-gamepad";
+
   # The wired pad's identity under the in-kernel xpad driver - the one mode
   # modules/controllers accepts - so these permanent fixture pads produce no
   # warning.
@@ -258,6 +266,13 @@ in
       # a plain assignment would add the fixture ports to whatever ports
       # the host's facts record rather than replace them.
       emubox.facts.controllerPorts = lib.mkForce fixturePorts;
+      # Beside the fixture ports: the one pad-identity fact Dolphin's route
+      # back depends on. A plain assignment is enough here - unlike
+      # `controllerPorts` above, `hosts/emubox/facts.nix`'s own
+      # `controllerIdentities = { };` sets no field of this submodule at
+      # all, so there is nothing for this node's own definition of
+      # `sdlGamepadName` to be merged against.
+      emubox.facts.controllerIdentities.sdlGamepadName = fixtureSdlGamepadName;
 
       # /dev/uinput is what the fixture devices script opens; the module is
       # not built into every kernel config, so it is loaded explicitly
@@ -324,6 +339,8 @@ in
       py = builtins.toJSON;
     in
     ''
+      import base64
+      import json
       import shlex
 
       APPDATA = ${py appdataDir}
@@ -332,6 +349,7 @@ in
       FIXTURE_PADS = ${py fixturePads}
       FIXTURE_PORTS = ${py fixturePorts}
       EMPTY_PORT_INDEX = len(FIXTURE_PORTS)
+      SDL_GAMEPAD_NAME = ${py fixtureSdlGamepadName}
       UNACCEPTED_RECORDED = ${py { inherit (unacceptedOnRecordedPort) name vendor product; }}
       UNACCEPTED_LOOSE = ${py { inherit (unacceptedOffRecordedPorts) name vendor product; }}
       KEYBOARD_FIXTURE = ${py { inherit (keyboardFixture) name vendor product; }}
@@ -393,6 +411,75 @@ in
           cmd = f'ESDE_APPDATA_DIR={APPDATA} emubox-prepare {OWNED_VALUES} ""'
           machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
 
+      def ini_value(text, section, key):
+          """The value of one `key = value` line under `[section]`, or None
+          if it is absent - a plain reader, mirroring emubox-prepare's own
+          section matching without importing it."""
+          in_section = False
+          for line in text.splitlines():
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  in_section = stripped[1:-1] == section
+                  continue
+              if not in_section or "=" not in stripped:
+                  continue
+              k, _, v = stripped.partition("=")
+              if k.strip() == key:
+                  return v.strip()
+          return None
+
+      def read_ini(path):
+          return machine.succeed(f"cat {shlex.quote(path)}")
+
+      def assert_ini(path, section, key, expected):
+          got = ini_value(read_ini(path), section, key)
+          assert got == expected, (path, section, key, got, expected)
+
+      def set_ini_value(path, section, key, new_value):
+          """Overwrite one `key = value` line under `[section]` to
+          `new_value`, as `player` (the account both emubox-prepare and
+          every standalone emulator run as), so a later prepare run's own
+          write is not fighting a root-owned file. Written back through a
+          base64 round trip rather than `sed`, since several of the values
+          this test sets and restores carry `&` and `/` - shell metacharacters
+          a sed replacement pattern would otherwise have to escape around."""
+          lines = read_ini(path).splitlines(keepends=True)
+          out = []
+          in_section = False
+          replaced = False
+          for line in lines:
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  in_section = stripped[1:-1] == section
+                  out.append(line)
+                  continue
+              if in_section and not replaced and "=" in stripped:
+                  k, _, _ = stripped.partition("=")
+                  if k.strip() == key:
+                      out.append(f"{key} = {new_value}\n")
+                      replaced = True
+                      continue
+              out.append(line)
+          assert replaced, f"{path}: no [{section}] {key} line to alter"
+          encoded = base64.b64encode("".join(out).encode()).decode()
+          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+
+      # Full paths hand-typed against the determination's own file names and
+      # directories, independently of emubox.emulators.configDirs - the same
+      # reasoning tests/kiosk.nix's own PINNED_OWNED_KEYS tables apply, so a
+      # misspelled path in the module under test cannot agree with itself
+      # here.
+      DOLPHIN_INI = f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini"
+      DOLPHIN_HOTKEYS = f"{PLAYER_HOME}/.config/dolphin-emu/Hotkeys.ini"
+      DOLPHIN_GCPAD = f"{PLAYER_HOME}/.config/dolphin-emu/GCPadNew.ini"
+      DOLPHIN_WIIMOTE = f"{PLAYER_HOME}/.config/dolphin-emu/WiimoteNew.ini"
+      PCSX2_INI = f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini"
+      DUCKSTATION_INI = f"{PLAYER_HOME}/.local/share/duckstation/settings.ini"
+      PPSSPP_INI = f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini"
+      PPSSPP_CONTROLS = f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini"
+      SCUMMVM_INI = f"{PLAYER_HOME}/.config/scummvm/scummvm.ini"
+
       machine.wait_for_unit("multi-user.target")
       # Healthy from the start, so every subtest below that runs the
       # aggregator for an unrelated reason sees this section as `ok`.
@@ -449,6 +536,106 @@ in
 
       with subtest("A second run of emubox-prepare against the same file is idempotent"):
           rerun_prepare()
+
+      with subtest(
+          "The owned-values document's files new to the editor are exactly Dolphin's"
+          " GCPadNew.ini, WiimoteNew.ini and Hotkeys.ini, and PPSSPP's controls.ini"
+      ):
+          # The pre-existing baseline is hand-typed too, not read back from
+          # the rendered document: subtracting it from what the document
+          # actually carries is what turns "every file the document names"
+          # into "every file new to the editor" - a property the document
+          # itself carries no flag for.
+          pre_existing_files = {
+              "settings/es_settings.xml",
+              f"{PLAYER_HOME}/.config/retroarch/retroarch.cfg",
+              DOLPHIN_INI,
+              f"{PLAYER_HOME}/.config/dolphin-emu/RetroAchievements.ini",
+              PCSX2_INI,
+              f"{PLAYER_HOME}/.config/PCSX2/inis/secrets.ini",
+              PPSSPP_INI,
+              f"{PLAYER_HOME}/.config/azahar-emu/qt-config.ini",
+              DUCKSTATION_INI,
+              SCUMMVM_INI,
+          }
+          expected_new_files = {DOLPHIN_GCPAD, DOLPHIN_WIIMOTE, DOLPHIN_HOTKEYS, PPSSPP_CONTROLS}
+          owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
+          actual_paths = set(owned["files"])
+          missing_baseline = pre_existing_files - actual_paths
+          assert not missing_baseline, missing_baseline
+          assert actual_paths - pre_existing_files == expected_new_files, actual_paths - pre_existing_files
+
+      with subtest(
+          "Every standalone but Azahar carries its enforced route back and its"
+          " dependency settings after the first prepare run"
+      ):
+          assert_ini(DOLPHIN_HOTKEYS, "Hotkeys", "Device", f"SDL/0/{SDL_GAMEPAD_NAME}")
+          assert_ini(DOLPHIN_HOTKEYS, "Hotkeys", "General/Stop", "Back&Start")
+
+          assert_ini(PCSX2_INI, "InputSources", "SDL", "true")
+          assert_ini(PCSX2_INI, "Hotkeys", "ShutdownVM", "SDL-0/Back & SDL-0/Start")
+
+          assert_ini(DUCKSTATION_INI, "InputSources", "SDL", "true")
+          assert_ini(DUCKSTATION_INI, "Hotkeys", "PowerOff", "SDL-0/Back & SDL-0/Start")
+
+          assert_ini(PPSSPP_CONTROLS, "ControlMapping", "Pause", "10-196:10-197")
+
+          assert_ini(SCUMMVM_INI, "scummvm", "joystick_num", "0")
+          assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_QUIT", "JOY_GUIDE")
+          assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_MENU", "JOY_START")
+          assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_VMOUSEUP", "JOY_LEFT_STICK_Y-")
+          assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_VMOUSEDOWN", "JOY_LEFT_STICK_Y+")
+          assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_VMOUSELEFT", "JOY_LEFT_STICK_X-")
+          assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_VMOUSERIGHT", "JOY_LEFT_STICK_X+")
+          assert_ini(SCUMMVM_INI, "keymapper", "keymap_gui_INTRCT", "JOY_A")
+
+      with subtest("Every exit-confirmation suppression setting this task owns holds after the first prepare run"):
+          assert_ini(DOLPHIN_INI, "Interface", "ConfirmStop", "False")
+          assert_ini(PCSX2_INI, "UI", "ConfirmShutdown", "false")
+          assert_ini(DUCKSTATION_INI, "Main", "ConfirmPowerOff", "false")
+          assert_ini(PPSSPP_INI, "General", "AskForExitConfirmationAfterSeconds", "0")
+
+      with subtest(
+          "An altered route back, an altered dependency setting and a re-enabled"
+          " confirmation are each restored by the next editor run"
+      ):
+          set_ini_value(DOLPHIN_HOTKEYS, "Hotkeys", "General/Stop", "Start")
+          set_ini_value(DOLPHIN_HOTKEYS, "Hotkeys", "Device", "SDL/0/some-other-pad")
+          set_ini_value(DOLPHIN_INI, "Interface", "ConfirmStop", "True")
+
+          set_ini_value(PCSX2_INI, "Hotkeys", "ShutdownVM", "SDL-0/Start")
+          set_ini_value(PCSX2_INI, "InputSources", "SDL", "false")
+          set_ini_value(PCSX2_INI, "UI", "ConfirmShutdown", "true")
+
+          set_ini_value(DUCKSTATION_INI, "Hotkeys", "PowerOff", "SDL-0/Start")
+          set_ini_value(DUCKSTATION_INI, "InputSources", "SDL", "false")
+          set_ini_value(DUCKSTATION_INI, "Main", "ConfirmPowerOff", "true")
+
+          set_ini_value(PPSSPP_CONTROLS, "ControlMapping", "Pause", "10-197")
+          set_ini_value(PPSSPP_INI, "General", "AskForExitConfirmationAfterSeconds", "300")
+
+          set_ini_value(SCUMMVM_INI, "keymapper", "keymap_global_QUIT", "JOY_START")
+          set_ini_value(SCUMMVM_INI, "scummvm", "joystick_num", "1")
+
+          rerun_prepare()
+
+          assert_ini(DOLPHIN_HOTKEYS, "Hotkeys", "General/Stop", "Back&Start")
+          assert_ini(DOLPHIN_HOTKEYS, "Hotkeys", "Device", f"SDL/0/{SDL_GAMEPAD_NAME}")
+          assert_ini(DOLPHIN_INI, "Interface", "ConfirmStop", "False")
+
+          assert_ini(PCSX2_INI, "Hotkeys", "ShutdownVM", "SDL-0/Back & SDL-0/Start")
+          assert_ini(PCSX2_INI, "InputSources", "SDL", "true")
+          assert_ini(PCSX2_INI, "UI", "ConfirmShutdown", "false")
+
+          assert_ini(DUCKSTATION_INI, "Hotkeys", "PowerOff", "SDL-0/Back & SDL-0/Start")
+          assert_ini(DUCKSTATION_INI, "InputSources", "SDL", "true")
+          assert_ini(DUCKSTATION_INI, "Main", "ConfirmPowerOff", "false")
+
+          assert_ini(PPSSPP_CONTROLS, "ControlMapping", "Pause", "10-196:10-197")
+          assert_ini(PPSSPP_INI, "General", "AskForExitConfirmationAfterSeconds", "0")
+
+          assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_QUIT", "JOY_GUIDE")
+          assert_ini(SCUMMVM_INI, "scummvm", "joystick_num", "0")
 
       with subtest(
           "The controllers section reports every recorded port, accepted-mode pads warn about"

@@ -10,6 +10,14 @@
     #   udevadm info -q property /dev/input/eventN | grep ID_PATH
     # USB-C is deliberately not a slot.
     controllerPorts = [ ];
+    # TODO(bring-up): the pad's SDL device name and SDL joystick GUID,
+    #   sudo env SDL_VIDEODRIVER=dummy sdl2-jstest --list
+    # sdlGamepadName is the text between the quotes on that output's
+    # GameControllerConfig "Name:" line (or "Joystick Name:" if that
+    # section says "missing"); sdlJoystickGuid is the "Joystick GUID:"
+    # token, copied verbatim. Both null until then: a binding that
+    # depends on either is declared nowhere in the meantime.
+    controllerIdentities = { };
     # TODO(bring-up): confirm the connector the TV is on.
     hdmiOutput = "HDMI-A-1";
   };

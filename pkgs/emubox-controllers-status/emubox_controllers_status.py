@@ -24,9 +24,16 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+
+# Outside the status alphabet (0 ok, 1 warn, 2 fail), so the aggregator
+# reports this section as not having run rather than as a warning with
+# nothing beneath it; the error itself goes to stderr, which the aggregator
+# shows under the section.
+EXIT_DID_NOT_RUN = 3
 
 
 @dataclass(frozen=True)
@@ -61,13 +68,14 @@ def is_accepted(joystick: Joystick, accepted: Sequence[Mode]) -> bool:
 
 def classify(
     *,
-    port_count: int,
     port_devnodes: Sequence[str | None],
     joysticks: Sequence[Joystick],
     accepted: Sequence[Mode],
 ) -> tuple[list[str], int]:
     """Return the report's lines and its own exit status.
 
+    ``port_devnodes`` holds one entry per recorded port, in player order:
+    the event device that port resolves to, or ``None`` for an empty one.
     Slot resolution and the unaccepted-mode warning are independent: a
     port's occupancy is read only from whether it resolves to a device at
     all, and every controller the system sees - on a recorded port or not
@@ -77,7 +85,7 @@ def classify(
     """
 
     lines: list[str] = []
-    if port_count == 0:
+    if not port_devnodes:
         lines.append("no controller ports are recorded")
     else:
         for index, devnode in enumerate(port_devnodes, start=1):
@@ -150,6 +158,14 @@ def discover_joysticks(*, sys_class_input: Path = Path("/sys/class/input")) -> l
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        return report(argv)
+    except Exception as error:  # noqa: BLE001 - any failure of this report's own
+        print(f"emubox-controllers-status: {type(error).__name__}: {error}", file=sys.stderr)
+        return EXIT_DID_NOT_RUN
+
+
+def report(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--ports",
@@ -170,7 +186,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     port_devnodes = [resolve_port(index) for index in range(1, args.ports + 1)]
     joysticks = discover_joysticks()
     lines, status = classify(
-        port_count=args.ports,
         port_devnodes=port_devnodes,
         joysticks=joysticks,
         accepted=accepted,

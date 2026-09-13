@@ -23,22 +23,13 @@ def test_is_accepted_rejects_an_unlisted_mode() -> None:
 
 
 def test_no_ports_recorded_reports_that_and_stays_healthy() -> None:
-    lines, status = ecs.classify(port_count=0, port_devnodes=[], joysticks=[], accepted=ACCEPTED)
+    lines, status = ecs.classify(port_devnodes=[], joysticks=[], accepted=ACCEPTED)
     assert lines == ["no controller ports are recorded"]
-    assert status == 0
-
-
-def test_a_recorded_port_with_no_pad_is_reported_unoccupied_without_warning() -> None:
-    lines, status = ecs.classify(
-        port_count=1, port_devnodes=[None], joysticks=[], accepted=ACCEPTED
-    )
-    assert lines == ["port 1: unoccupied"]
     assert status == 0
 
 
 def test_a_connected_port_and_a_disconnected_one_are_both_reported() -> None:
     lines, status = ecs.classify(
-        port_count=2,
         port_devnodes=["/dev/input/event3", None],
         joysticks=[ecs.Joystick(devnode="/dev/input/event3", vendor="045e", product="028e")],
         accepted=ACCEPTED,
@@ -47,20 +38,8 @@ def test_a_connected_port_and_a_disconnected_one_are_both_reported() -> None:
     assert status == 0
 
 
-def test_an_accepted_mode_pad_produces_no_warning() -> None:
-    lines, status = ecs.classify(
-        port_count=1,
-        port_devnodes=["/dev/input/event3"],
-        joysticks=[ecs.Joystick(devnode="/dev/input/event3", vendor="045e", product="028e")],
-        accepted=ACCEPTED,
-    )
-    assert not any(line.startswith("WARN") for line in lines)
-    assert status == 0
-
-
 def test_an_unaccepted_mode_pad_on_a_recorded_port_is_named_in_the_warning() -> None:
     lines, status = ecs.classify(
-        port_count=1,
         port_devnodes=["/dev/input/event3"],
         joysticks=[ecs.Joystick(devnode="/dev/input/event3", vendor="1234", product="5678")],
         accepted=ACCEPTED,
@@ -75,7 +54,6 @@ def test_an_unaccepted_mode_joystick_outside_the_recorded_slots_is_also_named() 
     recorded ports."""
 
     lines, status = ecs.classify(
-        port_count=0,
         port_devnodes=[],
         joysticks=[ecs.Joystick(devnode="/dev/input/event9", vendor="dead", product="beef")],
         accepted=ACCEPTED,
@@ -86,7 +64,6 @@ def test_an_unaccepted_mode_joystick_outside_the_recorded_slots_is_also_named() 
 
 def test_every_unaccepted_controller_is_named_not_only_the_first() -> None:
     lines, status = ecs.classify(
-        port_count=0,
         port_devnodes=[],
         joysticks=[
             ecs.Joystick(devnode="/dev/input/event3", vendor="1111", product="1111"),
@@ -179,3 +156,23 @@ def test_main_reports_and_exits_the_worst_status(
     assert exit_status == 1
     assert "port 1: unoccupied" in output
     assert "1234:5678" in output
+
+
+def test_an_unexpected_failure_exits_outside_the_status_alphabet_and_says_why(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit 1 would read as a warning with nothing under it; 3 is outside
+    0-2, so the aggregator reports this section as not having run, and the
+    error reaches its stderr for the administrator reading that section."""
+
+    def explode(**_kwargs: object) -> list[ecs.Joystick]:
+        raise FileNotFoundError("udevadm")
+
+    monkeypatch.setattr(ecs, "discover_joysticks", explode)
+
+    exit_status = ecs.main(["--ports", "0"])
+
+    captured = capsys.readouterr()
+    assert exit_status == 3
+    assert "FileNotFoundError" in captured.err
+    assert "udevadm" in captured.err

@@ -207,6 +207,13 @@ in
   # The display-manager fallback (see the header).
   services.displayManager.sddm.enable = lib.mkForce false;
 
+  # Forced rather than inherited from hosts/emubox/facts.nix: the status
+  # checks below prove the controllers section on a box that records no
+  # controller port at all, and that has to stay true once bring-up records
+  # the real ports. A list option concatenates definitions of equal
+  # priority, so only a forced empty list replaces them.
+  emubox.facts.controllerPorts = lib.mkForce [ ];
+
   # Eval-time checks of what the configuration declares. The firewall
   # invariant itself lives in modules/hardware so it guards the shipped
   # system; these guard the test's own inputs.
@@ -533,14 +540,14 @@ in
         machine.succeed(
             "journalctl -u restic-backups-emubox-maintenance.service -o cat --no-pager | grep -F 'EMUBOX_MARKER='"
         )
-        # Sound only because this node records no controller ports: an empty
-        # slot is not a finding, so the controllers reporter is `ok` here and
-        # the aggregate can succeed. On a box that records a port it expects
-        # filled, this same assertion would need a pad actually present.
+        # Succeeds only while the backups section is `ok` and no controller
+        # outside the accepted modes is present: an unoccupied or unrecorded
+        # port is never a finding, so the controllers section is `ok` here
+        # either way.
         status = machine.succeed("emubox-status")
-        # This is also the node that records no controller ports at all,
-        # which the fixture-driven controllers node cannot exercise itself:
-        # the section says so, plainly, and does not warn about it.
+        # This is also the node that forces no controller port recorded at
+        # all, which the fixture-driven controllers node cannot exercise
+        # itself: the section says so, plainly, and does not warn about it.
         assert "no controller ports are recorded" in status, status
         # `start_backup` asserts the backup actually ran and failed. Status
         # reads the unit's current invocation, so a backup that never started
@@ -566,10 +573,20 @@ in
         reporters = json.loads(machine.succeed("cat /etc/emubox/status-reporters"))
         backups_reporter = next(r for r in reporters if r["name"] == "backups")
         argv = " ".join(shlex.quote(part) for part in backups_reporter["command"])
-        _, output = machine.execute(f"env -i PATH= {argv}")
+        # Both streams, since a traceback from a missing program goes to
+        # stderr, which `execute` alone would not return.
+        _, output = machine.execute(f"env -i PATH= {argv} 2>&1")
         assert "btrbk-local.service" in output, output
+        assert "Traceback" not in output, output
         assert "FileNotFoundError" not in output, output
         assert "No such file or directory" not in output, output
+        # The real entry point under the same empty PATH: the system path's
+        # own emubox-status runs every registered reporter, each through its
+        # own packaging, and none of them fails to run.
+        _, output = machine.execute("env -i PATH= /run/current-system/sw/bin/emubox-status 2>&1")
+        assert "backups:" in output, output
+        assert "controllers:" in output, output
+        assert "did not run" not in output, output
 
     with checked("Cloud failures do not disable local gameplay or future backup scheduling"):
         with restic_fault("restic-test-fail"):

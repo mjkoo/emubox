@@ -14,6 +14,8 @@
 }:
 let
   cfg = config.emubox.status;
+  names = map (reporter: reporter.name) cfg.reporters;
+  duplicateNames = lib.unique (lib.filter (name: lib.count (other: other == name) names > 1) names);
 in
 {
   options.emubox.status.reporters = lib.mkOption {
@@ -21,11 +23,14 @@ in
       lib.types.submodule {
         options = {
           name = lib.mkOption {
-            type = lib.types.str;
-            description = "The capability this reporter's section is labelled with.";
+            type = lib.types.nonEmptyStr;
+            description = ''
+              The capability this reporter's section is labelled with. Unique
+              among the registered reporters, since each labels one section.
+            '';
           };
           command = lib.mkOption {
-            type = lib.types.listOf lib.types.str;
+            type = lib.types.nonEmptyListOf lib.types.str;
             description = ''
               The complete argv the aggregator runs for this reporter, exactly
               as registered: it neither extends nor rewrites the program
@@ -46,6 +51,17 @@ in
   };
 
   config = {
+    assertions = [
+      {
+        assertion = duplicateNames == [ ];
+        message = ''
+          emubox.status.reporters: each reporter labels its own section of
+          emubox-status, so no two may share a name; registered more than
+          once: ${lib.concatStringsSep ", " duplicateNames}.
+        '';
+      }
+    ];
+
     # A stable path, not a store hash an administrator would have to look
     # up first - the same shape already used for emubox/bios-inventory.json:
     # a pkgs.writeText derivation, since a registered reporter's command
@@ -61,11 +77,18 @@ in
     # on the system path, so this wrapper - not the package's own binary -
     # is what environment.systemPackages carries: it is the only
     # derivation offering bin/emubox-status here, invoking the real binary
-    # with the stable path and no other argument.
+    # with the stable path ahead of any argument the caller gives.
     environment.systemPackages = [
-      (pkgs.writeShellScriptBin "emubox-status" ''
-        exec ${lib.getExe pkgs.emubox-status} /etc/emubox/status-reporters
-      '')
+      (pkgs.runCommand "emubox-status"
+        {
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          meta.mainProgram = "emubox-status";
+        }
+        ''
+          makeWrapper ${lib.getExe pkgs.emubox-status} $out/bin/emubox-status \
+            --add-flags /etc/emubox/status-reporters
+        ''
+      )
     ];
   };
 }

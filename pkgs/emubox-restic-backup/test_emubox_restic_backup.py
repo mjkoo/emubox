@@ -656,21 +656,6 @@ def test_print_status_default_reports_all_three_layers(monkeypatch: pytest.Monke
     assert queried == ["btrbk-local.service", "backup.service", "maintenance.service"]
 
 
-def test_print_status_local_only_reports_the_local_layer_alone(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    queried: list[str] = []
-
-    def status_layer(*, unit: str, **_: object) -> tuple[bool, str]:
-        queried.append(unit)
-        return True, f"{unit}: success"
-
-    monkeypatch.setattr(erb, "status_layer", status_layer)
-
-    assert erb.print_status("backup.service", "maintenance.service", local_only=True) == 0
-    assert queried == ["btrbk-local.service"]
-
-
 def test_status_cli_local_only_flag_limits_the_query_to_the_local_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

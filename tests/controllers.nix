@@ -399,13 +399,19 @@ in
 
       def status_sections(output):
           """Split the aggregator's output into one block per section, keyed
-          by name - the aggregator separates every section with a blank
-          line, and each section's own first line starts "name: status"."""
-          return {
-              block.split(":", 1)[0]: block
-              for block in output.strip("\n").split("\n\n")
-              if block.strip()
-          }
+          by name. Each section opens with a "name: status" header at the
+          left margin and indents everything the reporter said beneath it,
+          so a header is any non-blank line that does not start with
+          whitespace, and a reporter's own blank lines stay in its block."""
+          sections = {}
+          current = None
+          for line in output.splitlines():
+              if line and not line[0].isspace():
+                  current = line.split(":", 1)[0]
+                  sections[current] = [line]
+              elif current is not None:
+                  sections[current].append(line)
+          return {name: "\n".join(lines) for name, lines in sections.items()}
 
       def write_switchable_reporter(healthy):
           """Create or remove the switchable reporter's mutable command.

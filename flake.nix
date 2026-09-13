@@ -188,7 +188,7 @@
             inherit self;
             pkgs = pkgsFor system;
           };
-          perSystem.emubox-status-packaging = import ./tests/emubox-status.nix {
+          perSystem.emubox-status-packaging = import ./tests/emubox-status-packaging.nix {
             inherit self;
             pkgs = pkgsFor system;
           };
@@ -221,8 +221,9 @@
             # stack: the session, its crash counter and the greeter.
             kiosk = hostPkgs.testers.runNixOSTest (import ./tests/kiosk.nix { inherit self; });
             # The host's software modules as a plain node with fixture
-            # controller ports: the port-to-player mapping, the session
-            # hint, and the owned-key harness later groups extend.
+            # controller ports and fixture pad identities: the port-to-player
+            # mapping, the session hint, the owned controller keys and the
+            # status aggregation.
             controllers = hostPkgs.testers.runNixOSTest (import ./tests/controllers.nix { inherit self; });
             # The kiosk session script on its own, because building it is
             # what runs its shellcheck: `writeShellApplication` does that in

@@ -13,9 +13,9 @@
 let
   python = python3.withPackages (ps: [ ps.pytest ]);
   # systemd: the helper's own `systemctl` and `journalctl` calls, so they
-  # resolve when the status aggregator runs this wrapper as a subprocess
-  # rather than from an administrator's shell, which passes on its own PATH
-  # unmodified.
+  # resolve whatever PATH the caller started with - the status aggregator
+  # passes its own on unchanged, so a narrow starting PATH would otherwise
+  # leave both unreachable.
   runtimePath = lib.makeBinPath [
     btrfs-progs
     restic
@@ -52,10 +52,8 @@ stdenvNoCC.mkDerivation {
     ${lib.optionalString stdenvNoCC.hostPlatform.isLinux ''
       wrapProgram $out/bin/emubox-restic-backup --prefix PATH : ${runtimePath}
     ''}
-    # This package once carried a second name, emubox-status, as a
-    # makeWrapper alias with --status forced on; the aggregator (pkgs/
-    # emubox-status) replaced it, and no derivation may produce that name
-    # again here.
+    # The status aggregator owns `emubox-status` on the system path; a
+    # second binary of that name here would collide with it.
     test ! -e $out/bin/emubox-status
   '';
   meta = {

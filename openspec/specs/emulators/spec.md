@@ -2,9 +2,10 @@
 
 Which emulator serves each game system, the launch configuration the
 flake owns in each emulator so every game starts full screen with the
-right BIOS and a controller-only route back to the frontend, the
-frontend's per-system emulator overrides, and the BIOS directory with
-its checking tool.
+right BIOS and, in the core-based frontend, a controller-only route back
+to it, the frontend's per-system emulator overrides, and the BIOS
+directory with its checking tool. The controller-only route out of a
+standalone emulator is owned by the `controllers` capability, not here.
 
 ## Requirements
 ### Requirement: Each system launches with its assigned emulator
@@ -73,10 +74,17 @@ The enforced values SHALL pin at least: for RetroArch, the core directory
 `/data/bios`, a 30 second save autosave interval, fullscreen, the menu
 entries for downloading cores or content disabled, and the two controller
 button combos that open the menu and quit the game - the only
-controller-only routes out of a running game - all of which reach
+controller-only routes out of a game running under the core-based
+frontend, a standalone emulator's own route back being owned by the
+`controllers` capability rather than here - all of which reach
 RetroArch at launch rather than through `retroarch.cfg`; for RetroArch in
 `retroarch.cfg` itself, the save and state directories the `saves`
-capability routes; for every standalone, fullscreen. The seeded defaults
+capability routes; for every standalone, fullscreen; for every
+standalone whose first start rejects a configuration file this system
+prepared - resetting it, prompting about it, or rewriting it for lack of
+some key - the key that start checks, so the prepared file is read as the
+emulator's own, PCSX2's settings version among them, without which PCSX2
+offers a file prepared before it first ran for reset. The seeded defaults
 SHALL include at least: RetroArch's menu skin and its keyboard hotkeys,
 and the per-emulator performance choices (Wii dual core off in Dolphin,
 native internal resolution in PCSX2, geometry correction and upscaling in
@@ -143,6 +151,13 @@ governs and the replacement carries only the owned values.
   configuration file does not exist
 - **THEN** the file exists before the frontend launches and carries
   every owned value of both tiers that this system writes into it
+
+#### Scenario: PCSX2 first starts against a file this system prepared
+- **WHEN** PCSX2 starts for the first time against a configuration file
+  this system created before PCSX2 had ever run
+- **THEN** the file carries the settings version PCSX2 checks, so PCSX2
+  raises no settings-reset prompt and the seeded values in the file
+  survive its first start
 
 #### Scenario: Owned key drifted
 - **WHEN** an enforced key this system writes into an emulator's

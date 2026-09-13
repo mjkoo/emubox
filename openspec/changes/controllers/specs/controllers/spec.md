@@ -286,7 +286,11 @@ Where an emulator's pad defaults are written into the configuration file
 holding a system's bindings and the flake owns that file, the flake SHALL
 own the complete gameplay binding set for every player that system supports
 up to player four, whatever a pristine install of it would have produced for
-those players, each binding in the tier set out above. Owning a file is what decides the content
+those players, each binding in the tier set out above. Where a pristine
+install's binding names an input the pad never sends, so the control it serves
+does nothing even in a pristine install, the flake SHALL instead bind that
+control to the input the pad does report for it; PPSSPP's shoulder buttons are
+the case. Owning a file is what decides the content
 of a file that has to be recreated, and a recreated file carries the owned
 keys and nothing else, so a default that lives in the file rather than in the
 emulator is a default the box can lose. Only defaults built into the emulator,

@@ -169,6 +169,19 @@ The command's own exit status is the maximum over its reports, so `ok` only
 when every report was `ok`. A reporter that could not run counts as `fail` for
 its own section and never suppresses another's.
 
+A reporter still running after one minute is stopped and read as not having
+run, so one hung report cannot hold the command open or keep the reports after
+it from running. Each section opens with a `name: state` line at the left
+margin, and everything the reporter printed is indented beneath it, so nothing
+a reporter prints - a blank line, or a line shaped like a header - can be read
+as the start of another section. Wherever a section's state is anything but
+`ok`, the reporter's error stream is shown in it too, since a crashed
+reporter's traceback is what an administrator sent to that section needs. A
+failure of the aggregator itself, its reporter list missing or malformed
+included, prints one line naming it and exits as a report that did not run
+counts. Two reporters registered under one name are refused at evaluation,
+since each labels its own section.
+
 **How a reporter is executed, and who owns its dependencies.** A reporter is
 registered as a complete argv, and the aggregator executes exactly that argv
 without modifying `PATH` - it adds nothing, prepends nothing and inherits the
@@ -495,9 +508,17 @@ Two shapes, and the determination establishes per emulator which one applies:
   each system whose bindings live in that file, for every player that system
   supports up to player four, whatever a pristine install would have produced
   for those players, so a file the editor creates or recreates carries all of
-  it. In a file that already exists each binding is written in its tier, and a
-  seeded one the emulator had already filled with its own value keeps that
-  value, as the Migration Plan records.
+  it. Where a pristine install's binding names an input the pad never sends,
+  the control it serves does nothing even there, and the flake binds that
+  control to the input the pad does report for it instead. PPSSPP's shoulders
+  are the case: at v1.20.4 its pristine pad map binds PSP L and R to
+  `NKCODE_BUTTON_7` and `NKCODE_BUTTON_8` (`Core/KeyMapDefaults.cpp:274-275`),
+  codes its SDL layer never emits, since `SDL/SDLJoystick.cpp:127-142` maps
+  the left shoulder to `NKCODE_BUTTON_6` (193) and the right to
+  `NKCODE_BUTTON_5` (192), which are what the flake binds. In a file that
+  already exists each binding is written in its tier, and a seeded one the
+  emulator had already filled with its own value keeps that value, as the
+  Migration Plan records.
 
 PPSSPP is the confirmed second case, on two pieces of evidence taken together:
 the editor's recreate branch creates a missing owned file containing only the

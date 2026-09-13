@@ -545,6 +545,52 @@ def test_ini_leaves_a_seeded_key_already_set_to_an_empty_value(
     assert unwritten(path)
 
 
+def assigned_empty(text: str, key: str) -> bool:
+    """Whether `text` carries exactly one `key = ` line, with nothing after
+    the delimiter but whitespace."""
+
+    matches = [
+        line for line in text.splitlines() if line.partition("=")[0].strip() == key
+    ]
+    return len(matches) == 1 and matches[0].partition("=")[2].strip() == ""
+
+
+def test_ini_enforces_an_empty_value_over_a_non_empty_one_and_then_leaves_it(
+    tmp_path: Path,
+) -> None:
+    # An owned empty value - a stick calibration an emulator reads as "use
+    # the gate's own radius" - is a value like any other, not a removal: it
+    # replaces whatever the file held, and then reads back as already
+    # correct, so the next run writes nothing.
+    path = tmp_path / "GCPadNew.ini"
+    path.write_text("[GCPad1]\nMain Stick/Calibration = 100.00 141.42 100.00 141.42\n")
+    enforce = {"GCPad1": {"Main Stick/Calibration": ""}}
+
+    assert ep.set_ini_settings(path, enforce, {}) is True
+
+    assert "100.00" not in path.read_text()
+    assert assigned_empty(path.read_text(), "Main Stick/Calibration")
+
+    freeze(path)
+    assert ep.set_ini_settings(path, enforce, {}) is False
+    assert unwritten(path)
+
+
+def test_ini_creates_an_enforced_empty_value_in_a_missing_file_and_then_leaves_it(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "GCPadNew.ini"
+    enforce = {"GCPad1": {"Main Stick/Calibration": ""}}
+
+    assert ep.set_ini_settings(path, enforce, {}) is True
+
+    assert assigned_empty(path.read_text(), "Main Stick/Calibration")
+
+    freeze(path)
+    assert ep.set_ini_settings(path, enforce, {}) is False
+    assert unwritten(path)
+
+
 def test_ini_leaves_a_seeded_key_alone_when_only_the_preamble_assigns_it(
     tmp_path: Path,
 ) -> None:

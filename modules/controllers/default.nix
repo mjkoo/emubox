@@ -1,9 +1,10 @@
 # USB-A port order becomes player order: each recorded port gets a stable
 # /dev/input/emubox-pN name, and the session is told to enumerate those names
-# first, in order. Beyond that hint, this module also gives every standalone
-# emulator but Azahar its own owned route back to the frontend, at file paths
-# built from `emubox.emulators.configDirs` rather than a config path typed a
-# second time here.
+# first, in order. Beyond that hint, this module owns the standalone
+# emulators' controller input: each one's gameplay bindings for its native
+# players, and for every standalone but Azahar an owned route back to the
+# frontend, all at file paths built from `emubox.emulators.configDirs` rather
+# than a config path typed a second time here.
 {
   config,
   lib,
@@ -15,7 +16,7 @@ let
   configDirs = config.emubox.emulators.configDirs;
   identity = config.emubox.facts.controllerIdentities;
 
-  # The one mode this change has evidence for: the wired pad in its default
+  # The one mode there is evidence for: the wired pad in its default
   # mode under the in-kernel xpad driver, the identity the packaged
   # RetroArch autoconfig profile keys on. A list rather than a single
   # constant, so a further accepted mode can be added later without
@@ -92,10 +93,23 @@ let
     "Main Stick/Down" = "`Left Y-`";
     "Main Stick/Left" = "`Left X-`";
     "Main Stick/Right" = "`Left X+`";
+    # Main Stick/Calibration, C-Stick/Calibration: enforced empty rather
+    # than left alone. A Dolphin run before the pad's identity was recorded
+    # writes its keyboard default's square gate here (`100.00 141.42 ...`),
+    # and Dolphin applies whatever calibration it loads, so a real stick
+    # pushed to a full diagonal would reach only about 0.7 of its range. An
+    # empty calibration is Dolphin's default state, which falls back to the
+    # stick gate's own radius
+    # (`InputCommon/ControllerEmu/StickGate.cpp:141-147,176-181,245-248`),
+    # and Dolphin writes nothing back for it (its default is `""`,
+    # `StickGate.cpp:287-288`) - so the only churn is this editor re-adding
+    # the empty line after a Dolphin save.
+    "Main Stick/Calibration" = "";
     "C-Stick/Up" = "`Right Y+`";
     "C-Stick/Down" = "`Right Y-`";
     "C-Stick/Left" = "`Right X-`";
     "C-Stick/Right" = "`Right X+`";
+    "C-Stick/Calibration" = "";
     "Triggers/L" = "`Trigger L`";
     "Triggers/R" = "`Trigger R`";
     "Triggers/L-Analog" = "`Trigger L`";
@@ -142,6 +156,10 @@ let
       "Nunchuk/Stick/Down" = "`Left Y-`";
       "Nunchuk/Stick/Left" = "`Left X-`";
       "Nunchuk/Stick/Right" = "`Left X+`";
+      # Enforced empty for the reason `gcPadBindings`'s stick calibrations
+      # are: the keyboard default's square gate would cut the Nunchuk
+      # stick's diagonal range, and an empty one uses the gate's radius.
+      "Nunchuk/Stick/Calibration" = "";
       "Nunchuk/Shake/X" = "`Thumb L`";
       "Nunchuk/Shake/Y" = "`Thumb L`";
       "Nunchuk/Shake/Z" = "`Thumb L`";
@@ -284,13 +302,13 @@ in
   # (`input/drivers_joypad/udev_joypad.c:347`), and never reads this hint at
   # all - so the recorded port order above is not promised for RetroArch,
   # the one input interface among every emulator this flake configures that
-  # is not the system's own game controller library. This change gives
-  # RetroArch no further controller configuration of its own.
+  # is not the system's own game controller library. This module gives
+  # RetroArch no controller configuration of its own.
   environment.sessionVariables = lib.mkIf (ports != [ ]) {
     SDL_JOYSTICK_DEVICE = lib.concatImapStringsSep ":" (i: _: "/dev/input/emubox-p${toString i}") ports;
   };
 
-  # TODO: hotkeys, the "Pair a controller" discoverable window.
+  # TODO: the "Pair a controller" discoverable window.
   hardware.xpadneo.enable = true;
   hardware.bluetooth.settings.General = {
     ClassicBondedOnly = false;
@@ -299,9 +317,10 @@ in
   environment.systemPackages = [
     # `sdl2-jstest --list`, run over SSH at bring-up
     # (`sudo env SDL_VIDEODRIVER=dummy sdl2-jstest --list`), is what
-    # captures the two `emubox.facts.controllerIdentities` values every
-    # binding below depends on - the SDL device name and, for a later
-    # change, the SDL joystick GUID.
+    # captures the two `emubox.facts.controllerIdentities` values: the SDL
+    # device name Dolphin's gameplay bindings and route back depend on, and
+    # the SDL joystick GUID Azahar's gameplay bindings do. PCSX2,
+    # DuckStation, PPSSPP and ScummVM depend on neither.
     pkgs.sdl-jstest
   ];
 
@@ -323,10 +342,13 @@ in
   # every setting that binding depends on to reach a pad at all. Azahar has
   # no pad-bindable exit at the pinned version (it persists a hotkey as a
   # key sequence and a context alone, never a controller input), so it gets
-  # no entry here and no `confirmClose` key.
+  # no route back and no `confirmClose` key; its entry below carries its
+  # gameplay bindings alone.
   #
-  # A leaf this module and `modules/emulators` both set would conflict and
-  # fail evaluation, so every key added to a file that module already owns
+  # A leaf this module and `modules/emulators` both set to different values
+  # would conflict and fail evaluation (`types.anything` merges equal
+  # definitions and refuses unequal ones), so every key added to a file that
+  # module already owns
   # (`Dolphin.ini`, `PCSX2.ini`, DuckStation's `settings.ini`, `ppsspp.ini`,
   # `scummvm.ini`) is one neither table already declares; the module
   # system's own attrset merge is what lets the two modules' contributions
@@ -375,10 +397,9 @@ in
           # section's own default device
           # (`InputCommon/ControllerEmu/ControllerEmu.cpp:113-122`), so the
           # route back binds the pad only once this line names it. Bound
-          # to `SDL/0` alone - the first-enumerated pad - since a second
-          # uinput node cannot be probed on this project's own hardware
-          # rig, and ordering between two physical pads is therefore left
-          # to bring-up rather than assumed here.
+          # to `SDL/0` alone: the route back answers the first-enumerated
+          # pad, as PCSX2's and DuckStation's `SDL-0` route-back bindings
+          # below do.
           Device = "SDL/0/${dolphinSdlDeviceName}";
           # General/Stop = HK_STOP, bound by pressing the fixture's Back
           # and Start within Dolphin's own 50 ms chord window
@@ -391,13 +412,11 @@ in
       };
     };
 
-    # New to the editor, and owned on the same rule as `GCPadNew.ini`
-    # below: the frontend launches the Wii system through Dolphin too, and
-    # a file the editor creates holds only the keys it owns, so leaving
-    # this file unregistered would leave Wii with no owned route back at
-    # all even though `Hotkeys.ini` above is shared between both systems.
-    # No route-back key of its own - that lives entirely in `Hotkeys.ini` -
-    # but every Wii Remote's complete gameplay profile, one section per
+    # New to the editor, and owned for the reason `GCPadNew.ini` below is:
+    # it holds the Wii system's bindings, and the frontend launches Wii
+    # through Dolphin too. No route-back key of its own - Wii shares
+    # `Hotkeys.ini` above with GameCube - but every Wii Remote's complete
+    # gameplay profile, one section per
     # player up to the system's native four, each withheld until the pad's
     # identity is recorded for the same reason `Hotkeys.ini` withholds its
     # own keys: an absent or empty `Device` leaves Dolphin's non-pad
@@ -408,17 +427,10 @@ in
       format = "ini";
       enforce = lib.optionalAttrs (dolphinSdlDeviceName != null) (
         lib.listToAttrs (
-          map
-            (n: {
-              name = "Wiimote${toString n}";
-              value = wiimoteBindings (n - 1);
-            })
-            [
-              1
-              2
-              3
-              4
-            ]
+          lib.genList (i: {
+            name = "Wiimote${toString (i + 1)}";
+            value = wiimoteBindings i;
+          }) 4
         )
       );
     };
@@ -433,17 +445,10 @@ in
       format = "ini";
       enforce = lib.optionalAttrs (dolphinSdlDeviceName != null) (
         lib.listToAttrs (
-          map
-            (n: {
-              name = "GCPad${toString n}";
-              value = gcPadBindings (n - 1);
-            })
-            [
-              1
-              2
-              3
-              4
-            ]
+          lib.genList (i: {
+            name = "GCPad${toString (i + 1)}";
+            value = gcPadBindings i;
+          }) 4
         )
       );
     };
@@ -574,18 +579,17 @@ in
         # (below) takes effect, after this many seconds of unsaved play;
         # the default is 300. Zero suppresses it outright, so the route
         # back never depends on how long a session has run. The one
-        # confirmation left unowned - the same source's networked-session
-        # question - is a deliberate, settled exception: it protects a
-        # multiplayer session's other participants from one pad's exit,
-        # which this key's own five-minute grace period does not.
+        # confirmation left in place is the same source's networked-session
+        # question: no setting suppresses it.
         General.AskForExitConfirmationAfterSeconds = "0";
       };
     };
 
     # New to the editor: `controls.ini` is PPSSPP's own control-mapping
-    # file, generated fresh at every start and distinct from `ppsspp.ini`
-    # above, whose defaults never bind the mappings this file's loader
-    # drops when they are absent (hrydgard/ppsspp Core/KeyMap.cpp:818-852).
+    # file, separate from `ppsspp.ini` above. PPSSPP writes its default
+    # mappings into it, and once the file exists its loader keeps only the
+    # mappings the file names, dropping every default it omits
+    # (hrydgard/ppsspp Core/KeyMap.cpp:818-852).
     "${ppssppControlsFile}" = {
       format = "ini";
       enforce = {
@@ -603,10 +607,12 @@ in
       # (`Core/KeyMap.cpp:818-852`), so this is the complete gameplay set a
       # pristine install would have produced for the PSP's single native
       # player, free of the pad's identity - PPSSPP names a pad input by a
-      # fixed keycode, not by the device it came from. `L`, `R`'s and
-      # `Pause`'s own device-10 key codes rest on PPSSPP's own fixed
-      # keycode switch; `Pause` above is confirmed by round trip, and `L`,
-      # `R` share its device-10 numbering.
+      # fixed keycode, not by the device it came from. A round trip through
+      # PPSSPP's own writer confirmed the form these values take
+      # (`<device>-<code>`, a chord joined with `:`), not the codes
+      # themselves: those - `L`'s, `R`'s and `Pause`'s included - rest on
+      # PPSSPP's keycode switch, which maps SDL's pad buttons onto its own
+      # `KeyCodes.h` values (`SDL/SDLJoystick.cpp`).
       seed = {
         ControlMapping = {
           Up = "10-19";
@@ -659,13 +665,14 @@ in
           # (a key-binding menu, or scripted/event input), in which neither
           # route works until the engine re-enables it.
           keymap_global_QUIT = "JOY_GUIDE";
-          # keymap_global_MENU: the same composition, for the global
-          # keymap's own `MENU` action, which opens the Global Main Menu
-          # (`default-events.cpp:332-339`). Bound to Start alone, not the
-          # upstream default `C+F5 JOY_START`: ScummVM's own writer erases
-          # any mapping equal to that compiled default rather than
-          # persisting it (confirmed against the writer-produced file), so
-          # the compound spelling would not survive a save.
+          # keymap_global_MENU: the same `keymap_<keymap id>_<action id>`
+          # composition as the writer-confirmed `keymap_global_QUIT`
+          # above, for the global keymap's own `MENU` action, which opens
+          # the Global Main Menu (`default-events.cpp:332-339`). Bound to
+          # Start alone, not the upstream default `C+F5 JOY_START`:
+          # ScummVM's keymap writer, run from its own remap dialog, erases
+          # a mapping equal to the compiled default rather than persisting
+          # it, so the compound spelling would not survive a save there.
           keymap_global_MENU = "JOY_START";
           # A pad reaches the Global Main Menu's own Quit button through
           # the GUI's virtual mouse and its interact action, not by D-pad
@@ -675,12 +682,13 @@ in
           # the GUI keymap's own interact binding
           # (`gui-manager.cpp:164-194`) already cover this pad, so these
           # four keys and `keymap_gui_INTRCT` below hold ScummVM's own
-          # compiled defaults, spelled out here only because its writer
-          # erases a value equal to its default on every save - exactly as
-          # `keymap_global_MENU` above does - and the editor would
-          # otherwise rewrite them back in at the next frontend start
-          # regardless, which is harmless but worth pinning explicitly
-          # rather than leaving to that rewrite.
+          # compiled defaults, pinned so the route back never depends on
+          # them staying the defaults. Their key names follow the same
+          # composition as the writer-confirmed `keymap_global_QUIT` above.
+          # ScummVM's keymap writer runs only from its remap dialog; a save
+          # there erases these default-equal values, and the editor writes
+          # them back at the next frontend start, which is harmless - and
+          # on a box where nobody opens that dialog, nothing churns.
           keymap_global_VMOUSEUP = "JOY_LEFT_STICK_Y-";
           keymap_global_VMOUSEDOWN = "JOY_LEFT_STICK_Y+";
           keymap_global_VMOUSELEFT = "JOY_LEFT_STICK_X-";

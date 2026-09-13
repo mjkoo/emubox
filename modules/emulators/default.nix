@@ -1260,7 +1260,10 @@ in
           # device is a controller. The configuration editor creates
           # `PCSX2.ini` before PCSX2 first runs, so without this key every
           # first launch would hit that question. `"1"` is the version
-          # PCSX2's own writer stamps on a fresh settings file.
+          # PCSX2's own writer stamps on a fresh settings file at v2.6.3. A
+          # future PCSX2 bump could change that version; if its writer ever
+          # stamps another, this value needs rechecking before the bump
+          # lands.
           UI.SettingsVersion = "1";
           # UI.SetupWizardIncomplete: PCSX2/pcsx2 pcsx2-qt/QtHost.cpp
           # (v2.6.3) sets this true whenever the base settings layer is

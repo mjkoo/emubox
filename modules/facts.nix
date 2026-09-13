@@ -27,7 +27,7 @@
       type = lib.types.submodule {
         options = {
           sdlGamepadName = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
+            type = lib.types.nullOr lib.types.nonEmptyStr;
             default = null;
             description = ''
               The SDL device name a connected pad reports
@@ -37,11 +37,12 @@
               free of the pad's own name. Null until bring-up records it
               from the real pad under Linux; a binding that depends on this
               fact is declared nowhere at all while it is null, rather than
-              with a placeholder or another machine's value.
+              with a placeholder or another machine's value. An empty name
+              is refused rather than taken as a recorded one.
             '';
           };
           sdlJoystickGuid = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
+            type = lib.types.nullOr (lib.types.strMatching "[0-9a-f]{32}");
             default = null;
             description = ''
               The SDL joystick GUID a connected pad reports
@@ -50,7 +51,10 @@
               Azahar a placeholder joystick that never delivers input. Null
               until bring-up records it from the real pad under Linux, with
               the same "declared nowhere while null" rule as
-              `sdlGamepadName` above.
+              `sdlGamepadName` above. Exactly 32 lowercase hexadecimal
+              digits, the form `sdl2-jstest` prints; any other shape is
+              refused at evaluation, since a mis-copied GUID would
+              otherwise bind a joystick that never exists.
             '';
           };
         };

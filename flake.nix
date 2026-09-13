@@ -158,6 +158,9 @@
             (pkgsFor system).callPackage ./pkgs/emubox-restic-backup/package.nix
               { };
           perSystem.emubox-status = (pkgsFor system).callPackage ./pkgs/emubox-status/package.nix { };
+          perSystem.emubox-controllers-status =
+            (pkgsFor system).callPackage ./pkgs/emubox-controllers-status/package.nix
+              { };
 
           # The retroachievements spec's Disabled scenario, asserted at eval
           # time. Per-system like the two above rather than under `hostOnly`,

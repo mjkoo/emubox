@@ -1,9 +1,36 @@
 # USB-A port order becomes player order: each recorded port gets a stable
 # /dev/input/emubox-pN name, and the session is told to enumerate those names
 # first, in order.
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   ports = config.emubox.facts.controllerPorts;
+
+  # The one mode this change has evidence for: the wired pad in its default
+  # mode under the in-kernel xpad driver, the identity the packaged
+  # RetroArch autoconfig profile keys on. A list rather than a single
+  # constant, so a further accepted mode can be added later without
+  # reworking the status reporter.
+  acceptedControllerModes = [
+    {
+      vendor = "045e";
+      product = "028e";
+    }
+  ];
+
+  controllersStatusCommand = [
+    (lib.getExe pkgs.emubox-controllers-status)
+    "--ports"
+    (toString (lib.length ports))
+  ]
+  ++ lib.concatMap (mode: [
+    "--accepted"
+    "${mode.vendor}:${mode.product}"
+  ]) acceptedControllerModes;
 in
 {
   # /dev/input/emubox-pN from each port's ID_PATH; rules apply on hotplug.
@@ -28,4 +55,16 @@ in
   hardware.bluetooth.settings.General = {
     ClassicBondedOnly = false;
   };
+
+  # Lists which recorded ports resolve to a connected pad and warns about
+  # any controller identifying as none of the accepted modes above,
+  # wherever it is attached. An empty slot, and a box with no ports
+  # recorded at all, are both information rather than a finding: the
+  # report is registered unconditionally, and stays healthy either way.
+  emubox.status.reporters = [
+    {
+      name = "controllers";
+      command = controllersStatusCommand;
+    }
+  ];
 }

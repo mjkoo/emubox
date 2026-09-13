@@ -14,4 +14,5 @@
   emubox-save-migrate = pkgs.callPackage ./emubox-save-migrate/package.nix { };
   emubox-restic-backup = pkgs.callPackage ./emubox-restic-backup/package.nix { };
   emubox-status = pkgs.callPackage ./emubox-status/package.nix { };
+  emubox-controllers-status = pkgs.callPackage ./emubox-controllers-status/package.nix { };
 }

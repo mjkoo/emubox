@@ -199,31 +199,23 @@ assert lib.assertMsg
   (lib.hasInfix "--emit-local-marker" enabled.systemd.services.btrbk-local.serviceConfig.ExecStartPost)
   "tests/backups.nix: local snapshots must emit journal evidence";
 assert lib.assertMsg
-  (
-    disabled.emubox.status.reporters == [
-      {
-        name = "backups";
-        command = [
-          (lib.getExe host.pkgs.emubox-restic-backup)
-          "--status"
-          "--local-only"
-        ];
-      }
-    ]
-  )
+  (lib.elem {
+    name = "backups";
+    command = [
+      (lib.getExe host.pkgs.emubox-restic-backup)
+      "--status"
+      "--local-only"
+    ];
+  } disabled.emubox.status.reporters)
   "tests/backups.nix: a box with off-site backup disabled must register a backups reporter limited to the local layer";
 assert lib.assertMsg
-  (
-    enabled.emubox.status.reporters == [
-      {
-        name = "backups";
-        command = [
-          (lib.getExe host.pkgs.emubox-restic-backup)
-          "--status"
-        ];
-      }
-    ]
-  )
+  (lib.elem {
+    name = "backups";
+    command = [
+      (lib.getExe host.pkgs.emubox-restic-backup)
+      "--status"
+    ];
+  } enabled.emubox.status.reporters)
   "tests/backups.nix: a box with off-site backup enabled must register the full three-layer backups reporter";
 pkgs.runCommand "emubox-backups" { } ''
   touch "$out"

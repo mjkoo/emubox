@@ -529,7 +529,7 @@ this list stays the one place to read what is unproven.
 - PCSX2's first start on a freshly prepared box raises no settings prompt.
 - With two pads connected, player two's pad plays in a two-player game on
   Dolphin, PCSX2 and DuckStation.
-- With a pad in a recorded port, `emubox-status` reports that slot
+- With a pad in each recorded port, `emubox-status` reports every slot
   resolved and raises no unaccepted-mode warning; if it does warn, the
   vendor and product pair the pad reports is recorded and added to
   `acceptedControllerModes` in `modules/controllers/default.nix`.

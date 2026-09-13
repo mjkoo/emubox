@@ -15,9 +15,10 @@ reporter shells out to has to be reachable through the reporter's own
 packaging.
 
 One broken reporter costs its own section, never the whole command: a
-reporter that cannot be started, hangs past its time limit, exits outside
-the status alphabet or prints undecodable bytes is reported as such in its
-own section, and every later section still prints. A failure of this
+reporter that cannot be started, hangs past its time limit or exits outside
+the status alphabet is reported as not having run in its own section, and
+every later section still prints. Bytes a reporter prints that are not
+UTF-8 are replaced in its section rather than ending the command. A failure of this
 program itself - its reporter list missing or malformed included - prints
 one line naming it and exits with the same status a report that did not
 run counts as.

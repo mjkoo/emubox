@@ -52,9 +52,17 @@ stdenvNoCC.mkDerivation {
     ${lib.optionalString stdenvNoCC.hostPlatform.isLinux ''
       wrapProgram $out/bin/emubox-restic-backup --prefix PATH : ${runtimePath}
     ''}
-    # The status aggregator owns `emubox-status` on the system path; a
-    # second binary of that name here would collide with it.
+  '';
+  # The status aggregator owns `emubox-status` on the system path. NixOS
+  # builds that path with collisions ignored, so a second binary of that
+  # name here would silently shadow the aggregator or be shadowed by it
+  # rather than fail the build; this check is the only thing that refuses
+  # one.
+  doInstallCheck = true;
+  installCheckPhase = ''
+    runHook preInstallCheck
     test ! -e $out/bin/emubox-status
+    runHook postInstallCheck
   '';
   meta = {
     description = "Snapshot-consistent restic backup helper for EmuBox";

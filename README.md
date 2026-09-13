@@ -408,11 +408,11 @@ warning, 2 for a failure or a report that could not run. A report still
 running after 60 seconds counts as one that could not run; under every
 section but an `ok` one, whatever the report wrote to its error stream is
 shown too; and when the command cannot read its own list of reports, it
-says so on one line and exits 2. Its backups section reports the authoritative outcome of the latest local
-snapshot, backup, and maintenance invocation, with a journal query when
-one needs attention; with off-site backup disabled, that section carries
-only the local snapshot layer, neither off-site layer. `sudo
-restic-emubox` is restic itself with the
+says so on one line and exits 2. Its backups section reports the
+authoritative outcome of the latest local snapshot, backup, and maintenance
+invocation, with a journal query when one needs attention; with off-site
+backup disabled, that section carries only the local snapshot layer,
+neither off-site layer. `sudo restic-emubox` is restic itself with the
 same repository and root-only credentials automation uses, so `snapshots`,
 `stats`, `ls` and `find` all work as documented upstream. It is restricted to
 root by the permissions on the credentials file it reads, not by a command

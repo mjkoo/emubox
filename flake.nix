@@ -184,6 +184,10 @@
             inherit self;
             pkgs = pkgsFor system;
           };
+          perSystem.controllers-config = import ./tests/controllers-config.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
           perSystem.emubox-status-packaging = import ./tests/emubox-status.nix {
             inherit self;
             pkgs = pkgsFor system;

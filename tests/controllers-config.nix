@@ -38,7 +38,9 @@ let
   ];
 
   outsideConfigDirs = lib.filter (f: !(lib.hasPrefix (f.dir + "/") f.path)) newControllerFiles;
-  notRegistered = lib.filter (f: !(host.config.emubox.kiosk.ownedFiles ? ${f.path})) newControllerFiles;
+  notRegistered = lib.filter (
+    f: !(host.config.emubox.kiosk.ownedFiles ? ${f.path})
+  ) newControllerFiles;
 
   # The literal directories `modules/emulators` binds once each and
   # exposes through `configDirs` above - a regression guard against a
@@ -55,7 +57,9 @@ let
   ];
   foundLiterals = lib.filter (l: lib.hasInfix l controllersSource) forbiddenPathLiterals;
 
-  sdlJstestInstalled = lib.any (p: lib.getName p == "sdl-jstest") host.config.environment.systemPackages;
+  sdlJstestInstalled = lib.any (
+    p: lib.getName p == "sdl-jstest"
+  ) host.config.environment.systemPackages;
 
   # A configuration whose identity facts are empty - the host's own
   # default - and one that records a pad's SDL device name, checked
@@ -68,6 +72,7 @@ let
     }).config.emubox.kiosk.ownedFiles.${hotkeysFile}.enforce;
 
   pspStandaloneCommand = "%EMULATOR_PPSSPP% --pause-menu-exit %ROM%";
+  customSystems = host.config.emubox.kiosk.customSystems;
 in
 assert lib.assertMsg (outsideConfigDirs == [ ]) ''
   tests/controllers-config.nix: a file modules/controllers contributes does

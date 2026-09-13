@@ -641,3 +641,80 @@ def test_status_cli_defaults_to_the_units_the_module_generates(
         "restic-backups-emubox.service",
         "restic-backups-emubox-maintenance.service",
     ]
+
+
+def test_print_status_default_reports_all_three_layers(monkeypatch: pytest.MonkeyPatch) -> None:
+    queried: list[str] = []
+
+    def status_layer(*, unit: str, **_: object) -> tuple[bool, str]:
+        queried.append(unit)
+        return True, f"{unit}: success"
+
+    monkeypatch.setattr(erb, "status_layer", status_layer)
+
+    assert erb.print_status("backup.service", "maintenance.service") == 0
+    assert queried == ["btrbk-local.service", "backup.service", "maintenance.service"]
+
+
+def test_print_status_local_only_reports_the_local_layer_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queried: list[str] = []
+
+    def status_layer(*, unit: str, **_: object) -> tuple[bool, str]:
+        queried.append(unit)
+        return True, f"{unit}: success"
+
+    monkeypatch.setattr(erb, "status_layer", status_layer)
+
+    assert erb.print_status("backup.service", "maintenance.service", local_only=True) == 0
+    assert queried == ["btrbk-local.service"]
+
+
+def test_status_cli_local_only_flag_limits_the_query_to_the_local_layer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queried: list[str] = []
+
+    def status_layer(*, unit: str, **_: object) -> tuple[bool, str]:
+        queried.append(unit)
+        return True, f"{unit}: success"
+
+    monkeypatch.setattr(erb, "status_layer", status_layer)
+
+    assert erb.main(["--status", "--local-only"]) == 0
+    assert queried == ["btrbk-local.service"]
+
+
+def test_print_status_local_only_is_healthy_and_carries_no_off_site_layer(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A current local invocation with a valid marker exits 0 and names only
+    the local recovery point, with neither off-site layer nor an off-site
+    warning in its output."""
+
+    # `print_status` calls `status_layer` with no `now` override, so the
+    # marker has to be fresh against the real clock rather than the fixed
+    # `NOW` the other tests freeze freshness checks against.
+    current_invocation = "current-invocation"
+    real_now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    _mock_status_sources(
+        monkeypatch,
+        result="success",
+        invocation_id=current_invocation,
+        journal=[_status_marker("local", current_invocation, real_now)],
+    )
+
+    exit_status = erb.print_status(
+        "restic-backups-emubox.service",
+        "restic-backups-emubox-maintenance.service",
+        local_only=True,
+    )
+
+    output = capsys.readouterr().out
+    assert exit_status == 0
+    assert "btrbk-local.service" in output
+    assert "recovery point" in output
+    assert "restic-backups-emubox.service" not in output
+    assert "restic-backups-emubox-maintenance.service" not in output
+    assert "WARN" not in output

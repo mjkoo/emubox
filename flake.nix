@@ -185,6 +185,10 @@
             inherit self;
             pkgs = pkgsFor system;
           };
+          perSystem.status = import ./tests/status.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
           perSystem.snapshots = import ./tests/snapshots.nix {
             inherit self;
             pkgs = pkgsFor system;

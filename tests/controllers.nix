@@ -536,5 +536,27 @@ in
               write_switchable_reporter(True)
           _, output = run_status()
           assert "switchable: ok" in output, output
+
+      with subtest(
+          "One emubox-status run carries the switchable reporter, the controllers section"
+          " and the backups section together, and no section for an unregistered capability"
+      ):
+          # Not asserted successful: this node has no btrfs snapshot layer,
+          # so its backups section warns that the local layer has not yet
+          # run, whatever the other two sections report.
+          _, output = run_status()
+          sections = status_sections(output)
+          assert set(sections) == {"backups", "controllers", "switchable"}, sections
+          assert sections["switchable"].splitlines()[0] == "switchable: ok", sections["switchable"]
+          # This node leaves off-site backup off, so its backups section
+          # carries the local snapshot layer and neither off-site layer -
+          # the "a capability contributes no report" case belongs to a
+          # capability that registers nothing at all, which the set
+          # equality above already covers, now that backups registers on
+          # every box regardless of off-site backup.
+          backups = sections["backups"]
+          assert "btrbk-local.service" in backups, backups
+          assert "restic-backups-emubox.service" not in backups, backups
+          assert "restic-backups-emubox-maintenance.service" not in backups, backups
     '';
 }

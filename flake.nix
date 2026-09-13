@@ -157,6 +157,7 @@
           perSystem.emubox-restic-backup =
             (pkgsFor system).callPackage ./pkgs/emubox-restic-backup/package.nix
               { };
+          perSystem.emubox-status = (pkgsFor system).callPackage ./pkgs/emubox-status/package.nix { };
 
           # The retroachievements spec's Disabled scenario, asserted at eval
           # time. Per-system like the two above rather than under `hostOnly`,
@@ -177,6 +178,10 @@
             pkgs = pkgsFor system;
           };
           perSystem.controllers-hint = import ./tests/controllers-hint.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
+          perSystem.emubox-status-packaging = import ./tests/emubox-status.nix {
             inherit self;
             pkgs = pkgsFor system;
           };

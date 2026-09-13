@@ -13,4 +13,5 @@
   emubox-check-bios = pkgs.callPackage ./emubox-check-bios/package.nix { };
   emubox-save-migrate = pkgs.callPackage ./emubox-save-migrate/package.nix { };
   emubox-restic-backup = pkgs.callPackage ./emubox-restic-backup/package.nix { };
+  emubox-status = pkgs.callPackage ./emubox-status/package.nix { };
 }

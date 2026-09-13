@@ -16,17 +16,23 @@ let
       modules = [ { emubox.facts.controllerPorts = fixturePorts; } ];
     }).config;
 in
-assert lib.assertMsg (
-  withoutPorts.emubox.facts.controllerPorts == [ ]
-  && !(withoutPorts.environment.sessionVariables ? SDL_JOYSTICK_DEVICE)
-) "tests/controllers-hint.nix: the host records no controller ports, so SDL_JOYSTICK_DEVICE must not be declared";
-assert lib.assertMsg (
-  withPorts.environment.sessionVariables.SDL_JOYSTICK_DEVICE
-  == "/dev/input/emubox-p1:/dev/input/emubox-p2:/dev/input/emubox-p3"
-) ''
-  tests/controllers-hint.nix: SDL_JOYSTICK_DEVICE must join the emubox-pN
-  paths in recorded port order, got ${withPorts.environment.sessionVariables.SDL_JOYSTICK_DEVICE or "<unset>"}.
-'';
+assert lib.assertMsg
+  (
+    withoutPorts.emubox.facts.controllerPorts == [ ]
+    && !(withoutPorts.environment.sessionVariables ? SDL_JOYSTICK_DEVICE)
+  )
+  "tests/controllers-hint.nix: the host records no controller ports, so SDL_JOYSTICK_DEVICE must not be declared";
+assert lib.assertMsg
+  (
+    withPorts.environment.sessionVariables.SDL_JOYSTICK_DEVICE
+    == "/dev/input/emubox-p1:/dev/input/emubox-p2:/dev/input/emubox-p3"
+  )
+  ''
+    tests/controllers-hint.nix: SDL_JOYSTICK_DEVICE must join the emubox-pN
+    paths in recorded port order, got ${
+      withPorts.environment.sessionVariables.SDL_JOYSTICK_DEVICE or "<unset>"
+    }.
+  '';
 pkgs.runCommand "emubox-controllers-hint" { } ''
   touch "$out"
 ''

@@ -20,9 +20,7 @@ in
   # open the empty path and discard it, which is not the same as declaring
   # no enumeration order at all.
   environment.sessionVariables = lib.mkIf (ports != [ ]) {
-    SDL_JOYSTICK_DEVICE = lib.concatImapStringsSep ":" (
-      i: _: "/dev/input/emubox-p${toString i}"
-    ) ports;
+    SDL_JOYSTICK_DEVICE = lib.concatImapStringsSep ":" (i: _: "/dev/input/emubox-p${toString i}") ports;
   };
 
   # TODO: hotkeys, the "Pair a controller" discoverable window.

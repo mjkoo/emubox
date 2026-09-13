@@ -272,7 +272,7 @@ in
         refusal or a misspelled unit name just as readily as by the backup
         running and failing, which is the only thing the fault-injection
         subtests actually mean. A run that never happened leaves the id, and
-        so `emubox-status`, pointing at the previous success.
+        so `emubox-restic-backup --status`, pointing at the previous success.
         """
         reset_restic_units()
         before = unit_property(BACKUP, "InvocationID")
@@ -533,14 +533,24 @@ in
         machine.succeed(
             "journalctl -u restic-backups-emubox-maintenance.service -o cat --no-pager | grep -F 'EMUBOX_MARKER='"
         )
+        # Sound only because this node records no controller ports: an empty
+        # slot is not a finding, so the controllers reporter is `ok` here and
+        # the aggregate can succeed. On a box that records a port it expects
+        # filled, this same assertion would need a pad actually present.
         machine.succeed("emubox-status")
         # `start_backup` asserts the backup actually ran and failed. Status
         # reads the unit's current invocation, so a backup that never started
         # would leave the previous success standing and report healthy.
         with restic_fault("restic-test-fail"):
             start_backup(expect="exit-code")
-            status = machine.fail("emubox-status")
+            status = machine.fail("emubox-restic-backup --status")
             assert "restic-backups-emubox.service: latest invocation failed" in status, status
+            # Proves the section labelling once, here, rather than at every
+            # other call site: the same substring must appear under the
+            # backups section when the aggregator runs the same reporter.
+            _, aggregate = machine.execute("emubox-status")
+            assert "backups: warn" in aggregate, aggregate
+            assert "restic-backups-emubox.service: latest invocation failed" in aggregate, aggregate
 
     with checked("The wrapped backup helper reaches systemctl and journalctl through its own runtime path"):
         # Read the registered argv rather than retyping it, so a rename of
@@ -581,7 +591,7 @@ in
             assert machine.succeed(
                 "stat -c %Y /data/cache/emubox-restic-test/backup-ran"
             ).strip() == before, "restic backed up despite a failed init gate"
-            status = machine.fail("emubox-status")
+            status = machine.fail("emubox-restic-backup --status")
             assert "restic-backups-emubox.service: latest invocation failed" in status, status
         start_backup()
 

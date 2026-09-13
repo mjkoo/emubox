@@ -537,7 +537,11 @@ in
         # slot is not a finding, so the controllers reporter is `ok` here and
         # the aggregate can succeed. On a box that records a port it expects
         # filled, this same assertion would need a pad actually present.
-        machine.succeed("emubox-status")
+        status = machine.succeed("emubox-status")
+        # This is also the node that records no controller ports at all,
+        # which the fixture-driven controllers node cannot exercise itself:
+        # the section says so, plainly, and does not warn about it.
+        assert "no controller ports are recorded" in status, status
         # `start_backup` asserts the backup actually ran and failed. Status
         # reads the unit's current invocation, so a backup that never started
         # would leave the previous success standing and report healthy.

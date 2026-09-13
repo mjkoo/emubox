@@ -1,49 +1,118 @@
 # The controllers test: the host's software modules booted as a plain node
 # with fixture pads on fixture ports, proving the mapping this project owns
-# - a recorded port to its player name - and the session hint that follows
-# from it, without depending on the virtual machine's own bus topology. The
-# pads are uinput devices rather than emulated USB ones because no emulated
-# USB device QEMU offers presents gamepad capabilities, so udev would never
-# mark one a joystick and the port rule would never fire.
+# - a recorded port to its player name - the session hint that follows from
+# it, and the controllers status reporter's classification of what the
+# fixture presents, without depending on the virtual machine's own bus
+# topology. The pads are uinput devices rather than emulated USB ones
+# because no emulated USB device QEMU offers presents gamepad capabilities,
+# so udev would never mark one a joystick and the port rule would never
+# fire.
+#
+# Four recorded ports: three carry a permanent, accepted-mode pad each, and
+# the fourth stays empty so an unoccupied recorded port is proven too. A
+# permanent keyboard-only device carries an unaccepted identity that the
+# fixture rule leaves unmarked, proving that classification, not identity,
+# is what keeps it out of the report. Two further devices are switchable -
+# started and stopped by the test - so an unaccepted mode is proven both on
+# a recorded port and off every recorded port without leaving either state
+# in place for the rest of the file; a second, test-only status reporter
+# with a mutable command path is switched the same way, to prove a reporter
+# that cannot be executed without disturbing every other section.
 #
 # This node has no graphical session: it turns its display manager off so
 # nothing on it ever calls the configuration editor except the test's own
 # manual invocations, and it has no btrfs snapshot layer, so its backups
-# section (once one exists) reports the local layer as not yet run and
-# warns. Neither is asserted here as a failure; a healthy aggregate is the
-# install node's proof.
+# section reports the local layer as not yet run and warns. Neither is
+# asserted here as a failure; a healthy aggregate is the install node's
+# proof.
 { self }:
 let
   pkgs = self.nixosConfigurations.emubox.pkgs;
   inherit (pkgs) lib;
 
-  # The fixture: three recorded ports, each with its own pad presented
-  # through uinput and a test-only udev rule that marks it a joystick at the
-  # recorded path. Kept as data, not three copies of similar code, so a
-  # fourth pad or a differently-shaped device (an unaccepted-mode joystick,
-  # a keyboard-only device) can sit beside these without touching the
+  # The fixture: four recorded ports. Three carry a permanently connected pad
+  # each, presented through uinput and a test-only udev rule that marks it a
+  # joystick at the recorded path; the fourth is left with none, for the
+  # recorded-port-with-no-pad case. Kept as data, not repeated copies of
+  # similar code, so a differently-shaped device (an unaccepted-mode
+  # joystick, a keyboard-only device) sits beside these without touching the
   # mechanism.
   fixturePorts = [
     "emubox-test-controller-port-1"
     "emubox-test-controller-port-2"
     "emubox-test-controller-port-3"
+    "emubox-test-controller-port-4"
   ];
+  emptyPort = lib.elemAt fixturePorts 3;
+
+  # The wired pad's identity under the in-kernel xpad driver - the one mode
+  # modules/controllers accepts - so these permanent fixture pads produce no
+  # warning.
   fixturePads = lib.imap1 (i: port: {
     name = "emubox-test-pad-${toString i}";
-    vendor = "0000";
-    product = "0000";
+    vendor = "045e";
+    product = "028e";
     kind = "gamepad";
     inherit port;
-  }) fixturePorts;
+  }) (lib.take 3 fixturePorts);
+
+  # A keyboard-only device the fixture rule below leaves unmarked, carrying
+  # an unaccepted vendor and product to prove that being unmarked, not its
+  # identity, is what keeps it out of the controllers report: its capability
+  # set is ordinary keys, which the kernel's own classification does not
+  # read as a joystick either.
+  keyboardFixture = {
+    name = "emubox-test-keyboard";
+    vendor = "cafe";
+    product = "f00d";
+    kind = "keyboard";
+    port = null;
+  };
+
+  # Two switchable devices, started and stopped by the test independently of
+  # the permanent fixture pads above: one presents an unaccepted mode on the
+  # empty port's own recorded slot, the other presents an unaccepted mode
+  # with no recorded port at all, so the warning's reach - every controller
+  # the system sees, on a recorded port or not - is proven both ways in the
+  # same run.
+  unacceptedOnRecordedPort = {
+    name = "emubox-test-pad-unaccepted-recorded";
+    vendor = "1234";
+    product = "5678";
+    kind = "gamepad";
+    port = emptyPort;
+  };
+  unacceptedOffRecordedPorts = {
+    name = "emubox-test-pad-unaccepted-loose";
+    vendor = "dead";
+    product = "beef";
+    kind = "gamepad";
+    port = null;
+  };
+
+  allGamepadFixtures = fixturePads ++ [
+    unacceptedOnRecordedPort
+    unacceptedOffRecordedPorts
+  ];
+  persistentDevices = fixturePads ++ [ keyboardFixture ];
+
+  # A mutable status reporter this test switches at runtime: registered
+  # through emubox.status.reporters on this node alone, its command is a
+  # single path outside the read-only store. Healthy (executable) by
+  # default, so every other assertion that runs the aggregator sees it as
+  # `ok`; only its own subtest makes it non-executable or removes it.
+  switchableReporterPath = "/run/emubox-test-switchable-reporter.sh";
 
   # Creates one or more uinput devices by name, vendor, product and
-  # capability set, and holds them open for the life of the node - the
+  # capability set, and holds them open for the life of the process - the
   # devices themselves, not their udev classification, which the fixture
   # rule below supplies instead of relying on the kernel's own joystick
   # heuristic. Parametric over the device list, so a differently-shaped
   # fixture device (an unaccepted-mode joystick, or a keyboard-only device
   # the fixture rule must leave unmarked) is one more entry in the same list
-  # rather than a second script.
+  # rather than a second script; a separate systemd service can point it at
+  # a spec of its own to make that device switchable independently of the
+  # others.
   fixtureDevicesScript = pkgs.writeText "emubox-test-fixture-devices.py" ''
     """Create the uinput devices the fixture udev rule matches by name, and
     hold them open for the life of the test.
@@ -109,33 +178,56 @@ let
         main(sys.argv[1])
   '';
 
-  fixtureDevicesSpec = pkgs.writeText "emubox-test-fixture-devices.json" (
+  deviceSpecJson =
+    devices:
     builtins.toJSON (
-      map (pad: {
-        inherit (pad)
+      map (device: {
+        inherit (device)
           name
           vendor
           product
           kind
           ;
-      }) fixturePads
-    )
+      }) devices
+    );
+
+  # The permanently running fixture: the accepted-mode pads and the
+  # keyboard-only device, all held open by one service for the life of the
+  # node.
+  fixtureDevicesSpec = pkgs.writeText "emubox-test-fixture-devices.json" (
+    deviceSpecJson persistentDevices
   );
+
+  # Each switchable device gets its own one-item spec, so the test can start
+  # and stop its systemd service independently of the permanent fixture and
+  # of the other switchable device.
+  unacceptedOnRecordedPortSpec =
+    pkgs.writeText "emubox-test-fixture-unaccepted-recorded.json"
+      (deviceSpecJson [ unacceptedOnRecordedPort ]);
+  unacceptedOffRecordedPortsSpec =
+    pkgs.writeText "emubox-test-fixture-unaccepted-loose.json"
+      (deviceSpecJson [ unacceptedOffRecordedPorts ]);
 
   testPython = pkgs.python3.withPackages (ps: [ ps.evdev ]);
 
   # The fixture rule: ordered between the kernel's own input classification
   # (systemd's `60-input-id.rules` and `60-persistent-input.rules`, which run
   # first) and the module's rule (`services.udev.extraRules`, which lands in
-  # `99-local.rules`), matching only the fixture pads by name, so any other
-  # device created through the same mechanism, such as a keyboard-only one,
-  # stays unmarked. `73` is arbitrary within that 60-99 window; the ordering
-  # this relies on is asserted in the test script below rather than assumed.
+  # `99-local.rules`), matching only the fixture gamepads by name, so any
+  # other device created through the same mechanism, the keyboard-only one
+  # included, stays unmarked. `73` is arbitrary within that 60-99 window; the
+  # ordering this relies on is asserted in the test script below rather than
+  # assumed. A gamepad fixture with no recorded port is marked a joystick but
+  # given no `ID_PATH`, so the module's own port rule never resolves it to an
+  # `emubox-pN` symlink.
   fixtureRulesFile = pkgs.writeText "73-emubox-test-fixture.rules" (
     lib.concatMapStringsSep "\n" (
       pad:
-      ''SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="${pad.name}", ENV{ID_INPUT_JOYSTICK}="1", ENV{ID_PATH}="${pad.port}"''
-    ) fixturePads
+      if pad.port != null then
+        ''SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="${pad.name}", ENV{ID_INPUT_JOYSTICK}="1", ENV{ID_PATH}="${pad.port}"''
+      else
+        ''SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="${pad.name}", ENV{ID_INPUT_JOYSTICK}="1"''
+    ) allGamepadFixtures
   );
   fixtureRulesPackage = pkgs.runCommand "emubox-test-fixture-rules" { } ''
     mkdir -p "$out/lib/udev/rules.d"
@@ -183,6 +275,36 @@ in
         };
       };
 
+      # Not in `wantedBy`: these two start stopped, and the test starts and
+      # stops each on its own to prove the unaccepted-mode warning both on a
+      # recorded port and off every recorded port, without leaving either
+      # condition in place for every other assertion in the file.
+      systemd.services.emubox-test-fixture-unaccepted-recorded = {
+        description = "Switchable unaccepted-mode pad on the empty recorded controller port";
+        serviceConfig = {
+          ExecStart = "${testPython}/bin/python3 ${fixtureDevicesScript} ${unacceptedOnRecordedPortSpec}";
+          Restart = "on-failure";
+        };
+      };
+      systemd.services.emubox-test-fixture-unaccepted-loose = {
+        description = "Switchable unaccepted-mode joystick outside the recorded controller ports";
+        serviceConfig = {
+          ExecStart = "${testPython}/bin/python3 ${fixtureDevicesScript} ${unacceptedOffRecordedPortsSpec}";
+          Restart = "on-failure";
+        };
+      };
+
+      # A second reporter, test-only and registered on this node alone: its
+      # command is a mutable path outside the read-only store, which the
+      # test itself creates, healthy, before any assertion below runs the
+      # aggregator, and later switches off and back on for its own subtest.
+      emubox.status.reporters = [
+        {
+          name = "switchable";
+          command = [ switchableReporterPath ];
+        }
+      ];
+
       # No graphical session, because it turns one off rather than being
       # merely spared one: the boot adaptations leave the display manager
       # and its autologin on, and the kiosk session runs emubox-prepare on
@@ -209,12 +331,57 @@ in
       PLAYER_HOME = ${py home}
       FIXTURE_PADS = ${py fixturePads}
       FIXTURE_PORTS = ${py fixturePorts}
+      EMPTY_PORT_INDEX = len(FIXTURE_PORTS)
+      UNACCEPTED_RECORDED = ${py { inherit (unacceptedOnRecordedPort) name vendor product; }}
+      UNACCEPTED_LOOSE = ${py { inherit (unacceptedOffRecordedPorts) name vendor product; }}
+      KEYBOARD_FIXTURE = ${py { inherit (keyboardFixture) name vendor product; }}
+      SWITCHABLE_REPORTER_PATH = ${py switchableReporterPath}
       # udevd's own vendor rules - the kernel's input classification among
       # them - are compiled in from systemd's own store path rather than
       # copied into /etc/udev/rules.d; NixOS never stages them there. All
       # rules from both places are still sorted together by basename alone,
       # regardless of which directory holds them.
       SYSTEMD_PACKAGE = ${py nodes.machine.systemd.package}
+
+      def run_status():
+          """Run the aggregator without asserting its exit status: this
+          node has no btrfs snapshot layer, so its backups section warns
+          regardless of anything asserted here."""
+          return machine.execute("emubox-status")
+
+      def status_sections(output):
+          """Split the aggregator's output into one block per section, keyed
+          by name - the aggregator separates every section with a blank
+          line, and each section's own first line starts "name: status"."""
+          return {
+              block.split(":", 1)[0]: block
+              for block in output.strip("\n").split("\n\n")
+              if block.strip()
+          }
+
+      def write_switchable_reporter(healthy):
+          """Create or remove the switchable reporter's mutable command.
+
+          Healthy is the steady state, so every other subtest that runs the
+          aggregator sees this section as `ok`; only the subtest that owns
+          this fixture ever calls it with False, or removes the file
+          outright, and restores it before moving on.
+          """
+          if healthy:
+              machine.succeed(
+                  "printf '#!/bin/sh\\nexit 0\\n' > "
+                  f"{SWITCHABLE_REPORTER_PATH} && chmod 755 {SWITCHABLE_REPORTER_PATH}"
+              )
+          else:
+              machine.succeed(f"rm -f {SWITCHABLE_REPORTER_PATH}")
+
+      def find_event_by_name(name):
+          """The eventN device whose kernel-reported name matches, waiting
+          for the uinput device and udev's rule processing to catch up."""
+          path = machine.wait_until_succeeds(
+              f"grep -rlx {shlex.quote(name)} /sys/class/input/event*/device/name"
+          ).strip()
+          return path.split("/")[4]
 
       def rerun_prepare():
           """Re-run emubox-prepare as player against this node's own
@@ -227,6 +394,9 @@ in
           machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
 
       machine.wait_for_unit("multi-user.target")
+      # Healthy from the start, so every subtest below that runs the
+      # aggregator for an unrelated reason sees this section as `ok`.
+      write_switchable_reporter(True)
 
       with subtest("The fixture udev rule sorts after the kernel's input classification and before the module's own"):
           # udevd sorts every rules file it reads by basename alone across
@@ -279,5 +449,92 @@ in
 
       with subtest("A second run of emubox-prepare against the same file is idempotent"):
           rerun_prepare()
+
+      with subtest(
+          "The controllers section reports every recorded port, accepted-mode pads warn about"
+          " nothing, and the keyboard-only device is neither classified nor named"
+      ):
+          _, output = run_status()
+          controllers = status_sections(output)["controllers"]
+          assert controllers.splitlines()[0] == "controllers: ok", controllers
+          for i in range(1, EMPTY_PORT_INDEX):
+              assert f"port {i}: connected" in controllers, controllers
+          assert f"port {EMPTY_PORT_INDEX}: unoccupied" in controllers, controllers
+          assert "WARN" not in controllers, controllers
+          assert KEYBOARD_FIXTURE["vendor"] not in controllers, controllers
+          assert KEYBOARD_FIXTURE["product"] not in controllers, controllers
+
+      with subtest(
+          "A recorded port with no pad is unoccupied and the section's own status is ok,"
+          " independent of the aggregate exit status"
+      ):
+          rc, output = run_status()
+          controllers = status_sections(output)["controllers"]
+          assert f"port {EMPTY_PORT_INDEX}: unoccupied" in controllers, controllers
+          assert controllers.splitlines()[0] == "controllers: ok", controllers
+          # Not asserted here: this node's backups section warns regardless
+          # (no btrfs snapshot layer), so the aggregate is never successful
+          # on it.
+          assert rc != 0
+
+      with subtest("An unaccepted-mode pad on a recorded port is named in the warning"):
+          machine.succeed("systemctl start emubox-test-fixture-unaccepted-recorded.service")
+          machine.wait_until_succeeds(f"test -e /dev/input/emubox-p{EMPTY_PORT_INDEX}")
+          try:
+              _, output = run_status()
+              controllers = status_sections(output)["controllers"]
+              assert controllers.splitlines()[0] == "controllers: warn", controllers
+              assert f"port {EMPTY_PORT_INDEX}: connected" in controllers, controllers
+              mode = f"{UNACCEPTED_RECORDED['vendor']}:{UNACCEPTED_RECORDED['product']}"
+              assert mode in controllers, controllers
+          finally:
+              machine.succeed("systemctl stop emubox-test-fixture-unaccepted-recorded.service")
+              machine.wait_until_fails(f"test -e /dev/input/emubox-p{EMPTY_PORT_INDEX}")
+
+      with subtest("An unaccepted-mode joystick outside the recorded ports is also named"):
+          machine.succeed("systemctl start emubox-test-fixture-unaccepted-loose.service")
+          try:
+              event = find_event_by_name(UNACCEPTED_LOOSE["name"])
+              machine.wait_until_succeeds(
+                  f"test $(udevadm info -q property -n /dev/input/{event}"
+                  " --property=ID_INPUT_JOYSTICK --value) = 1"
+              )
+              _, output = run_status()
+              controllers = status_sections(output)["controllers"]
+              assert controllers.splitlines()[0] == "controllers: warn", controllers
+              mode = f"{UNACCEPTED_LOOSE['vendor']}:{UNACCEPTED_LOOSE['product']}"
+              assert mode in controllers, controllers
+              # Every recorded port still resolves exactly as it did before
+              # this off-slot device appeared: the warning covers every
+              # controller the system sees, without disturbing slot
+              # resolution for the ones that are recorded.
+              for i in range(1, EMPTY_PORT_INDEX):
+                  assert f"port {i}: connected" in controllers, controllers
+              assert f"port {EMPTY_PORT_INDEX}: unoccupied" in controllers, controllers
+          finally:
+              machine.succeed("systemctl stop emubox-test-fixture-unaccepted-loose.service")
+
+      with subtest(
+          "A reporter that cannot be executed is reported as not having run,"
+          " and does not suppress the other sections"
+      ):
+          try:
+              machine.succeed(f"chmod 000 {SWITCHABLE_REPORTER_PATH}")
+              rc, output = run_status()
+              assert rc == 2, (rc, output)
+              assert "switchable: did not run" in output, output
+              assert "backups:" in output, output
+              assert "controllers:" in output, output
+
+              machine.succeed(f"rm -f {SWITCHABLE_REPORTER_PATH}")
+              rc, output = run_status()
+              assert rc == 2, (rc, output)
+              assert "switchable: did not run" in output, output
+              assert "backups:" in output, output
+              assert "controllers:" in output, output
+          finally:
+              write_switchable_reporter(True)
+          _, output = run_status()
+          assert "switchable: ok" in output, output
     '';
 }

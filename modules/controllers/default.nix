@@ -297,13 +297,19 @@ in
   # instead (`configuration.c:672-720,1240-1297`; `HAVE_UDEV=auto`,
   # `qb/config.params.sh:56`; udev linked at
   # `retroarch-bare/package.nix:99-113`; confirmed at the pinned build,
-  # `[Input] Found joypad driver: "udev"`). That driver fills ports in
-  # udev's own enumeration order, and on hotplug in arrival order
-  # (`input/drivers_joypad/udev_joypad.c:347`), and never reads this hint at
-  # all - so the recorded port order above is not promised for RetroArch,
-  # the one input interface among every emulator this flake configures that
-  # is not the system's own game controller library. This module gives
-  # RetroArch no controller configuration of its own.
+  # `[Input] Found joypad driver: "udev"`). That driver gives each pad the
+  # lowest free slot as it finds it, first in udev's own enumeration order
+  # and then as pads arrive (`input/drivers_joypad/udev_joypad.c:118-125`,
+  # via `:347`), and never reads this hint or any other environment
+  # variable at all - so the recorded port order above is not promised for
+  # RetroArch, the one input interface among every emulator this flake
+  # configures that is not the system's own game controller library. It
+  # cannot list a pad twice through a recorded port's name either: it
+  # enumerates `ID_INPUT_JOYSTICK=1` input devices and opens each one's own
+  # device node, never a symlink to it (`:621-623,641-642`; hotplug through
+  # the same filter, `:506-523`), and refuses a device whose device number
+  # is already open (`:333-345`). This module gives RetroArch no controller
+  # configuration of its own.
   environment.sessionVariables = lib.mkIf (ports != [ ]) {
     SDL_JOYSTICK_DEVICE = lib.concatImapStringsSep ":" (i: _: "/dev/input/emubox-p${toString i}") ports;
   };
@@ -371,7 +377,7 @@ in
         Core = {
           # Core.SIDevice1-3: Dolphin-Emulator/dolphin
           # Core/Config/MainSettings.cpp:168-178 and Core/HW/SI/SI_Device.h:87-105
-          # - GameCube controller ports 2-4 default disconnected (`6`,
+          # - GameCube controller ports 2-4 default disconnected (`0`,
           # `SIDEVICE_NONE`); `6` is `SIDEVICE_GC_CONTROLLER`, the same
           # value port 1 already defaults to. Connects the slot each
           # further player's `GCPadNew.ini` profile below binds; withheld
@@ -604,15 +610,20 @@ in
         ControlMapping.Pause = "10-196:10-197";
       };
       # Seeded: PPSSPP's own loader drops every mapping this file omits
-      # (`Core/KeyMap.cpp:818-852`), so this is the complete gameplay set a
-      # pristine install would have produced for the PSP's single native
-      # player, free of the pad's identity - PPSSPP names a pad input by a
-      # fixed keycode, not by the device it came from. A round trip through
-      # PPSSPP's own writer confirmed the form these values take
-      # (`<device>-<code>`, a chord joined with `:`), not the codes
-      # themselves: those - `L`'s, `R`'s and `Pause`'s included - rest on
-      # PPSSPP's keycode switch, which maps SDL's pad buttons onto its own
-      # `KeyCodes.h` values (`SDL/SDLJoystick.cpp`).
+      # (`Core/KeyMap.cpp:818-852`), so this is the complete gameplay set
+      # for the PSP's single native player, free of the pad's identity -
+      # PPSSPP names a pad input by a fixed keycode, not by the device it
+      # came from. A round trip through PPSSPP's own writer confirmed the
+      # form these values take (`<device>-<code>`, a chord joined with `:`),
+      # not the codes themselves: those rest on PPSSPP's keycode switch,
+      # which maps SDL's pad buttons onto its own `KeyCodes.h` values
+      # (`SDL/SDLJoystick.cpp:127-142`). Every key but `L` and `R` is what
+      # a pristine install writes (`Core/KeyMapDefaults.cpp:264-279`). Those
+      # two depart from it on purpose: the pristine map binds them to
+      # `10-194` and `10-195` (`NKCODE_BUTTON_7`/`_8`, `:274-275`), which
+      # the SDL switch never sends, so a pristine install's shoulders do
+      # nothing. The left shoulder arrives as `NKCODE_BUTTON_6` (193) and
+      # the right as `NKCODE_BUTTON_5` (192), and those are what is bound.
       seed = {
         ControlMapping = {
           Up = "10-19";

@@ -11,6 +11,7 @@
     # USB-C is deliberately not a slot.
     controllerPorts = [ ];
     # TODO(bring-up): the pad's SDL device name and SDL joystick GUID,
+    # read with nixpkgs `sdl-jstest`, which the box carries:
     #   sudo env SDL_VIDEODRIVER=dummy sdl2-jstest --list
     # sdlGamepadName is the text between the quotes on that output's
     # GameControllerConfig "Name:" line (or "Joystick Name:" if that

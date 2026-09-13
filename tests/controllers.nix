@@ -153,8 +153,9 @@ let
     product identifiers (hex strings) and a capability set - "gamepad" for
     button-and-axis capabilities, or "keyboard" for a handful of key
     capabilities and nothing else. The fixture rule matches by name alone,
-    so the vendor and product values here are placeholders distinct from
-    the box's own accepted pad, not a fact this script has to get right.
+    but the controllers status reporter classifies a device by the vendor
+    and product it reports, so these values decide whether each device
+    reads as the box's accepted mode or an unaccepted one.
     """
 
     import json
@@ -246,9 +247,11 @@ let
   # first) and the module's rule (`services.udev.extraRules`, which lands in
   # `99-local.rules`), matching only the fixture gamepads by name, so any
   # other device created through the same mechanism, the keyboard-only one
-  # included, stays unmarked. `73` is arbitrary within that 60-99 window; the
-  # ordering this relies on is asserted in the test script below rather than
-  # assumed. A gamepad fixture with no recorded port is marked a joystick but
+  # included, stays unmarked. `73` is arbitrary within that 60-99 window; that
+  # it runs before the module's rule is proven by the test script below, whose
+  # port-resolution subtest finds each fixture pad's `emubox-pN` link, which
+  # the module's rule can only create from the `ID_PATH` this rule has
+  # already set. A gamepad fixture with no recorded port is marked a joystick but
   # given no `ID_PATH`, so the module's own port rule never resolves it to an
   # `emubox-pN` symlink.
   fixtureRulesFile = pkgs.writeText "73-emubox-test-fixture.rules" (
@@ -289,14 +292,13 @@ in
       # a plain assignment would add the fixture ports to whatever ports
       # the host's facts record rather than replace them.
       emubox.facts.controllerPorts = lib.mkForce fixturePorts;
-      # Beside the fixture ports: the one pad-identity fact Dolphin's route
-      # back depends on. A plain assignment is enough here - unlike
-      # `controllerPorts` above, `hosts/emubox/facts.nix`'s own
-      # `controllerIdentities = { };` sets no field of this submodule at
-      # all, so there is nothing for this node's own definition of
-      # `sdlGamepadName` to be merged against.
-      emubox.facts.controllerIdentities.sdlGamepadName = fixtureSdlGamepadName;
-      emubox.facts.controllerIdentities.sdlJoystickGuid = fixtureSdlJoystickGuid;
+      # Beside the fixture ports: the two pad-identity facts Dolphin's and
+      # Azahar's bindings depend on. Forced for the same reason the ports
+      # are: once bring-up records the real pad's identity in
+      # hosts/emubox/facts.nix, a plain assignment here would conflict with
+      # it rather than replace it.
+      emubox.facts.controllerIdentities.sdlGamepadName = lib.mkForce fixtureSdlGamepadName;
+      emubox.facts.controllerIdentities.sdlJoystickGuid = lib.mkForce fixtureSdlJoystickGuid;
 
       # /dev/uinput is what the fixture devices script opens; the module is
       # not built into every kernel config, so it is loaded explicitly
@@ -413,6 +415,17 @@ in
                   sections[current].append(line)
           return {name: "\n".join(lines) for name, lines in sections.items()}
 
+      def snapshot_owned_files():
+          """Every file the rendered owned-values document names, as it
+          stands on disk - None for one the editor has not created."""
+          owned = json.loads(machine.succeed(f"cat {OWNED_VALUES}"))
+          contents = {}
+          for path in owned["files"]:
+              resolved = path if path.startswith("/") else f"{APPDATA}/{path}"
+              rc, text = machine.execute(f"cat {shlex.quote(resolved)}")
+              contents[path] = text if rc == 0 else None
+          return contents
+
       def write_switchable_reporter(healthy):
           """Create or remove the switchable reporter's mutable command.
 
@@ -472,14 +485,22 @@ in
           got = ini_value(read_ini(path), section, key)
           assert got == expected, (path, section, key, got, expected)
 
+      def write_as_player(path, text, *, append=False):
+          """Write, or with `append` add, `text` to `path` as `player` (the
+          account both emubox-prepare and every standalone emulator run
+          as), so a later prepare run's own write is not fighting a
+          root-owned file. Through a base64 round trip rather than `sed` or
+          a shell literal, since several of the values this test writes
+          carry `&`, `/` and quotes - shell metacharacters a replacement
+          pattern would otherwise have to escape around."""
+          encoded = base64.b64encode(text.encode()).decode()
+          redirect = ">>" if append else ">"
+          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d {redirect} {shlex.quote(path)}"
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+
       def set_ini_value(path, section, key, new_value):
           """Overwrite one `key = value` line under `[section]` to
-          `new_value`, as `player` (the account both emubox-prepare and
-          every standalone emulator run as), so a later prepare run's own
-          write is not fighting a root-owned file. Written back through a
-          base64 round trip rather than `sed`, since several of the values
-          this test sets and restores carry `&` and `/` - shell metacharacters
-          a sed replacement pattern would otherwise have to escape around."""
+          `new_value`, as `player`."""
           lines = read_ini(path).splitlines(keepends=True)
           out = []
           in_section = False
@@ -498,9 +519,7 @@ in
                       continue
               out.append(line)
           assert replaced, f"{path}: no [{section}] {key} line to alter"
-          encoded = base64.b64encode("".join(out).encode()).decode()
-          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
-          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+          write_as_player(path, "".join(out))
 
       def remove_ini_line(path, section, key):
           """Delete one `key = value` line under `[section]`, as `player` -
@@ -523,9 +542,7 @@ in
                       continue
               out.append(line)
           assert removed, f"{path}: no [{section}] {key} line to remove"
-          encoded = base64.b64encode("".join(out).encode()).decode()
-          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
-          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+          write_as_player(path, "".join(out))
 
       def insert_ini_key(path, section, key, value):
           """Insert one new `key = value` line into an existing `[section]`
@@ -549,9 +566,7 @@ in
               out.append(f"{key} = {value}\n")
               inserted = True
           assert inserted, f"{path}: no [{section}] section to insert into"
-          encoded = base64.b64encode("".join(out).encode()).decode()
-          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
-          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+          write_as_player(path, "".join(out))
 
       def write_ini_file(path, sections):
           """Write a whole INI file from scratch, one `[section]` per
@@ -563,18 +578,14 @@ in
               lines.append(f"[{section}]\n")
               for key, value in keys.items():
                   lines.append(f"{key} = {value}\n")
-          encoded = base64.b64encode("".join(lines).encode()).decode()
-          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
-          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+          write_as_player(path, "".join(lines))
 
       def append_ini_section(path, section, keys):
           """Append a new `[section]` block to an existing file - the same
           simulated-emulator-save use `write_ini_file` serves, for a file
           that already carries some other, identity-free section."""
           lines = [f"\n[{section}]\n"] + [f"{k} = {v}\n" for k, v in keys.items()]
-          encoded = base64.b64encode("".join(lines).encode()).decode()
-          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d >> {shlex.quote(path)}"
-          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+          write_as_player(path, "".join(lines), append=True)
 
       def ini_section_keys(text, section):
           """Every key name present under `[section]`, in the order it
@@ -616,10 +627,12 @@ in
               "Main Stick/Down": "`Left Y-`",
               "Main Stick/Left": "`Left X-`",
               "Main Stick/Right": "`Left X+`",
+              "Main Stick/Calibration": "",
               "C-Stick/Up": "`Right Y+`",
               "C-Stick/Down": "`Right Y-`",
               "C-Stick/Left": "`Right X-`",
               "C-Stick/Right": "`Right X+`",
+              "C-Stick/Calibration": "",
               "Triggers/L": "`Trigger L`",
               "Triggers/R": "`Trigger R`",
               "Triggers/L-Analog": "`Trigger L`",
@@ -658,6 +671,7 @@ in
               "Nunchuk/Stick/Down": "`Left Y-`",
               "Nunchuk/Stick/Left": "`Left X-`",
               "Nunchuk/Stick/Right": "`Left X+`",
+              "Nunchuk/Stick/Calibration": "",
               "Nunchuk/Shake/X": "`Thumb L`",
               "Nunchuk/Shake/Y": "`Thumb L`",
               "Nunchuk/Shake/Z": "`Thumb L`",
@@ -727,6 +741,8 @@ in
               "LargeMotor": f"SDL-{i}/LargeMotor",
               "SmallMotor": f"SDL-{i}/SmallMotor",
           }
+
+      KEYBOARD_STICK_CALIBRATION = "100.00 141.42 100.00 141.42 100.00 141.42 100.00 141.42"
 
       PPSSPP_CONTROLS_BINDINGS = {
           "Up": "10-19",
@@ -803,27 +819,30 @@ in
       # aggregator for an unrelated reason sees this section as `ok`.
       write_switchable_reporter(True)
 
-      with subtest("The fixture udev rule sorts after the kernel's input classification and before the module's own"):
-          # udevd sorts every rules file it reads by basename alone across
-          # every directory it reads from, so the kernel's classification
-          # rules (in systemd's own store path) and this project's rules
-          # (staged into /etc/udev/rules.d) are compared as one sequence
-          # even though neither directory holds the other's files.
-          etc_rules = sorted(machine.succeed("ls /etc/udev/rules.d").split())
-          vendor_rules = sorted(
-              machine.succeed(f"ls {SYSTEMD_PACKAGE}/lib/udev/rules.d").split()
-          )
-          fixture_rule = "73-emubox-test-fixture.rules"
-          assert fixture_rule in etc_rules, etc_rules
-          kernel_rules = [r for r in vendor_rules if r.startswith("60-") and "input" in r]
-          assert kernel_rules, vendor_rules
-          assert all(r < fixture_rule for r in kernel_rules), (kernel_rules, fixture_rule)
+      with subtest(
+          "The fixture udev rule is staged beside the kernel's input classification"
+          " rules and the module's own"
+      ):
+          # Only that each file is where udevd reads it, not their order:
+          # udevd sorts every rules file by basename across every directory
+          # it reads, and the next subtest is what proves the fixture rule
+          # runs before the module's - a pad's emubox-pN link exists only if
+          # the module's rule, in 99-local.rules, saw the ID_PATH the
+          # fixture rule sets.
+          etc_rules = machine.succeed("ls /etc/udev/rules.d").split()
+          vendor_rules = machine.succeed(f"ls {SYSTEMD_PACKAGE}/lib/udev/rules.d").split()
+          assert "73-emubox-test-fixture.rules" in etc_rules, etc_rules
           assert "99-local.rules" in etc_rules, etc_rules
-          assert fixture_rule < "99-local.rules"
+          assert any(r.startswith("60-") and "input" in r for r in vendor_rules), vendor_rules
 
       with subtest("Every emubox-pN resolves to its fixture pad in recorded order"):
           machine.wait_for_unit("emubox-test-fixture-devices.service")
           for i, pad in enumerate(FIXTURE_PADS, start=1):
+              # The unit is up as soon as its process forks, before the pads
+              # exist: each link is waited for, and udev's queue drained so
+              # the properties read below are its settled ones.
+              machine.wait_until_succeeds(f"test -e /dev/input/emubox-p{i}")
+              machine.succeed("udevadm settle")
               event = machine.succeed(f"readlink -f /dev/input/emubox-p{i}").strip()
               node = event.rsplit("/", 1)[-1]
               got_name = machine.succeed(f"cat /sys/class/input/{node}/device/name").strip()
@@ -852,8 +871,12 @@ in
           machine.succeed("test -x /run/current-system/sw/bin/emubox-prepare")
           rerun_prepare()
 
-      with subtest("A second run of emubox-prepare against the same file is idempotent"):
+      with subtest("A second run of emubox-prepare against the same file changes no owned file"):
+          before = snapshot_owned_files()
           rerun_prepare()
+          after = snapshot_owned_files()
+          changed = [path for path in before if before[path] != after[path]]
+          assert not changed, changed
 
       with subtest(
           "The owned-values document's files new to the editor are exactly Dolphin's"
@@ -907,7 +930,10 @@ in
           assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_VMOUSERIGHT", "JOY_LEFT_STICK_X+")
           assert_ini(SCUMMVM_INI, "keymapper", "keymap_gui_INTRCT", "JOY_A")
 
-      with subtest("Every exit-confirmation suppression setting this task owns holds after the first prepare run"):
+      with subtest(
+          "Every exit-confirmation suppression setting the route backs depend on"
+          " holds after the first prepare run"
+      ):
           assert_ini(DOLPHIN_INI, "Interface", "ConfirmStop", "False")
           assert_ini(PCSX2_INI, "UI", "ConfirmShutdown", "false")
           assert_ini(DUCKSTATION_INI, "Main", "ConfirmPowerOff", "false")
@@ -1021,6 +1047,27 @@ in
           assert ini_value(text, "ControlMapping", "Pause") == "10-196:10-197"
 
       with subtest(
+          "PCSX2's PCSX2.ini and Dolphin's GCPadNew.ini, recreated from nothing,"
+          " carry exactly the complete gameplay set for every native player"
+      ):
+          machine.succeed(
+              "su player -s /bin/sh -c " + shlex.quote(f"rm -f {PCSX2_INI} {DOLPHIN_GCPAD}")
+          )
+          rerun_prepare()
+          recreated = [
+              (PCSX2_INI, f"Pad{i + 1}", {**pcsx2_pad_bindings(i), "Type": "DualShock2"})
+              for i in range(2)
+          ] + [
+              (DOLPHIN_GCPAD, f"GCPad{n}", gc_pad_bindings(n - 1, SDL_GAMEPAD_NAME))
+              for n in range(1, 5)
+          ]
+          for path, section, expected in recreated:
+              text = read_ini(path)
+              assert set(ini_section_keys(text, section)) == set(expected), (path, section, text)
+              for key, value in expected.items():
+                  assert ini_value(text, section, key) == value, (path, section, key, text)
+
+      with subtest(
           "An altered seeded gameplay binding, one per emulator that has"
           " one, and an altered seeded slot setting survive a further"
           " editor run"
@@ -1107,13 +1154,14 @@ in
           insert_ini_key(DOLPHIN_INI, "Core", "SIDevice2", "0")
           insert_ini_key(DOLPHIN_INI, "Core", "SIDevice3", "0")
 
-          write_ini_file(
-              DOLPHIN_GCPAD,
-              {
-                  f"GCPad{n}": {k: "WRONG" for k in gc_pad_bindings(n - 1, SDL_GAMEPAD_NAME)}
-                  for n in range(1, 5)
-              },
-          )
+          gc_pad_sections = {
+              f"GCPad{n}": {k: "WRONG" for k in gc_pad_bindings(n - 1, SDL_GAMEPAD_NAME)}
+              for n in range(1, 5)
+          }
+          # What Dolphin itself writes for a stick's calibration before any
+          # pad is bound: its keyboard default's square gate.
+          gc_pad_sections["GCPad1"]["Main Stick/Calibration"] = KEYBOARD_STICK_CALIBRATION
+          write_ini_file(DOLPHIN_GCPAD, gc_pad_sections)
           write_ini_file(
               DOLPHIN_WIIMOTE,
               {
@@ -1148,6 +1196,9 @@ in
       ):
           rerun_prepare()
 
+          # The keyboard calibration is gone: the stick is back to its full
+          # range.
+          assert_ini(DOLPHIN_GCPAD, "GCPad1", "Main Stick/Calibration", "")
           for n in range(1, 5):
               i = n - 1
               for key, value in gc_pad_bindings(i, SDL_GAMEPAD_NAME).items():
@@ -1180,6 +1231,18 @@ in
           "The controllers section reports every recorded port, accepted-mode pads warn about"
           " nothing, and the keyboard-only device is neither classified nor named"
       ):
+          # The keyboard-only device exists and udev has settled on it
+          # without marking it a joystick, so its absence from the report
+          # below is that classification at work, not a device that never
+          # appeared.
+          keyboard_event = find_event_by_name(KEYBOARD_FIXTURE["name"])
+          machine.succeed("udevadm settle")
+          keyboard_marked = machine.succeed(
+              f"udevadm info -q property -n /dev/input/{keyboard_event}"
+              " --property=ID_INPUT_JOYSTICK --value"
+          ).strip()
+          assert keyboard_marked != "1", (keyboard_event, keyboard_marked)
+
           _, output = run_status()
           controllers = status_sections(output)["controllers"]
           assert controllers.splitlines()[0] == "controllers: ok", controllers
@@ -1190,23 +1253,17 @@ in
           assert KEYBOARD_FIXTURE["vendor"] not in controllers, controllers
           assert KEYBOARD_FIXTURE["product"] not in controllers, controllers
 
-      with subtest(
-          "A recorded port with no pad is unoccupied and the section's own status is ok,"
-          " independent of the aggregate exit status"
-      ):
-          rc, output = run_status()
-          controllers = status_sections(output)["controllers"]
-          assert f"port {EMPTY_PORT_INDEX}: unoccupied" in controllers, controllers
-          assert controllers.splitlines()[0] == "controllers: ok", controllers
-          # Not asserted here: this node's backups section warns regardless
-          # (no btrfs snapshot layer), so the aggregate is never successful
-          # on it.
-          assert rc != 0
-
       with subtest("An unaccepted-mode pad on a recorded port is named in the warning"):
           machine.succeed("systemctl start emubox-test-fixture-unaccepted-recorded.service")
-          machine.wait_until_succeeds(f"test -e /dev/input/emubox-p{EMPTY_PORT_INDEX}")
           try:
+              # udevd creates the port link before it writes its database,
+              # so the property, not the link, says the device is fully
+              # classified; the link exists by then as well.
+              event = find_event_by_name(UNACCEPTED_RECORDED["name"])
+              machine.wait_until_succeeds(
+                  f"test $(udevadm info -q property -n /dev/input/{event}"
+                  " --property=ID_INPUT_JOYSTICK --value) = 1"
+              )
               _, output = run_status()
               controllers = status_sections(output)["controllers"]
               assert controllers.splitlines()[0] == "controllers: warn", controllers
@@ -1239,6 +1296,10 @@ in
               assert f"port {EMPTY_PORT_INDEX}: unoccupied" in controllers, controllers
           finally:
               machine.succeed("systemctl stop emubox-test-fixture-unaccepted-loose.service")
+              machine.wait_until_fails(
+                  f"grep -rlx {shlex.quote(UNACCEPTED_LOOSE['name'])}"
+                  " /sys/class/input/event*/device/name"
+              )
 
       with subtest(
           "A reporter that cannot be executed is reported as not having run,"

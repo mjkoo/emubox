@@ -5,26 +5,25 @@
 let
   inherit (pkgs) lib;
   host = self.nixosConfigurations.emubox;
-  withoutPorts = host.config;
-  fixturePorts = [
+  # Forced on both sides rather than inherited from the host's own facts: a
+  # list option concatenates definitions of equal priority, so a plain
+  # assignment would add to any ports the host records rather than replace
+  # them, and the side with nothing recorded has to keep meaning that once
+  # bring-up records real ports in hosts/emubox/facts.nix.
+  withControllerPorts =
+    ports:
+    (host.extendModules {
+      modules = [ { emubox.facts.controllerPorts = lib.mkForce ports; } ];
+    }).config;
+  withoutPorts = withControllerPorts [ ];
+  withPorts = withControllerPorts [
     "fixture-controller-port-1"
     "fixture-controller-port-2"
     "fixture-controller-port-3"
   ];
-  withPorts =
-    (host.extendModules {
-      # Forced: a list option concatenates definitions of equal priority, so
-      # a plain assignment would add these to any ports the host records
-      # rather than replace them.
-      modules = [ { emubox.facts.controllerPorts = lib.mkForce fixturePorts; } ];
-    }).config;
 in
-assert lib.assertMsg
-  (
-    withoutPorts.emubox.facts.controllerPorts == [ ]
-    && !(withoutPorts.environment.sessionVariables ? SDL_JOYSTICK_DEVICE)
-  )
-  "tests/controllers-hint.nix: the host records no controller ports, so SDL_JOYSTICK_DEVICE must not be declared";
+assert lib.assertMsg (!(withoutPorts.environment.sessionVariables ? SDL_JOYSTICK_DEVICE))
+  "tests/controllers-hint.nix: with no controller port recorded, SDL_JOYSTICK_DEVICE must not be declared";
 assert lib.assertMsg
   (
     withPorts.environment.sessionVariables.SDL_JOYSTICK_DEVICE

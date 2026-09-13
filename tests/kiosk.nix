@@ -488,6 +488,17 @@ assert lib.assertMsg
 
       system.stateVersion = "26.05";
 
+      # Forced to "nothing recorded" rather than inherited from
+      # hosts/emubox/facts.nix: this node is a box whose bring-up has
+      # recorded no controller port and no pad identity, and both the
+      # session-hint absence and the owned-key pins below that leave
+      # identity-gated keys out mean exactly that state, whatever the real
+      # host goes on to record. A list option concatenates definitions of
+      # equal priority, so the ports need forcing as much as the identities.
+      emubox.facts.controllerPorts = lib.mkForce [ ];
+      emubox.facts.controllerIdentities.sdlGamepadName = lib.mkForce null;
+      emubox.facts.controllerIdentities.sdlJoystickGuid = lib.mkForce null;
+
       # SDDM, cage and ES-DE under llvmpipe. 2 GB and a virtio GPU are what
       # nixpkgs' own cage test uses; both are one-line adjustments if the
       # frontend turns out to need more.
@@ -915,11 +926,13 @@ assert lib.assertMsg
               f"tr '\\0' '\\n' < /proc/{esde_pids()[0]}/environ"
           )
           assert "EMUBOX_CRASH_WINDOW=${toString crashWindow}" in environ, environ
-          # This node imports the real hosts/emubox/facts.nix, which records
-          # no controller ports, so the session hint is undeclared and never
-          # reaches the frontend's environment - the absence half of the
-          # controllers spec's enumeration-order scenario; its presence half
-          # is proven on tests/controllers.nix, which records fixture ports.
+          # This node forces "no controller port recorded", so the session
+          # hint is undeclared and never reaches the frontend's
+          # environment. EMUBOX_CRASH_WINDOW, asserted just above, is
+          # declared through the same environment.sessionVariables and does
+          # arrive here, which is what makes this absence mean something.
+          # The hint's presence is proven on tests/controllers.nix, which
+          # records fixture ports.
           assert "SDL_JOYSTICK_DEVICE" not in environ, environ
 
       # --- kiosk: the settings the flake owns -------------------------------
@@ -1007,11 +1020,11 @@ assert lib.assertMsg
       # right and unapplied, or applied and wrong" reasoning the ES-DE pin
       # above already applies). `None` in place of a section name is
       # RetroArch's own flat, sectionless format (`ini_value`'s own
-      # convention above). Split in two because the two tiers are checked
-      # differently against DISK below: an enforced key's value is asserted
-      # there, a seeded key's presence is, since a seeded value on disk is
-      # whatever a player last chose. Against the rendered contract, which
-      # is what `check_pins` reads, both tiers are checked by value.
+      # convention above). Split in two because the rendered contract keeps
+      # the tiers apart, and `check_pins` below reads each against its own
+      # table, by value in both. The on-disk walk after it checks both tiers
+      # by value as well, which holds for a seeded key only because nothing
+      # on this node changes one after the editor writes it.
       #
       # A later review round found this table guarded key PRESENCE only -
       # `names - actual.keys()` - never the value sitting behind a present
@@ -1078,9 +1091,9 @@ assert lib.assertMsg
       # (its own comment on `azaharConfigFile` records why - the setting is
       # compiled out of this flake's Azahar build, so there was nothing
       # left to pin).
-      # This node imports the real hosts/emubox/facts.nix, whose
-      # controllerIdentities fact holds no value, so a key that depends on
-      # it - Dolphin's gameplay Device lines and its GCPadNew.ini/
+      # This node forces its controllerIdentities facts to null (see the
+      # node above), so a key that depends on them - Dolphin's gameplay
+      # Device lines and its GCPadNew.ini/
       # WiimoteNew.ini/Hotkeys.ini profiles, Azahar's whole Controls
       # section - is undeclared on this node and pinned nowhere below; it is
       # asserted on the fixture node that records the identity instead.
@@ -1376,9 +1389,10 @@ assert lib.assertMsg
                           # rendered contract rather than the disk: what the
                           # module declares is the same on every boot, so a
                           # seeded default that drifted here is a module edit,
-                          # not a player's choice. Presence-only belongs to the
-                          # on-disk walk below, and stays there. The ES-DE pin
-                          # above checks its own seeded pair the same way.
+                          # not a player's choice. The on-disk walk below
+                          # checks disk against that same contract, by value
+                          # in both tiers too. The ES-DE pin above checks its
+                          # own seeded pair the same way.
                           assert got == expected, f"{path} [{section}] ({tier}): {name}: {got!r} != {expected!r}"
 
           check_pins(PINNED_OWNED_KEYS_ENFORCE, "enforce")
@@ -1416,13 +1430,17 @@ assert lib.assertMsg
                   seed_assertions = owned_paths(fmt, path, entry["seed"])
 
                   if not enforce_assertions and not seed_assertions:
-                      # A file the flake owns zero static keys in - PCSX2's
-                      # `secrets.ini` and Dolphin's `RetroAchievements.ini`, both
-                      # declared with empty `enforce`/`seed` tables in
-                      # modules/emulators because their only content is
-                      # retroachievements namespace keys (token, or
-                      # enabled/hardcore/username/token) written at runtime
-                      # rather than through this static table. There
+                      # A file the flake owns zero static keys in. Two kinds
+                      # reach here: PCSX2's `secrets.ini` and Dolphin's
+                      # `RetroAchievements.ini`, both declared with empty
+                      # `enforce`/`seed` tables in modules/emulators because
+                      # their only content is retroachievements namespace
+                      # keys (token, or enabled/hardcore/username/token)
+                      # written at runtime rather than through this static
+                      # table; and, on this node, whose pad-identity facts
+                      # are forced empty, Dolphin's `Hotkeys.ini`,
+                      # `GCPadNew.ini` and `WiimoteNew.ini`, every key of
+                      # which waits on that identity. There
                       # is nothing this walk could check here even
                       # if the file existed, and the matching prepare-side fix
                       # (the ini/retroarch editors now leave a file alone
@@ -1470,8 +1488,11 @@ assert lib.assertMsg
           machine.succeed(f"su player -s /bin/sh -c {shlex.quote(drift)}")
           try:
               walk_owned_files(owned)
-          except AssertionError:
-              pass
+          except AssertionError as error:
+              # The drifted key itself, not some other failure the walk
+              # happened to hit first.
+              message = str(error)
+              assert "controls.ini" in message and "(seed): Up:" in message, message
           else:
               raise AssertionError(
                   "the on-disk walk did not catch a seeded key altered away "

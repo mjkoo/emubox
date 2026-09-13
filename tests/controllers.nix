@@ -1,9 +1,10 @@
 # The controllers test: the host's software modules booted as a plain node
 # with fixture pads on fixture ports, proving the mapping this project owns
 # - a recorded port to its player name - and the session hint that follows
-# from it, without depending on the virtual machine's own bus topology (see
-# the controllers design's fixture decision for why an emulated USB device
-# cannot stand in for a pad here).
+# from it, without depending on the virtual machine's own bus topology. The
+# pads are uinput devices rather than emulated USB ones because no emulated
+# USB device QEMU offers presents gamepad capabilities, so udev would never
+# mark one a joystick and the port rule would never fire.
 #
 # This node has no graphical session: it turns its display manager off so
 # nothing on it ever calls the configuration editor except the test's own
@@ -19,9 +20,9 @@ let
   # The fixture: three recorded ports, each with its own pad presented
   # through uinput and a test-only udev rule that marks it a joystick at the
   # recorded path. Kept as data, not three copies of similar code, so a
-  # later group can add a fourth pad or a differently-shaped device (an
-  # unaccepted-mode joystick, a keyboard-only device) beside these without
-  # touching the mechanism.
+  # fourth pad or a differently-shaped device (an unaccepted-mode joystick,
+  # a keyboard-only device) can sit beside these without touching the
+  # mechanism.
   fixturePorts = [
     "emubox-test-controller-port-1"
     "emubox-test-controller-port-2"
@@ -39,10 +40,10 @@ let
   # capability set, and holds them open for the life of the node - the
   # devices themselves, not their udev classification, which the fixture
   # rule below supplies instead of relying on the kernel's own joystick
-  # heuristic. Parametric over the device list so a later group's
-  # differently-shaped fixture devices (an unaccepted-mode joystick, a
-  # keyboard-only device the fixture rule must leave unmarked) are more
-  # entries in the same list rather than a second script.
+  # heuristic. Parametric over the device list, so a differently-shaped
+  # fixture device (an unaccepted-mode joystick, or a keyboard-only device
+  # the fixture rule must leave unmarked) is one more entry in the same list
+  # rather than a second script.
   fixtureDevicesScript = pkgs.writeText "emubox-test-fixture-devices.py" ''
     """Create the uinput devices the fixture udev rule matches by name, and
     hold them open for the life of the test.
@@ -126,8 +127,8 @@ let
   # The fixture rule: ordered between the kernel's own input classification
   # (systemd's `60-input-id.rules` and `60-persistent-input.rules`, which run
   # first) and the module's rule (`services.udev.extraRules`, which lands in
-  # `99-local.rules`), matching only the fixture pads by name so the
-  # non-joystick device a later group creates through the same mechanism
+  # `99-local.rules`), matching only the fixture pads by name, so any other
+  # device created through the same mechanism, such as a keyboard-only one,
   # stays unmarked. `73` is arbitrary within that 60-99 window; the ordering
   # this relies on is asserted in the test script below rather than assumed.
   fixtureRulesFile = pkgs.writeText "73-emubox-test-fixture.rules" (
@@ -161,7 +162,10 @@ in
       # emubox-prepare runs.
       virtualisation.memorySize = 1536;
 
-      emubox.facts.controllerPorts = fixturePorts;
+      # Forced: a list option concatenates definitions of equal priority, so
+      # a plain assignment would add the fixture ports to whatever ports
+      # the host's facts record rather than replace them.
+      emubox.facts.controllerPorts = lib.mkForce fixturePorts;
 
       # /dev/uinput is what the fixture devices script opens; the module is
       # not built into every kernel config, so it is loaded explicitly

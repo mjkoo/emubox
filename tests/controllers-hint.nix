@@ -13,7 +13,10 @@ let
   ];
   withPorts =
     (host.extendModules {
-      modules = [ { emubox.facts.controllerPorts = fixturePorts; } ];
+      # Forced: a list option concatenates definitions of equal priority, so
+      # a plain assignment would add these to any ports the host records
+      # rather than replace them.
+      modules = [ { emubox.facts.controllerPorts = lib.mkForce fixturePorts; } ];
     }).config;
 in
 assert lib.assertMsg

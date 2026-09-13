@@ -113,6 +113,23 @@ assert lib.assertMsg (malformedAccepted == [ ]) ''
   tests/status.nix: emubox.status.reporters accepted a registration it must
   refuse: ${lib.concatMapStringsSep ", " (candidate: candidate.label) malformedAccepted}.
 '';
+# The positive control for the refusals above: a well-formed registration
+# is not refused, so an unrelated evaluation failure or assertion cannot
+# make every malformed candidate look refused.
+assert lib.assertMsg (!(refused fixtureReporters)) ''
+  tests/status.nix: a well-formed registration was refused, so the
+  malformed-registration checks above prove nothing.
+'';
+assert
+  let
+    rendered = (withReporters fixtureReporters).environment.etc."emubox/status-reporters".source;
+    renderedReporters = builtins.fromJSON (builtins.unsafeDiscardStringContext rendered.text);
+  in
+  lib.assertMsg (renderedReporters == host.config.emubox.status.reporters ++ fixtureReporters) ''
+    tests/status.nix: the file rendered to /etc/emubox/status-reporters must
+    carry every registered reporter's name and command, in declared order -
+    got ${builtins.toJSON renderedReporters}.
+  '';
 pkgs.runCommand "emubox-status-module" { } ''
   touch "$out"
 ''

@@ -58,24 +58,6 @@ let
   # value distinct from any real SDL joystick GUID for the same reason.
   fixtureSdlJoystickGuid = "0300deadbeef00001234000000000000";
 
-  # A variant of this node's own configuration whose identity facts are
-  # both empty - the host's own default before bring-up ever records one -
-  # built by extending the same module set the host's flake output already
-  # evaluates rather than a second, hand-maintained copy of it. Nothing
-  # else this node overrides (its fixture ports, its test-only status
-  # reporter, its display manager) reaches `emubox.kiosk.ownedFiles` at
-  # all, so this variant's rendered owned-values document is exactly the
-  # one the identity-transition subtest below needs to start from.
-  identityEmptyOwnedValues =
-    (self.nixosConfigurations.emubox.extendModules {
-      modules = [
-        {
-          emubox.facts.controllerIdentities.sdlGamepadName = lib.mkForce null;
-          emubox.facts.controllerIdentities.sdlJoystickGuid = lib.mkForce null;
-        }
-      ];
-    }).config.emubox.kiosk.ownedValuesFile;
-
   # The wired pad's identity under the in-kernel xpad driver - the one mode
   # modules/controllers accepts - so these permanent fixture pads produce no
   # warning.
@@ -91,13 +73,15 @@ let
   # an unaccepted vendor and product to prove that being unmarked, not its
   # identity, is what keeps it out of the controllers report: its capability
   # set is ordinary keys, which the kernel's own classification does not
-  # read as a joystick either.
+  # read as a joystick either. It sits on the empty port's recorded path, so
+  # the port rule's joystick match, and nothing else, is what keeps that
+  # port unlinked.
   keyboardFixture = {
     name = "emubox-test-keyboard";
     vendor = "cafe";
     product = "f00d";
     kind = "keyboard";
-    port = null;
+    port = emptyPort;
   };
 
   # Two switchable devices, started and stopped by the test independently of
@@ -245,28 +229,37 @@ let
   # The fixture rule: ordered between the kernel's own input classification
   # (systemd's `60-input-id.rules` and `60-persistent-input.rules`, which run
   # first) and the module's rule (`services.udev.extraRules`, which lands in
-  # `99-local.rules`), matching only the fixture gamepads by name, so any
-  # other device created through the same mechanism, the keyboard-only one
-  # included, stays unmarked. `73` is arbitrary within that 60-99 window; that
-  # it runs before the module's rule is proven by the test script below, whose
+  # `99-local.rules`). `73` is arbitrary within that 60-99 window; that it
+  # runs before the module's rule is proven by the test script below, whose
   # port-resolution subtest finds each fixture pad's `emubox-pN` link, which
   # the module's rule can only create from the `ID_PATH` this rule has
-  # already set. A gamepad fixture with no recorded port is marked a joystick but
-  # given no `ID_PATH`, so the module's own port rule never resolves it to an
-  # `emubox-pN` symlink.
-  fixtureRulesFile = pkgs.writeText "73-emubox-test-fixture.rules" (
-    lib.concatMapStringsSep "\n" (
-      pad:
-      if pad.port != null then
-        ''SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="${pad.name}", ENV{ID_INPUT_JOYSTICK}="1", ENV{ID_PATH}="${pad.port}"''
-      else
-        ''SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="${pad.name}", ENV{ID_INPUT_JOYSTICK}="1"''
-    ) allGamepadFixtures
+  # already set.
+  #
+  # Each fixture gamepad is matched by name on both nodes the kernel gives
+  # it - its event device and, with joydev loaded, its `jsN` sibling - and
+  # marked a joystick on both. The kernel's own classification would mark
+  # these capability sets too; marking them here keeps the fixture from
+  # depending on it. A gamepad on a recorded port gets that port's `ID_PATH`
+  # on both nodes, as `path_id` gives a real pad's two nodes one path, so
+  # the module's `KERNEL=="event*"` match is all that keeps its rule off the
+  # js node. The keyboard-only device gets the empty port's `ID_PATH` and no
+  # joystick mark, so the module's `ID_INPUT_JOYSTICK` match is all that
+  # keeps its rule off the keyboard. A gamepad with no recorded port gets no
+  # `ID_PATH`, so the module's rule never resolves it to an `emubox-pN` link.
+  fixtureRule =
+    device:
+    lib.concatStringsSep ", " (
+      [
+        ''SUBSYSTEM=="input"''
+        ''KERNEL=="${if device.kind == "gamepad" then "event*|js*" else "event*"}"''
+        ''ATTRS{name}=="${device.name}"''
+      ]
+      ++ lib.optional (device.kind == "gamepad") ''ENV{ID_INPUT_JOYSTICK}="1"''
+      ++ lib.optional (device.port != null) ''ENV{ID_PATH}="${device.port}"''
+    );
+  fixtureRulesPackage = pkgs.writeTextDir "lib/udev/rules.d/73-emubox-test-fixture.rules" (
+    lib.concatMapStringsSep "\n" fixtureRule (allGamepadFixtures ++ [ keyboardFixture ])
   );
-  fixtureRulesPackage = pkgs.runCommand "emubox-test-fixture-rules" { } ''
-    mkdir -p "$out/lib/udev/rules.d"
-    cp ${fixtureRulesFile} "$out/lib/udev/rules.d/73-emubox-test-fixture.rules"
-  '';
 in
 {
   name = "emubox-controllers";
@@ -302,8 +295,23 @@ in
 
       # /dev/uinput is what the fixture devices script opens; the module is
       # not built into every kernel config, so it is loaded explicitly
-      # rather than assumed present.
-      boot.kernelModules = [ "uinput" ];
+      # rather than assumed present. joydev gives each fixture pad the
+      # `jsN` sibling a real pad has, which the port rule must never link.
+      boot.kernelModules = [
+        "uinput"
+        "joydev"
+      ];
+
+      # A variant of this node whose identity facts are both empty - the
+      # host's own default before bring-up records one - for the
+      # identity-transition subtest to start from. A specialisation is this
+      # node's own module list extended by one module, so the two rendered
+      # owned-values documents differ in those two facts and nothing else.
+      # `mkOverride 40` outranks the `mkForce` (50) that sets them below.
+      specialisation.identity-empty.configuration = {
+        emubox.facts.controllerIdentities.sdlGamepadName = lib.mkOverride 40 null;
+        emubox.facts.controllerIdentities.sdlJoystickGuid = lib.mkOverride 40 null;
+      };
 
       services.udev.packages = [ fixtureRulesPackage ];
 
@@ -371,27 +379,26 @@ in
 
       APPDATA = ${py appdataDir}
       OWNED_VALUES = ${py ownedValuesFile}
-      # A second rendered owned-values document, from a variant of this
-      # same node's configuration whose identity facts are both empty -
-      # only this constant differs between the two; every other path,
-      # fixture and section name below is shared.
-      IDENTITY_EMPTY_OWNED_VALUES = ${py identityEmptyOwnedValues}
+      # A second rendered owned-values document, from this node's
+      # identity-empty specialisation - only this constant differs between
+      # the two; every other path, fixture and section name below is shared.
+      IDENTITY_EMPTY_OWNED_VALUES = ${py nodes.machine.specialisation.identity-empty.configuration.emubox.kiosk.ownedValuesFile}
       PLAYER_HOME = ${py home}
       FIXTURE_PADS = ${py fixturePads}
       FIXTURE_PORTS = ${py fixturePorts}
-      EMPTY_PORT_INDEX = len(FIXTURE_PORTS)
+      EMPTY_PORT = ${py emptyPort}
+
+      def port_index(port):
+          """A recorded port's player number, which its emubox-pN link carries."""
+          return FIXTURE_PORTS.index(port) + 1
+
+      EMPTY_PORT_INDEX = port_index(EMPTY_PORT)
       SDL_GAMEPAD_NAME = ${py fixtureSdlGamepadName}
       SDL_JOYSTICK_GUID = ${py fixtureSdlJoystickGuid}
       UNACCEPTED_RECORDED = ${py { inherit (unacceptedOnRecordedPort) name vendor product; }}
       UNACCEPTED_LOOSE = ${py { inherit (unacceptedOffRecordedPorts) name vendor product; }}
       KEYBOARD_FIXTURE = ${py { inherit (keyboardFixture) name vendor product; }}
       SWITCHABLE_REPORTER_PATH = ${py switchableReporterPath}
-      # udevd's own vendor rules - the kernel's input classification among
-      # them - are compiled in from systemd's own store path rather than
-      # copied into /etc/udev/rules.d; NixOS never stages them there. All
-      # rules from both places are still sorted together by basename alone,
-      # regardless of which directory holds them.
-      SYSTEMD_PACKAGE = ${py nodes.machine.systemd.package}
 
       def run_status():
           """Run the aggregator without asserting its exit status: this
@@ -442,13 +449,35 @@ in
           else:
               machine.succeed(f"rm -f {SWITCHABLE_REPORTER_PATH}")
 
-      def find_event_by_name(name):
-          """The eventN device whose kernel-reported name matches, waiting
-          for the uinput device and udev's rule processing to catch up."""
+      def find_node_by_name(name, kind):
+          """The `kind`N input node (`event` or `js`) whose kernel-reported
+          name matches, waiting for the uinput device and udev's rule
+          processing to catch up."""
           path = machine.wait_until_succeeds(
-              f"grep -rlx {shlex.quote(name)} /sys/class/input/event*/device/name"
+              f"grep -rlx {shlex.quote(name)} /sys/class/input/{kind}*/device/name"
           ).strip()
           return path.split("/")[4]
+
+      def find_event_by_name(name):
+          return find_node_by_name(name, "event")
+
+      def udev_property(node, name):
+          """One udev property of /dev/input/`node`, empty when unset."""
+          return machine.succeed(
+              f"udevadm info -q property -n /dev/input/{node} --property={name} --value"
+          ).strip()
+
+      def port_links(node):
+          """The emubox-pN links udev has made to /dev/input/`node`."""
+          return [link for link in udev_property(node, "DEVLINKS").split() if "emubox-p" in link]
+
+      def ini_sections(text):
+          """Every `[section]` header's name, in file order."""
+          return [
+              line.strip()[1:-1]
+              for line in text.splitlines()
+              if line.strip().startswith("[") and line.strip().endswith("]")
+          ]
 
       def rerun_prepare(owned_values=OWNED_VALUES):
           """Re-run emubox-prepare as player, with no custom-systems
@@ -819,51 +848,74 @@ in
       # aggregator for an unrelated reason sees this section as `ok`.
       write_switchable_reporter(True)
 
-      with subtest(
-          "The fixture udev rule is staged beside the kernel's input classification"
-          " rules and the module's own"
-      ):
-          # Only that each file is where udevd reads it, not their order:
-          # udevd sorts every rules file by basename across every directory
-          # it reads, and the next subtest is what proves the fixture rule
-          # runs before the module's - a pad's emubox-pN link exists only if
-          # the module's rule, in 99-local.rules, saw the ID_PATH the
-          # fixture rule sets.
+      with subtest("The fixture udev rule is staged where udevd reads it"):
+          # Only that the file is where udevd reads it, not its order: udevd
+          # sorts every rules file by basename across every directory it
+          # reads, and the next subtest is what proves the fixture rule runs
+          # before the module's - a pad's emubox-pN link exists only if the
+          # module's rule, in 99-local.rules, saw the ID_PATH the fixture
+          # rule sets.
           etc_rules = machine.succeed("ls /etc/udev/rules.d").split()
-          vendor_rules = machine.succeed(f"ls {SYSTEMD_PACKAGE}/lib/udev/rules.d").split()
           assert "73-emubox-test-fixture.rules" in etc_rules, etc_rules
-          assert "99-local.rules" in etc_rules, etc_rules
-          assert any(r.startswith("60-") and "input" in r for r in vendor_rules), vendor_rules
 
-      with subtest("Every emubox-pN resolves to its fixture pad in recorded order"):
+      with subtest("Every emubox-pN resolves to its fixture pad's event node, in recorded order"):
           machine.wait_for_unit("emubox-test-fixture-devices.service")
-          for i, pad in enumerate(FIXTURE_PADS, start=1):
+          for pad in FIXTURE_PADS:
+              i = port_index(pad["port"])
               # The unit is up as soon as its process forks, before the pads
               # exist: each link is waited for, and udev's queue drained so
               # the properties read below are its settled ones.
               machine.wait_until_succeeds(f"test -e /dev/input/emubox-p{i}")
               machine.succeed("udevadm settle")
-              event = machine.succeed(f"readlink -f /dev/input/emubox-p{i}").strip()
-              node = event.rsplit("/", 1)[-1]
+              node = machine.succeed(f"readlink -f /dev/input/emubox-p{i}").strip().rsplit("/", 1)[-1]
+              # The event node, never the pad's jsN sibling, which carries the
+              # same ID_PATH and the same joystick mark.
+              assert node.startswith("event"), (i, node, pad)
               got_name = machine.succeed(f"cat /sys/class/input/{node}/device/name").strip()
               assert got_name == pad["name"], (i, got_name, pad)
-              path = machine.succeed(
-                  f"udevadm info -q property -n {event} --property=ID_PATH --value"
-              ).strip()
+              path = udev_property(node, "ID_PATH")
               assert path == pad["port"], (i, path, pad)
 
+      with subtest(
+          "The port rule links neither a pad's joystick node nor a device udev does"
+          " not mark a joystick, though each carries a recorded port's ID_PATH"
+      ):
+          js_nodes = [(pad, find_node_by_name(pad["name"], "js")) for pad in FIXTURE_PADS]
+          keyboard = find_event_by_name(KEYBOARD_FIXTURE["name"])
+          machine.succeed("udevadm settle")
+          for pad, js in js_nodes:
+              # Everything the module's rule matches except an event node's
+              # name, so its KERNEL=="event*" match alone keeps this unlinked.
+              assert udev_property(js, "ID_PATH") == pad["port"], (js, pad)
+              assert udev_property(js, "ID_INPUT_JOYSTICK") == "1", (js, pad)
+              assert port_links(js) == [], (js, port_links(js))
+          # The empty port's path without the joystick mark, so the module's
+          # ID_INPUT_JOYSTICK match alone keeps that port unlinked.
+          assert udev_property(keyboard, "ID_PATH") == EMPTY_PORT, keyboard
+          assert udev_property(keyboard, "ID_INPUT_JOYSTICK") != "1", keyboard
+          assert port_links(keyboard) == [], (keyboard, port_links(keyboard))
+          machine.fail(f"test -e /dev/input/emubox-p{EMPTY_PORT_INDEX}")
+
       with subtest("The session hint carries the recorded ports in order"):
+          expected = ":".join(f"/dev/input/emubox-p{i}" for i in range(1, len(FIXTURE_PORTS) + 1))
           hinted = machine.succeed(
               "bash -c 'source /etc/set-environment && printf %s \"$SDL_JOYSTICK_DEVICE\"'"
           )
-          expected = ":".join(f"/dev/input/emubox-p{i}" for i in range(1, len(FIXTURE_PORTS) + 1))
           assert hinted == expected, (hinted, expected)
+          # And through PAM, the way the kiosk session's own login receives
+          # it: from an emptied environment, so nothing this shell already
+          # carries can stand in for what pam_env sets.
+          pam_hinted = machine.succeed(
+              "env -i /run/wrappers/bin/su player -s /bin/sh -c 'printf %s \"$SDL_JOYSTICK_DEVICE\"'"
+          )
+          assert pam_hinted == expected, (pam_hinted, expected)
 
       with subtest("No caller of the configuration editor is running before the first owned-key check"):
           # The display manager is off, so nothing here ever runs the kiosk
           # session script or the frontend on its own; asserted rather than
           # assumed, since every check below reads what the editor itself
           # writes.
+          machine.fail("systemctl is-active display-manager.service")
           machine.fail("pgrep -x emubox-session")
           machine.fail("pgrep -x es-de")
 
@@ -1005,10 +1057,15 @@ in
           assert_ini(DOLPHIN_INI, "Core", "SIDevice1", "6")
           assert_ini(DOLPHIN_INI, "Core", "SIDevice2", "6")
           assert_ini(DOLPHIN_INI, "Core", "SIDevice3", "6")
+          # Both files are new to the editor, so this first run wrote every
+          # section they hold: the four native players and no fifth.
+          assert ini_sections(read_ini(DOLPHIN_GCPAD)) == [f"GCPad{n}" for n in range(1, 5)]
+          assert ini_sections(read_ini(DOLPHIN_WIIMOTE)) == [f"Wiimote{n}" for n in range(1, 5)]
 
       with subtest(
           "PCSX2 and DuckStation carry the pristine gameplay set for both"
-          " native players, and their second player's slot setting"
+          " native players, their second player's slot setting, and nothing"
+          " for a third"
       ):
           for i in range(2):
               assert_ini_section(PCSX2_INI, f"Pad{i + 1}", pcsx2_pad_bindings(i))
@@ -1016,6 +1073,8 @@ in
           assert_ini(PCSX2_INI, "Pad1", "Type", "DualShock2")
           assert_ini(PCSX2_INI, "Pad2", "Type", "DualShock2")
           assert_ini(DUCKSTATION_INI, "Pad2", "Type", "AnalogController")
+          assert "Pad3" not in ini_sections(read_ini(PCSX2_INI)), read_ini(PCSX2_INI)
+          assert "Pad3" not in ini_sections(read_ini(DUCKSTATION_INI)), read_ini(DUCKSTATION_INI)
 
       with subtest("PPSSPP's controls.ini carries the complete gameplay set for its one native player"):
           assert_ini_section(PPSSPP_CONTROLS, "ControlMapping", PPSSPP_CONTROLS_BINDINGS)
@@ -1066,6 +1125,11 @@ in
               assert set(ini_section_keys(text, section)) == set(expected), (path, section, text)
               for key, value in expected.items():
                   assert ini_value(text, section, key) == value, (path, section, key, text)
+          # And no section for a player beyond each system's native count.
+          gc_pad_text = read_ini(DOLPHIN_GCPAD)
+          assert ini_sections(gc_pad_text) == [f"GCPad{n}" for n in range(1, 5)], gc_pad_text
+          pcsx2_text = read_ini(PCSX2_INI)
+          assert "Pad3" not in ini_sections(pcsx2_text), pcsx2_text
 
       with subtest(
           "An altered seeded gameplay binding, one per emulator that has"
@@ -1246,8 +1310,8 @@ in
           _, output = run_status()
           controllers = status_sections(output)["controllers"]
           assert controllers.splitlines()[0] == "controllers: ok", controllers
-          for i in range(1, EMPTY_PORT_INDEX):
-              assert f"port {i}: connected" in controllers, controllers
+          for pad in FIXTURE_PADS:
+              assert f"port {port_index(pad['port'])}: connected" in controllers, controllers
           assert f"port {EMPTY_PORT_INDEX}: unoccupied" in controllers, controllers
           assert "WARN" not in controllers, controllers
           assert KEYBOARD_FIXTURE["vendor"] not in controllers, controllers
@@ -1264,6 +1328,11 @@ in
                   f"test $(udevadm info -q property -n /dev/input/{event}"
                   " --property=ID_INPUT_JOYSTICK --value) = 1"
               )
+              # The empty port's link names this pad's own event node.
+              linked = machine.succeed(
+                  f"readlink -f /dev/input/emubox-p{EMPTY_PORT_INDEX}"
+              ).strip()
+              assert linked == f"/dev/input/{event}", (linked, event)
               _, output = run_status()
               controllers = status_sections(output)["controllers"]
               assert controllers.splitlines()[0] == "controllers: warn", controllers
@@ -1291,8 +1360,8 @@ in
               # this off-slot device appeared: the warning covers every
               # controller the system sees, without disturbing slot
               # resolution for the ones that are recorded.
-              for i in range(1, EMPTY_PORT_INDEX):
-                  assert f"port {i}: connected" in controllers, controllers
+              for pad in FIXTURE_PADS:
+                  assert f"port {port_index(pad['port'])}: connected" in controllers, controllers
               assert f"port {EMPTY_PORT_INDEX}: unoccupied" in controllers, controllers
           finally:
               machine.succeed("systemctl stop emubox-test-fixture-unaccepted-loose.service")

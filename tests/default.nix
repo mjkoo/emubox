@@ -560,8 +560,17 @@ in
             # other call site: the same substring must appear under the
             # backups section when the aggregator runs the same reporter.
             _, aggregate = machine.execute("emubox-status")
-            assert "backups: warn" in aggregate, aggregate
-            assert "restic-backups-emubox.service: latest invocation failed" in aggregate, aggregate
+            # The backups section alone: its header line, then every line
+            # up to the next header at the left margin.
+            lines = aggregate.splitlines()
+            assert "backups: warn" in lines, aggregate
+            start = lines.index("backups: warn")
+            end = next(
+                (i for i in range(start + 1, len(lines)) if lines[i] and not lines[i][0].isspace()),
+                len(lines),
+            )
+            backups_section = "\n".join(lines[start:end])
+            assert "restic-backups-emubox.service: latest invocation failed" in backups_section, aggregate
 
     with checked("The wrapped backup helper reaches systemctl and journalctl through its own runtime path"):
         # Read the registered argv rather than retyping it, so a rename of

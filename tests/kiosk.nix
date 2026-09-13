@@ -932,7 +932,9 @@ assert lib.assertMsg
           # declared through the same environment.sessionVariables and does
           # arrive here, which is what makes this absence mean something.
           # The hint's presence is proven on tests/controllers.nix, which
-          # records fixture ports.
+          # records fixture ports and has no session of its own: there it is
+          # read from /etc/set-environment and from the environment a PAM
+          # login receives, the mechanism this session's own login uses.
           assert "SDL_JOYSTICK_DEVICE" not in environ, environ
 
       # --- kiosk: the settings the flake owns -------------------------------
@@ -1486,6 +1488,9 @@ assert lib.assertMsg
           drift = f"sed -i 's/^Up = 10-19$/Up = 10-999/' {ppsspp_controls}"
           restore = f"sed -i 's/^Up = 10-999$/Up = 10-19/' {ppsspp_controls}"
           machine.succeed(f"su player -s /bin/sh -c {shlex.quote(drift)}")
+          # The edit itself landed: `sed` exits 0 whether or not it matched,
+          # and a missed match would otherwise blame the walk below.
+          machine.succeed(f"grep -qx 'Up = 10-999' {ppsspp_controls}")
           try:
               walk_owned_files(owned)
           except AssertionError as error:

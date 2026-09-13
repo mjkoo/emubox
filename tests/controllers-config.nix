@@ -317,6 +317,44 @@ assert lib.assertMsg
     ${lib.concatStringsSep ", " azaharBindingsWrong}; got
     ${builtins.toJSON withIdentityAzaharControls}.
   '';
+assert
+  let
+    playerSections = prefix: map (n: "${prefix}${toString n}") players;
+    padSections =
+      file:
+      let
+        owned = ownedFiles.${file};
+      in
+      lib.filter (name: builtins.match "Pad[0-9]+" name != null) (
+        lib.attrNames (owned.enforce // owned.seed)
+      );
+    pcsx2PadSections = padSections "${configDirs.pcsx2}/PCSX2.ini";
+    duckstationPadSections = padSections "${configDirs.duckstation}/settings.ini";
+  in
+  lib.assertMsg
+    (
+      lib.attrNames withIdentityGCPad == playerSections "GCPad"
+      && lib.attrNames withIdentityWiimote == playerSections "Wiimote"
+      &&
+        pcsx2PadSections == [
+          "Pad1"
+          "Pad2"
+        ]
+      &&
+        duckstationPadSections == [
+          "Pad1"
+          "Pad2"
+        ]
+    )
+    ''
+      tests/controllers-config.nix: each system's gameplay profiles must stop
+      at the players it supports - four for GameCube and Wii, two for
+      PlayStation and PlayStation 2 - with no section for a player beyond
+      them; got GCPadNew.ini ${builtins.toJSON (lib.attrNames withIdentityGCPad)},
+      WiimoteNew.ini ${builtins.toJSON (lib.attrNames withIdentityWiimote)},
+      PCSX2.ini ${builtins.toJSON pcsx2PadSections}, DuckStation
+      settings.ini ${builtins.toJSON duckstationPadSections}.
+    '';
 assert lib.assertMsg (lib.hasInfix pspStandaloneCommand customSystems) ''
   tests/controllers-config.nix: the frontend's PSP standalone launch
   command must carry --pause-menu-exit (expected to find

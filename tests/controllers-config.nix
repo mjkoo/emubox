@@ -15,9 +15,9 @@ let
   configDirs = host.config.emubox.emulators.configDirs;
 
   # The files `modules/controllers` registers with a `format` for the
-  # first time - what this task and 3.3 between them add that is new to
-  # the editor. Hand-typed against the determination's own file names
-  # rather than read back from the module under test.
+  # first time - every file new to the editor this capability adds. Hand-
+  # typed against each emulator's own file names rather than read back
+  # from the module under test.
   newControllerFiles = [
     {
       path = "${configDirs.dolphin}/Hotkeys.ini";
@@ -62,14 +62,44 @@ let
   ) host.config.environment.systemPackages;
 
   # A configuration whose identity facts are empty - the host's own
-  # default - and one that records a pad's SDL device name, checked
-  # against the same file both ways.
+  # default - and one that records both a pad's SDL device name and its
+  # SDL joystick GUID, checked against the same files both ways: Dolphin's
+  # route back and its gameplay profiles wait on the device name alone,
+  # Azahar's whole Controls section on the GUID alone, so the identity
+  # variant below sets both at once rather than repeating this pair of
+  # configurations for each.
   hotkeysFile = "${configDirs.dolphin}/Hotkeys.ini";
+  gcPadFile = "${configDirs.dolphin}/GCPadNew.ini";
+  wiimoteFile = "${configDirs.dolphin}/WiimoteNew.ini";
+  dolphinIniFile = "${configDirs.dolphin}/Dolphin.ini";
+  azaharIniFile = "${configDirs.azahar}/qt-config.ini";
+
+  withIdentityHost = host.extendModules {
+    modules = [
+      {
+        emubox.facts.controllerIdentities.sdlGamepadName = "Xbox 360 Controller";
+        emubox.facts.controllerIdentities.sdlJoystickGuid = "030081b85e0400008e02000014010000";
+      }
+    ];
+  };
+
   withoutIdentityEnforce = host.config.emubox.kiosk.ownedFiles.${hotkeysFile}.enforce;
-  withIdentityEnforce =
-    (host.extendModules {
-      modules = [ { emubox.facts.controllerIdentities.sdlGamepadName = "Xbox 360 Controller"; } ];
-    }).config.emubox.kiosk.ownedFiles.${hotkeysFile}.enforce;
+  withIdentityEnforce = withIdentityHost.config.emubox.kiosk.ownedFiles.${hotkeysFile}.enforce;
+
+  withoutIdentityGCPad = host.config.emubox.kiosk.ownedFiles.${gcPadFile}.enforce;
+  withIdentityGCPad = withIdentityHost.config.emubox.kiosk.ownedFiles.${gcPadFile}.enforce;
+  withoutIdentityWiimote = host.config.emubox.kiosk.ownedFiles.${wiimoteFile}.enforce;
+  withIdentityWiimote = withIdentityHost.config.emubox.kiosk.ownedFiles.${wiimoteFile}.enforce;
+
+  withoutIdentityDolphinCore =
+    host.config.emubox.kiosk.ownedFiles.${dolphinIniFile}.enforce.Core or { };
+  withIdentityDolphinCore =
+    withIdentityHost.config.emubox.kiosk.ownedFiles.${dolphinIniFile}.enforce.Core or { };
+
+  withoutIdentityAzaharControls =
+    host.config.emubox.kiosk.ownedFiles.${azaharIniFile}.enforce.Controls or { };
+  withIdentityAzaharControls =
+    withIdentityHost.config.emubox.kiosk.ownedFiles.${azaharIniFile}.enforce.Controls or { };
 
   pspStandaloneCommand = "%EMULATOR_PPSSPP% --pause-menu-exit %ROM%";
   customSystems = host.config.emubox.kiosk.customSystems;
@@ -108,6 +138,84 @@ assert lib.assertMsg
     emubox.facts.controllerIdentities.sdlGamepadName set, Dolphin's
     Hotkeys.ini must declare its route-back Device and General/Stop keys -
     got ${builtins.toJSON withIdentityEnforce}.
+  '';
+assert lib.assertMsg (withoutIdentityGCPad == { }) ''
+  tests/controllers-config.nix: with emubox.facts.controllerIdentities
+  empty, Dolphin's GCPadNew.ini must declare no enforced key at all - got
+  ${builtins.toJSON withoutIdentityGCPad}.
+'';
+assert lib.assertMsg (withoutIdentityWiimote == { }) ''
+  tests/controllers-config.nix: with emubox.facts.controllerIdentities
+  empty, Dolphin's WiimoteNew.ini must declare no enforced key at all -
+  got ${builtins.toJSON withoutIdentityWiimote}.
+'';
+assert lib.assertMsg (withoutIdentityDolphinCore == { }) ''
+  tests/controllers-config.nix: with emubox.facts.controllerIdentities
+  empty, Dolphin.ini must declare no enforced [Core] key at all - got
+  ${builtins.toJSON withoutIdentityDolphinCore}.
+'';
+assert lib.assertMsg (withoutIdentityAzaharControls == { }) ''
+  tests/controllers-config.nix: with emubox.facts.controllerIdentities
+  empty, Azahar's qt-config.ini must declare no enforced [Controls] key at
+  all - got ${builtins.toJSON withoutIdentityAzaharControls}.
+'';
+assert lib.assertMsg
+  (
+    withIdentityGCPad ? GCPad1
+    && withIdentityGCPad ? GCPad2
+    && withIdentityGCPad ? GCPad3
+    && withIdentityGCPad ? GCPad4
+    && withIdentityGCPad.GCPad1.Device or null == "SDL/0/Xbox 360 Controller"
+  )
+  ''
+    tests/controllers-config.nix: with
+    emubox.facts.controllerIdentities.sdlGamepadName set, Dolphin's
+    GCPadNew.ini must declare every player's gameplay profile - got
+    ${builtins.toJSON withIdentityGCPad}.
+  '';
+assert lib.assertMsg
+  (
+    withIdentityWiimote ? Wiimote1
+    && withIdentityWiimote ? Wiimote2
+    && withIdentityWiimote ? Wiimote3
+    && withIdentityWiimote ? Wiimote4
+    && withIdentityWiimote.Wiimote1.Device or null == "SDL/0/Xbox 360 Controller"
+    && withIdentityWiimote.Wiimote2.Source or null == "1"
+  )
+  ''
+    tests/controllers-config.nix: with
+    emubox.facts.controllerIdentities.sdlGamepadName set, Dolphin's
+    WiimoteNew.ini must declare every player's gameplay profile and each
+    further player's Source slot setting - got
+    ${builtins.toJSON withIdentityWiimote}.
+  '';
+assert lib.assertMsg
+  (
+    withIdentityDolphinCore.SIDevice1 or null == "6"
+    && withIdentityDolphinCore.SIDevice2 or null == "6"
+    && withIdentityDolphinCore.SIDevice3 or null == "6"
+  )
+  ''
+    tests/controllers-config.nix: with
+    emubox.facts.controllerIdentities.sdlGamepadName set, Dolphin.ini must
+    declare its GameCube slot settings SIDevice1-3 - got
+    ${builtins.toJSON withIdentityDolphinCore}.
+  '';
+assert lib.assertMsg
+  (
+    withIdentityAzaharControls."profiles\\size" or null == "1"
+    && withIdentityAzaharControls.profile or null == "0"
+    && withIdentityAzaharControls."profile\\default" or null == "false"
+    && lib.hasInfix "030081b85e0400008e02000014010000" (
+      withIdentityAzaharControls."profiles\\1\\button_a" or ""
+    )
+  )
+  ''
+    tests/controllers-config.nix: with
+    emubox.facts.controllerIdentities.sdlJoystickGuid set, Azahar's
+    qt-config.ini must declare its profile array and every gameplay
+    binding under profiles\1\ - got
+    ${builtins.toJSON withIdentityAzaharControls}.
   '';
 assert lib.assertMsg (lib.hasInfix pspStandaloneCommand customSystems) ''
   tests/controllers-config.nix: the frontend's PSP standalone launch

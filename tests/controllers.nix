@@ -53,6 +53,29 @@ let
   # another host's value would be obvious on sight.
   fixtureSdlGamepadName = "emubox-test-sdl-gamepad";
 
+  # The fixture value recorded for the pad-identity fact Azahar's whole
+  # `[Controls]` section depends on, beside the SDL device name above - a
+  # value distinct from any real SDL joystick GUID for the same reason.
+  fixtureSdlJoystickGuid = "0300deadbeef00001234000000000000";
+
+  # A variant of this node's own configuration whose identity facts are
+  # both empty - the host's own default before bring-up ever records one -
+  # built by extending the same module set the host's flake output already
+  # evaluates rather than a second, hand-maintained copy of it. Nothing
+  # else this node overrides (its fixture ports, its test-only status
+  # reporter, its display manager) reaches `emubox.kiosk.ownedFiles` at
+  # all, so this variant's rendered owned-values document is exactly the
+  # one the identity-transition subtest below needs to start from.
+  identityEmptyOwnedValues =
+    (self.nixosConfigurations.emubox.extendModules {
+      modules = [
+        {
+          emubox.facts.controllerIdentities.sdlGamepadName = lib.mkForce null;
+          emubox.facts.controllerIdentities.sdlJoystickGuid = lib.mkForce null;
+        }
+      ];
+    }).config.emubox.kiosk.ownedValuesFile;
+
   # The wired pad's identity under the in-kernel xpad driver - the one mode
   # modules/controllers accepts - so these permanent fixture pads produce no
   # warning.
@@ -273,6 +296,7 @@ in
       # all, so there is nothing for this node's own definition of
       # `sdlGamepadName` to be merged against.
       emubox.facts.controllerIdentities.sdlGamepadName = fixtureSdlGamepadName;
+      emubox.facts.controllerIdentities.sdlJoystickGuid = fixtureSdlJoystickGuid;
 
       # /dev/uinput is what the fixture devices script opens; the module is
       # not built into every kernel config, so it is loaded explicitly
@@ -345,11 +369,17 @@ in
 
       APPDATA = ${py appdataDir}
       OWNED_VALUES = ${py ownedValuesFile}
+      # A second rendered owned-values document, from a variant of this
+      # same node's configuration whose identity facts are both empty -
+      # only this constant differs between the two; every other path,
+      # fixture and section name below is shared.
+      IDENTITY_EMPTY_OWNED_VALUES = ${py identityEmptyOwnedValues}
       PLAYER_HOME = ${py home}
       FIXTURE_PADS = ${py fixturePads}
       FIXTURE_PORTS = ${py fixturePorts}
       EMPTY_PORT_INDEX = len(FIXTURE_PORTS)
       SDL_GAMEPAD_NAME = ${py fixtureSdlGamepadName}
+      SDL_JOYSTICK_GUID = ${py fixtureSdlJoystickGuid}
       UNACCEPTED_RECORDED = ${py { inherit (unacceptedOnRecordedPort) name vendor product; }}
       UNACCEPTED_LOOSE = ${py { inherit (unacceptedOffRecordedPorts) name vendor product; }}
       KEYBOARD_FIXTURE = ${py { inherit (keyboardFixture) name vendor product; }}
@@ -401,14 +431,15 @@ in
           ).strip()
           return path.split("/")[4]
 
-      def rerun_prepare():
-          """Re-run emubox-prepare as player against this node's own
-          rendered owned-values file, with no custom-systems argument - the
-          same shape tests/kiosk.nix's own helper uses, standing in here for
-          the run the kiosk session script makes before the frontend
-          starts, which this node never runs because its display manager is
-          off."""
-          cmd = f'ESDE_APPDATA_DIR={APPDATA} emubox-prepare {OWNED_VALUES} ""'
+      def rerun_prepare(owned_values=OWNED_VALUES):
+          """Re-run emubox-prepare as player, with no custom-systems
+          argument - the same shape tests/kiosk.nix's own helper uses,
+          standing in here for the run the kiosk session script makes
+          before the frontend starts, which this node never runs because
+          its display manager is off. Against this node's own rendered
+          owned-values file by default; the identity-transition subtest
+          below passes the identity-empty variant's instead."""
+          cmd = f'ESDE_APPDATA_DIR={APPDATA} emubox-prepare {owned_values} ""'
           machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
 
       def ini_value(text, section, key):
@@ -465,7 +496,287 @@ in
           cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
           machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
 
-      # Full paths hand-typed against the determination's own file names and
+      def remove_ini_line(path, section, key):
+          """Delete one `key = value` line under `[section]`, as `player` -
+          the complement to `set_ini_value`, putting a seeded key back into
+          the "never yet assigned" state a fresh install leaves it in."""
+          lines = read_ini(path).splitlines(keepends=True)
+          out = []
+          in_section = False
+          removed = False
+          for line in lines:
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  in_section = stripped[1:-1] == section
+                  out.append(line)
+                  continue
+              if in_section and not removed and "=" in stripped:
+                  k, _, _ = stripped.partition("=")
+                  if k.strip() == key:
+                      removed = True
+                      continue
+              out.append(line)
+          assert removed, f"{path}: no [{section}] {key} line to remove"
+          encoded = base64.b64encode("".join(out).encode()).decode()
+          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+
+      def insert_ini_key(path, section, key, value):
+          """Insert one new `key = value` line into an existing `[section]`
+          that does not yet assign this key - the complement to
+          `set_ini_value`, which requires the key already present."""
+          lines = read_ini(path).splitlines(keepends=True)
+          out = []
+          in_section = False
+          inserted = False
+          for line in lines:
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  if in_section and not inserted:
+                      out.append(f"{key} = {value}\n")
+                      inserted = True
+                  in_section = stripped[1:-1] == section
+                  out.append(line)
+                  continue
+              out.append(line)
+          if in_section and not inserted:
+              out.append(f"{key} = {value}\n")
+              inserted = True
+          assert inserted, f"{path}: no [{section}] section to insert into"
+          encoded = base64.b64encode("".join(out).encode()).decode()
+          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+
+      def write_ini_file(path, sections):
+          """Write a whole INI file from scratch, one `[section]` per
+          mapping given - simulating an emulator that ran and saved its own
+          configuration, with its own values, before bring-up ever recorded
+          the pad's identity."""
+          lines = []
+          for section, keys in sections.items():
+              lines.append(f"[{section}]\n")
+              for key, value in keys.items():
+                  lines.append(f"{key} = {value}\n")
+          encoded = base64.b64encode("".join(lines).encode()).decode()
+          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+
+      def append_ini_section(path, section, keys):
+          """Append a new `[section]` block to an existing file - the same
+          simulated-emulator-save use `write_ini_file` serves, for a file
+          that already carries some other, identity-free section."""
+          lines = [f"\n[{section}]\n"] + [f"{k} = {v}\n" for k, v in keys.items()]
+          encoded = base64.b64encode("".join(lines).encode()).decode()
+          cmd = f"printf %s {shlex.quote(encoded)} | base64 -d >> {shlex.quote(path)}"
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
+
+      def ini_section_keys(text, section):
+          """Every key name present under `[section]`, in the order it
+          appears - used to assert a recreated file's key set exactly,
+          rather than merely a subset of it."""
+          keys = []
+          in_section = False
+          for line in text.splitlines():
+              stripped = line.strip()
+              if stripped.startswith("[") and stripped.endswith("]"):
+                  in_section = stripped[1:-1] == section
+                  continue
+              if not in_section or "=" not in stripped:
+                  continue
+              k, _, _ = stripped.partition("=")
+              keys.append(k.strip())
+          return keys
+
+      def assert_ini_section(path, section, expected):
+          text = read_ini(path)
+          for key, value in expected.items():
+              got = ini_value(text, section, key)
+              assert got == value, (path, section, key, got, value)
+
+      # Independent reimplementations of the gameplay-binding value tables
+      # modules/controllers declares, hand-typed the same way SDL_GAMEPAD_NAME
+      # above already is, rather than read back from the module under test.
+
+      def gc_pad_bindings(i, name):
+          return {
+              "Device": f"SDL/{i}/{name}",
+              "Buttons/A": "`Button S`",
+              "Buttons/B": "`Button E`",
+              "Buttons/X": "`Button W`",
+              "Buttons/Y": "`Button N`",
+              "Buttons/Z": "`Shoulder R`",
+              "Buttons/Start": "Start",
+              "Main Stick/Up": "`Left Y+`",
+              "Main Stick/Down": "`Left Y-`",
+              "Main Stick/Left": "`Left X-`",
+              "Main Stick/Right": "`Left X+`",
+              "C-Stick/Up": "`Right Y+`",
+              "C-Stick/Down": "`Right Y-`",
+              "C-Stick/Left": "`Right X-`",
+              "C-Stick/Right": "`Right X+`",
+              "Triggers/L": "`Trigger L`",
+              "Triggers/R": "`Trigger R`",
+              "Triggers/L-Analog": "`Trigger L`",
+              "Triggers/R-Analog": "`Trigger R`",
+              "D-Pad/Up": "`Pad N`",
+              "D-Pad/Down": "`Pad S`",
+              "D-Pad/Left": "`Pad W`",
+              "D-Pad/Right": "`Pad E`",
+          }
+
+      def wiimote_bindings(i, name):
+          bindings = {
+              "Device": f"SDL/{i}/{name}",
+              "Buttons/A": "`Button S`",
+              "Buttons/B": "`Trigger R`",
+              "Buttons/1": "`Button W`",
+              "Buttons/2": "`Button N`",
+              "Buttons/-": "Back",
+              "Buttons/+": "Start",
+              "Buttons/Home": "Guide",
+              "D-Pad/Up": "`Pad N`",
+              "D-Pad/Down": "`Pad S`",
+              "D-Pad/Left": "`Pad W`",
+              "D-Pad/Right": "`Pad E`",
+              "IR/Up": "`Right Y+`",
+              "IR/Down": "`Right Y-`",
+              "IR/Left": "`Right X-`",
+              "IR/Right": "`Right X+`",
+              "Shake/X": "`Button E`",
+              "Shake/Y": "`Button E`",
+              "Shake/Z": "`Button E`",
+              "Extension": "Nunchuk",
+              "Nunchuk/Buttons/C": "`Shoulder L`",
+              "Nunchuk/Buttons/Z": "`Trigger L`",
+              "Nunchuk/Stick/Up": "`Left Y+`",
+              "Nunchuk/Stick/Down": "`Left Y-`",
+              "Nunchuk/Stick/Left": "`Left X-`",
+              "Nunchuk/Stick/Right": "`Left X+`",
+              "Nunchuk/Shake/X": "`Thumb L`",
+              "Nunchuk/Shake/Y": "`Thumb L`",
+              "Nunchuk/Shake/Z": "`Thumb L`",
+          }
+          if i != 0:
+              bindings["Source"] = "1"
+          return bindings
+
+      def pcsx2_pad_bindings(i):
+          return {
+              "Up": f"SDL-{i}/DPadUp",
+              "Right": f"SDL-{i}/DPadRight",
+              "Down": f"SDL-{i}/DPadDown",
+              "Left": f"SDL-{i}/DPadLeft",
+              "Triangle": f"SDL-{i}/FaceNorth",
+              "Circle": f"SDL-{i}/FaceEast",
+              "Cross": f"SDL-{i}/FaceSouth",
+              "Square": f"SDL-{i}/FaceWest",
+              "Select": f"SDL-{i}/Back",
+              "Start": f"SDL-{i}/Start",
+              "L1": f"SDL-{i}/LeftShoulder",
+              "L2": f"SDL-{i}/+LeftTrigger",
+              "R1": f"SDL-{i}/RightShoulder",
+              "R2": f"SDL-{i}/+RightTrigger",
+              "L3": f"SDL-{i}/LeftStick",
+              "R3": f"SDL-{i}/RightStick",
+              "Analog": f"SDL-{i}/Guide",
+              "LUp": f"SDL-{i}/-LeftY",
+              "LRight": f"SDL-{i}/+LeftX",
+              "LDown": f"SDL-{i}/+LeftY",
+              "LLeft": f"SDL-{i}/-LeftX",
+              "RUp": f"SDL-{i}/-RightY",
+              "RRight": f"SDL-{i}/+RightX",
+              "RDown": f"SDL-{i}/+RightY",
+              "RLeft": f"SDL-{i}/-RightX",
+              "LargeMotor": f"SDL-{i}/LargeMotor",
+              "SmallMotor": f"SDL-{i}/SmallMotor",
+          }
+
+      def duckstation_pad_bindings(i):
+          return {
+              "Up": f"SDL-{i}/DPadUp",
+              "Right": f"SDL-{i}/DPadRight",
+              "Down": f"SDL-{i}/DPadDown",
+              "Left": f"SDL-{i}/DPadLeft",
+              "Triangle": f"SDL-{i}/Y",
+              "Circle": f"SDL-{i}/B",
+              "Cross": f"SDL-{i}/A",
+              "Square": f"SDL-{i}/X",
+              "Select": f"SDL-{i}/Back",
+              "Start": f"SDL-{i}/Start",
+              "L1": f"SDL-{i}/LeftShoulder",
+              "L2": f"SDL-{i}/+LeftTrigger",
+              "R1": f"SDL-{i}/RightShoulder",
+              "R2": f"SDL-{i}/+RightTrigger",
+              "L3": f"SDL-{i}/LeftStick",
+              "R3": f"SDL-{i}/RightStick",
+              "Analog": f"SDL-{i}/Guide",
+              "LUp": f"SDL-{i}/-LeftY",
+              "LRight": f"SDL-{i}/+LeftX",
+              "LDown": f"SDL-{i}/+LeftY",
+              "LLeft": f"SDL-{i}/-LeftX",
+              "RUp": f"SDL-{i}/-RightY",
+              "RRight": f"SDL-{i}/+RightX",
+              "RDown": f"SDL-{i}/+RightY",
+              "RLeft": f"SDL-{i}/-RightX",
+              "LargeMotor": f"SDL-{i}/LargeMotor",
+              "SmallMotor": f"SDL-{i}/SmallMotor",
+          }
+
+      PPSSPP_CONTROLS_BINDINGS = {
+          "Up": "10-19",
+          "Down": "10-20",
+          "Left": "10-21",
+          "Right": "10-22",
+          "Cross": "10-189",
+          "Circle": "10-190",
+          "Square": "10-191",
+          "Triangle": "10-188",
+          "Start": "10-197",
+          "Select": "10-196",
+          "L": "10-193",
+          "R": "10-192",
+          "An.Up": "10-4003",
+          "An.Down": "10-4002",
+          "An.Left": "10-4001",
+          "An.Right": "10-4000",
+      }
+
+      def azahar_button(n):
+          return f'"button:{n},engine:sdl,guid:{SDL_JOYSTICK_GUID},port:0"'
+
+      def azahar_hat(direction):
+          return f'"direction:{direction},engine:sdl,guid:{SDL_JOYSTICK_GUID},hat:0,port:0"'
+
+      def azahar_axis_button(axis):
+          return f'"axis:{axis},direction:+,engine:sdl,guid:{SDL_JOYSTICK_GUID},port:0,threshold:0.5"'
+
+      def azahar_analog(x, y):
+          return (
+              f'"axis_x:{x},axis_y:{y},deadzone:0.100000,engine:sdl,'
+              f'guid:{SDL_JOYSTICK_GUID},port:0"'
+          )
+
+      AZAHAR_BINDINGS = {
+          "button_a": azahar_button(1),
+          "button_b": azahar_button(0),
+          "button_x": azahar_button(3),
+          "button_y": azahar_button(2),
+          "button_up": azahar_hat("up"),
+          "button_down": azahar_hat("down"),
+          "button_left": azahar_hat("left"),
+          "button_right": azahar_hat("right"),
+          "button_l": azahar_button(4),
+          "button_r": azahar_button(5),
+          "button_start": azahar_button(7),
+          "button_select": azahar_button(6),
+          "button_zl": azahar_axis_button(2),
+          "button_zr": azahar_axis_button(5),
+          "button_home": azahar_button(8),
+          "circle_pad": azahar_analog(0, 1),
+          "c_stick": azahar_analog(3, 4),
+      }
+
+      # Full paths hand-typed against each emulator's own file names and
       # directories, independently of emubox.emulators.configDirs - the same
       # reasoning tests/kiosk.nix's own PINNED_OWNED_KEYS tables apply, so a
       # misspelled path in the module under test cannot agree with itself
@@ -479,6 +790,7 @@ in
       PPSSPP_INI = f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini"
       PPSSPP_CONTROLS = f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini"
       SCUMMVM_INI = f"{PLAYER_HOME}/.config/scummvm/scummvm.ini"
+      AZAHAR_INI = f"{PLAYER_HOME}/.config/azahar-emu/qt-config.ini"
 
       machine.wait_for_unit("multi-user.target")
       # Healthy from the start, so every subtest below that runs the
@@ -636,6 +948,217 @@ in
 
           assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_QUIT", "JOY_GUIDE")
           assert_ini(SCUMMVM_INI, "scummvm", "joystick_num", "0")
+
+      with subtest(
+          "Dolphin's complete GameCube and Wii gameplay profile, and its slot"
+          " settings, hold the flake's values for every player up to the"
+          " system's native four"
+      ):
+          for n in range(1, 5):
+              i = n - 1
+              for key, value in gc_pad_bindings(i, SDL_GAMEPAD_NAME).items():
+                  assert_ini(DOLPHIN_GCPAD, f"GCPad{n}", key, value)
+              for key, value in wiimote_bindings(i, SDL_GAMEPAD_NAME).items():
+                  assert_ini(DOLPHIN_WIIMOTE, f"Wiimote{n}", key, value)
+          assert_ini(DOLPHIN_INI, "Core", "SIDevice1", "6")
+          assert_ini(DOLPHIN_INI, "Core", "SIDevice2", "6")
+          assert_ini(DOLPHIN_INI, "Core", "SIDevice3", "6")
+
+      with subtest(
+          "PCSX2 and DuckStation carry the pristine gameplay set for both"
+          " native players, and their second player's slot setting"
+      ):
+          for i in range(2):
+              assert_ini_section(PCSX2_INI, f"Pad{i + 1}", pcsx2_pad_bindings(i))
+              assert_ini_section(DUCKSTATION_INI, f"Pad{i + 1}", duckstation_pad_bindings(i))
+          assert_ini(PCSX2_INI, "Pad1", "Type", "DualShock2")
+          assert_ini(PCSX2_INI, "Pad2", "Type", "DualShock2")
+          assert_ini(DUCKSTATION_INI, "Pad2", "Type", "AnalogController")
+
+      with subtest("PPSSPP's controls.ini carries the complete gameplay set for its one native player"):
+          assert_ini_section(PPSSPP_CONTROLS, "ControlMapping", PPSSPP_CONTROLS_BINDINGS)
+
+      with subtest(
+          "Azahar's profile array, its active-profile keys and every gameplay"
+          " binding under profiles\\1\\ hold the flake's values, each with"
+          " its own \\default companion"
+      ):
+          assert_ini(AZAHAR_INI, "Controls", "profiles\\size", "1")
+          assert_ini(AZAHAR_INI, "Controls", "profile", "0")
+          assert_ini(AZAHAR_INI, "Controls", "profile\\default", "false")
+          for key, value in AZAHAR_BINDINGS.items():
+              assert_ini(AZAHAR_INI, "Controls", f"profiles\\1\\{key}", value)
+              assert_ini(AZAHAR_INI, "Controls", f"profiles\\1\\{key}\\default", "false")
+
+      with subtest(
+          "PPSSPP's controls.ini, recreated from nothing, carries exactly the"
+          " complete gameplay set for its one native player and the enforced"
+          " route back, and nothing else"
+      ):
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(f'rm -f {PPSSPP_CONTROLS}')}")
+          rerun_prepare()
+          text = read_ini(PPSSPP_CONTROLS)
+          expected_keys = set(PPSSPP_CONTROLS_BINDINGS) | {"Pause"}
+          assert set(ini_section_keys(text, "ControlMapping")) == expected_keys, text
+          for key, value in PPSSPP_CONTROLS_BINDINGS.items():
+              assert ini_value(text, "ControlMapping", key) == value, (key, text)
+          assert ini_value(text, "ControlMapping", "Pause") == "10-196:10-197"
+
+      with subtest(
+          "An altered seeded gameplay binding, one per emulator that has"
+          " one, and an altered seeded slot setting survive a further"
+          " editor run"
+      ):
+          set_ini_value(PCSX2_INI, "Pad1", "Up", "SDL-0/Something")
+          set_ini_value(DUCKSTATION_INI, "Pad1", "Up", "SDL-0/Something")
+          set_ini_value(PPSSPP_CONTROLS, "ControlMapping", "Up", "10-999")
+          set_ini_value(PCSX2_INI, "Pad2", "Type", "None")
+
+          rerun_prepare()
+
+          assert_ini(PCSX2_INI, "Pad1", "Up", "SDL-0/Something")
+          assert_ini(DUCKSTATION_INI, "Pad1", "Up", "SDL-0/Something")
+          assert_ini(PPSSPP_CONTROLS, "ControlMapping", "Up", "10-999")
+          assert_ini(PCSX2_INI, "Pad2", "Type", "None")
+
+      with subtest(
+          "A readable owned file holding a binding for a player beyond the"
+          " declared set keeps it, while a missing owned binding in the"
+          " same file is written"
+      ):
+          append_ini_section(PCSX2_INI, "Pad3", {"Up": "SDL-2/DPadUp"})
+          remove_ini_line(PCSX2_INI, "Pad1", "Down")
+
+          rerun_prepare()
+
+          assert_ini(PCSX2_INI, "Pad3", "Up", "SDL-2/DPadUp")
+          assert_ini(PCSX2_INI, "Pad1", "Down", "SDL-0/DPadDown")
+
+      with subtest(
+          "Azahar: a binding altered away from the flake's value with its"
+          " \\default companion set to true is restored, the companion is"
+          " put back to false, and a further run leaves the file unchanged"
+      ):
+          set_ini_value(
+              AZAHAR_INI, "Controls", "profiles\\1\\button_a", '"code:65,engine:keyboard"'
+          )
+          set_ini_value(AZAHAR_INI, "Controls", "profiles\\1\\button_a\\default", "true")
+
+          rerun_prepare()
+
+          assert_ini(AZAHAR_INI, "Controls", "profiles\\1\\button_a", AZAHAR_BINDINGS["button_a"])
+          assert_ini(AZAHAR_INI, "Controls", "profiles\\1\\button_a\\default", "false")
+
+          before = read_ini(AZAHAR_INI)
+          rerun_prepare()
+          after = read_ini(AZAHAR_INI)
+          assert before == after, (before, after)
+
+      with subtest(
+          "The identity-transition test starts from a rendering with no"
+          " identity facts, which declares none of Dolphin's gameplay or"
+          " slot keys and none of Azahar's Controls keys"
+      ):
+          # Every earlier subtest ran against this node's own owned-values
+          # file, whose identity facts hold their fixture values, so these
+          # files already carry gameplay content from those runs. Cleared
+          # first, so running against the identity-empty variant next
+          # starts from a genuine absence rather than one this file already
+          # held from before.
+          machine.succeed(
+              "su player -s /bin/sh -c "
+              + shlex.quote(f"rm -f {DOLPHIN_GCPAD} {DOLPHIN_WIIMOTE} {DOLPHIN_HOTKEYS} {AZAHAR_INI}")
+          )
+          remove_ini_line(DOLPHIN_INI, "Core", "SIDevice1")
+          remove_ini_line(DOLPHIN_INI, "Core", "SIDevice2")
+          remove_ini_line(DOLPHIN_INI, "Core", "SIDevice3")
+
+          rerun_prepare(IDENTITY_EMPTY_OWNED_VALUES)
+
+          machine.fail(f"test -e {shlex.quote(DOLPHIN_GCPAD)}")
+          machine.fail(f"test -e {shlex.quote(DOLPHIN_WIIMOTE)}")
+          machine.fail(f"test -e {shlex.quote(DOLPHIN_HOTKEYS)}")
+          assert "SIDevice1" not in read_ini(DOLPHIN_INI)
+          assert "[Controls]" not in read_ini(AZAHAR_INI)
+
+      with subtest(
+          "Writing non-flake values into every identity-dependent key and"
+          " altering one identity-free seeded binding simulates an"
+          " emulator that ran and saved its own configuration before"
+          " bring-up recorded the pad's identity"
+      ):
+          insert_ini_key(DOLPHIN_INI, "Core", "SIDevice1", "0")
+          insert_ini_key(DOLPHIN_INI, "Core", "SIDevice2", "0")
+          insert_ini_key(DOLPHIN_INI, "Core", "SIDevice3", "0")
+
+          write_ini_file(
+              DOLPHIN_GCPAD,
+              {
+                  f"GCPad{n}": {k: "WRONG" for k in gc_pad_bindings(n - 1, SDL_GAMEPAD_NAME)}
+                  for n in range(1, 5)
+              },
+          )
+          write_ini_file(
+              DOLPHIN_WIIMOTE,
+              {
+                  f"Wiimote{n}": {k: "WRONG" for k in wiimote_bindings(n - 1, SDL_GAMEPAD_NAME)}
+                  for n in range(1, 5)
+              },
+          )
+          write_ini_file(
+              DOLPHIN_HOTKEYS,
+              {"Hotkeys": {"Device": "WRONG", "General/Stop": "WRONG"}},
+          )
+
+          append_ini_section(
+              AZAHAR_INI,
+              "Controls",
+              {
+                  "profiles\\size": "2",
+                  "profile": "1",
+                  "profile\\default": "true",
+                  **{f"profiles\\1\\{key}": "WRONG" for key in AZAHAR_BINDINGS},
+                  **{f"profiles\\1\\{key}\\default": "true" for key in AZAHAR_BINDINGS},
+              },
+          )
+
+          set_ini_value(PCSX2_INI, "Pad1", "Up", "SDL-0/Wrong")
+
+      with subtest(
+          "Running the editor against this node's own owned-values file,"
+          " whose identity facts hold their fixture values, replaces every"
+          " identity-dependent key with the flake's own value while the"
+          " altered seeded binding keeps its own"
+      ):
+          rerun_prepare()
+
+          for n in range(1, 5):
+              i = n - 1
+              for key, value in gc_pad_bindings(i, SDL_GAMEPAD_NAME).items():
+                  assert_ini(DOLPHIN_GCPAD, f"GCPad{n}", key, value)
+              for key, value in wiimote_bindings(i, SDL_GAMEPAD_NAME).items():
+                  assert_ini(DOLPHIN_WIIMOTE, f"Wiimote{n}", key, value)
+          assert_ini(DOLPHIN_HOTKEYS, "Hotkeys", "Device", f"SDL/0/{SDL_GAMEPAD_NAME}")
+          assert_ini(DOLPHIN_HOTKEYS, "Hotkeys", "General/Stop", "Back&Start")
+          assert_ini(DOLPHIN_INI, "Core", "SIDevice1", "6")
+          assert_ini(DOLPHIN_INI, "Core", "SIDevice2", "6")
+          assert_ini(DOLPHIN_INI, "Core", "SIDevice3", "6")
+
+          assert_ini(AZAHAR_INI, "Controls", "profiles\\size", "1")
+          assert_ini(AZAHAR_INI, "Controls", "profile", "0")
+          assert_ini(AZAHAR_INI, "Controls", "profile\\default", "false")
+          for key, value in AZAHAR_BINDINGS.items():
+              assert_ini(AZAHAR_INI, "Controls", f"profiles\\1\\{key}", value)
+              assert_ini(AZAHAR_INI, "Controls", f"profiles\\1\\{key}\\default", "false")
+
+          assert_ini(PCSX2_INI, "Pad1", "Up", "SDL-0/Wrong")
+
+      with subtest("A further editor run against the same file changes nothing"):
+          watched = (DOLPHIN_INI, DOLPHIN_GCPAD, DOLPHIN_WIIMOTE, DOLPHIN_HOTKEYS, AZAHAR_INI, PCSX2_INI)
+          before = {path: read_ini(path) for path in watched}
+          rerun_prepare()
+          for path in watched:
+              assert read_ini(path) == before[path], path
 
       with subtest(
           "The controllers section reports every recorded port, accepted-mode pads warn about"

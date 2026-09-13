@@ -47,12 +47,13 @@ in
 
   config = {
     # A stable path, not a store hash an administrator would have to look
-    # up first - the same shape already used for emubox/bios-inventory.json.
-    # A plain string here, rather than a separate pkgs.writeText derivation:
-    # environment.etc's own text option keeps the rendered content readable
-    # at evaluation time, which is what lets a configuration's rendered
-    # reporter list be asserted without building anything.
-    environment.etc."emubox/status-reporters".text = builtins.toJSON cfg.reporters;
+    # up first - the same shape already used for emubox/bios-inventory.json:
+    # a pkgs.writeText derivation, since a registered reporter's command
+    # names its own program by store path, and environment.etc's plain
+    # `text` option refuses a string that refers to one.
+    environment.etc."emubox/status-reporters".source = pkgs.writeText "emubox-status-reporters.json" (
+      builtins.toJSON cfg.reporters
+    );
 
     # emubox-status's own package binary takes the reporter-list path as
     # an argument, which is what lets its unit tests point it at a fixture

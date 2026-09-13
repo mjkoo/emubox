@@ -6,14 +6,20 @@
   python3,
   restic,
   ruff,
+  systemd,
   ty,
   util-linux,
 }:
 let
   python = python3.withPackages (ps: [ ps.pytest ]);
+  # systemd: the helper's own `systemctl` and `journalctl` calls, so they
+  # resolve when the status aggregator runs this wrapper as a subprocess
+  # rather than from an administrator's shell, which passes on its own PATH
+  # unmodified.
   runtimePath = lib.makeBinPath [
     btrfs-progs
     restic
+    systemd
     util-linux
   ];
 in
@@ -46,11 +52,11 @@ stdenvNoCC.mkDerivation {
     ${lib.optionalString stdenvNoCC.hostPlatform.isLinux ''
       wrapProgram $out/bin/emubox-restic-backup --prefix PATH : ${runtimePath}
     ''}
-    # The operator's restic entry point is `restic-emubox`, which
-    # `services.restic`'s `createWrapper` installs with this repository's
-    # environment already set.
-    makeWrapper $out/bin/emubox-restic-backup $out/bin/emubox-status \
-      --add-flags --status
+    # This package once carried a second name, emubox-status, as a
+    # makeWrapper alias with --status forced on; the aggregator (pkgs/
+    # emubox-status) replaced it, and no derivation may produce that name
+    # again here.
+    test ! -e $out/bin/emubox-status
   '';
   meta = {
     description = "Snapshot-consistent restic backup helper for EmuBox";

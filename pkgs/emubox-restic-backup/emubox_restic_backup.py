@@ -469,8 +469,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--backup-unit", default="restic-backups-emubox.service")
     parser.add_argument("--maintenance-unit", default="restic-backups-emubox-maintenance.service")
     args = parser.parse_args(argv)
-    if Path(sys.argv[0]).name == "emubox-status":
-        args.status = True
     spec_actions = args.emit_backup_marker or args.emit_maintenance_marker or args.prepare
     if spec_actions and args.source_spec is None:
         parser.error("--source-spec is required for this action")

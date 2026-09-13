@@ -37,10 +37,12 @@ assert lib.assertMsg
     against it - got ${builtins.toJSON declarations}.
   '';
 assert lib.assertMsg
-  (builtins.fromJSON withReporters.environment.etc."emubox/status-reporters".text == fixtureReporters)
+  (withReporters.emubox.status.reporters == host.config.emubox.status.reporters ++ fixtureReporters)
   ''
-    tests/status.nix: the rendered reporter list must carry every
-    registered reporter's name and command, in declared order.
+    tests/status.nix: registering two more reporters must carry every
+    reporter's name and command into the merged list that
+    environment.etc."emubox/status-reporters" renders verbatim, in
+    declared order, alongside whatever the real host already registers.
   '';
 assert lib.assertMsg
   (

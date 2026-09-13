@@ -542,6 +542,21 @@ in
             status = machine.fail("emubox-status")
             assert "restic-backups-emubox.service: latest invocation failed" in status, status
 
+    with checked("The wrapped backup helper reaches systemctl and journalctl through its own runtime path"):
+        # Read the registered argv rather than retyping it, so a rename of
+        # the helper's own path fails here instead of silently testing a
+        # stale command. Run with an environment whose PATH carries neither
+        # systemctl nor journalctl: naming the helper by store path is what
+        # makes its own wrapper responsible for both, so this must still
+        # report the box's layers rather than crash on a missing program.
+        reporters = json.loads(machine.succeed("cat /etc/emubox/status-reporters"))
+        backups_reporter = next(r for r in reporters if r["name"] == "backups")
+        argv = " ".join(shlex.quote(part) for part in backups_reporter["command"])
+        _, output = machine.execute(f"env -i PATH= {argv}")
+        assert "btrbk-local.service" in output, output
+        assert "FileNotFoundError" not in output, output
+        assert "No such file or directory" not in output, output
+
     with checked("Cloud failures do not disable local gameplay or future backup scheduling"):
         with restic_fault("restic-test-fail"):
             start_backup(expect="exit-code")

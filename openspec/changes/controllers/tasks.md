@@ -31,4 +31,4 @@
 
 ## 5. Gate
 
-- [ ] 5.1 Run `just check-all` and `just session-check` clean, and confirm CI runs the new `controllers` check, whose documented local recipe on a KVM builder is the new `just controllers-test`; verify by a green CI run on the change branch whose log shows the controllers VM test executing rather than being skipped
+- [x] 5.1 Run `just check-all` and `just session-check` clean, and confirm CI runs the new `controllers` check, whose documented local recipe on a KVM builder is the new `just controllers-test`; verify by a green CI run on the change branch whose log shows the controllers VM test executing rather than being skipped

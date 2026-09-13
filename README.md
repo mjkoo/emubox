@@ -60,7 +60,7 @@ cache to its own `nix.settings`.
 built against the flake's own nixpkgs and exposed both through the overlay
 and as `packages.x86_64-linux.*`. Each `package.nix` opens with where it
 came from and why it is here. Three are vendored, because the pinned
-nixpkgs no longer carries them; the fourth is the project's own.
+nixpkgs no longer carries them; the rest are the project's own.
 
 - `es-de`, the frontend, is built from source at release 3.4.1 with the
   in-app updater compiled out, from the derivation nixpkgs removed in PR
@@ -89,6 +89,10 @@ nixpkgs no longer carries them; the fourth is the project's own.
   for the DuckStation token transform, the standard library for the
   settings files it edits - whose unit tests, lint and type check run in
   its build.
+- `emubox-check-bios`, `emubox-save-migrate`, `emubox-restic-backup`,
+  `emubox-status` and `emubox-controllers-status` are the project's own
+  too, each a small Python program whose unit tests, lint and type check
+  run in its build the same way.
 
 The repository itself is MIT licensed (`LICENSE`), which is what the
 programs it writes carry onto the public cache. The vendored packages keep
@@ -148,13 +152,14 @@ edited. RetroArch's `udev` joypad driver does not read the recorded port
 order, so that order is not promised to reach it.
 
 Every standalone emulator but Azahar gains its own controller-only route
-back to the frontend, none of them confirmed: Dolphin and PCSX2 both stop
-on Back and Start together, DuckStation stops on Power Off, PPSSPP stops
-from its pause menu's Exit (reachable because the frontend launches it
-with `--pause-menu-exit`), and ScummVM stops on Guide - in the handful of
-engines whose own keymaps bind Guide to something else, Start opens
-ScummVM's main menu instead, and quitting from there with the pad works
-the same way. Dolphin's route back arrives only once bring-up records the
+back to the frontend, and none of them asks for confirmation first.
+Dolphin, PCSX2 and DuckStation stop on Back and Start pressed together. On
+PPSSPP, Back and Start together open its pause menu, whose last entry,
+Exit, ends it (that entry exists because the frontend launches PPSSPP with
+`--pause-menu-exit`). ScummVM stops on Guide; in the handful of engines
+whose own keymaps take Guide for something else, press Start to open
+ScummVM's main menu instead, then move the pointer to Quit with the left
+stick and press A. Dolphin's route back arrives only once bring-up records the
 pad's SDL device name, since its `Device` lines must name the pad itself;
 until then it has neither its gameplay bindings nor its route back. Azahar
 has no pad-bindable route back at the pinned version, since it persists
@@ -392,11 +397,18 @@ snapshots beneath `/data/.snapshots`, retaining all real points from the latest
 14 days. It neither fabricates downtime points nor captures the separate cache
 or snapshot subvolumes.
 
-Use `sudo emubox-status` first. It aggregates the reports registered with
-it into one exit status and a labelled section per report - on this box,
-the backups and controllers reports, not the whole box's health; the BIOS
-check stays its own command, `emubox-check-bios` (see BIOS files, above).
-Its backups section reports the authoritative outcome of the latest local
+Use `sudo emubox-status` first; it is installed on every box, whether or
+not off-site backup is enabled. It aggregates the reports registered with
+it - on this box, the backups and controllers reports, not the whole box's
+health; the BIOS check stays its own command, `emubox-check-bios` (see BIOS
+files, above). Each section opens with its name and `ok`, `warn`, `fail` or
+`did not run`, with the report's own lines indented beneath it, and the
+command exits with the worst of them: 0 when every section is ok, 1 for a
+warning, 2 for a failure or a report that could not run. A report still
+running after 60 seconds counts as one that could not run; under every
+section but an `ok` one, whatever the report wrote to its error stream is
+shown too; and when the command cannot read its own list of reports, it
+says so on one line and exits 2. Its backups section reports the authoritative outcome of the latest local
 snapshot, backup, and maintenance invocation, with a journal query when
 one needs attention; with off-site backup disabled, that section carries
 only the local snapshot layer, neither off-site layer. `sudo
@@ -488,19 +500,21 @@ this list stays the one place to read what is unproven.
   recorded order, and through RetroArch, whose recorded order is not
   promised, in whatever order it presents them.
 - A pad connected mid-game takes the lowest free player index whatever its
-  port, checked in an emulator the recorded order reaches; on RetroArch,
-  record the order observed instead of expecting this.
+  port, checked in PCSX2 or DuckStation, which the recorded order reaches
+  and whose bindings need no recorded pad identity; on RetroArch, record
+  the order observed instead of expecting this.
 - A pad disconnected and reconnected mid-game likewise takes the lowest
   free player index, regaining its former one only when no lower index is
   free - with players one and two both disconnected and player two's pad
-  reconnected first, that pad becomes player one - checked in an emulator
-  the recorded order reaches; on RetroArch, record the order observed
-  instead.
+  reconnected first, that pad becomes player one - checked in PCSX2 or
+  DuckStation, which the recorded order reaches and whose bindings need no
+  recorded pad identity; on RetroArch, record the order observed instead.
 - A pad in the second port alone is player one, and a pad then connected
   to the first port mid-game takes player two, the lowest free index,
-  until the next game launch applies the recorded order: checked in an
-  emulator the recorded order reaches; on RetroArch, record the order
-  observed instead.
+  until the next game launch applies the recorded order: checked in PCSX2
+  or DuckStation, which the recorded order reaches and whose bindings need
+  no recorded pad identity; on RetroArch, record the order observed
+  instead.
 - Each standalone's pad play and route back: on Dolphin, PCSX2,
   DuckStation, PPSSPP and ScummVM the pad plays and its route back ends
   the emulator and returns to the frontend with no prompt in between
@@ -517,8 +531,8 @@ this list stays the one place to read what is unproven.
   Dolphin, PCSX2 and DuckStation.
 - With a pad in a recorded port, `emubox-status` reports that slot
   resolved and raises no unaccepted-mode warning; if it does warn, the
-  vendor and product pair the pad reports is recorded and added to the
-  module's accepted set.
+  vendor and product pair the pad reports is recorded and added to
+  `acceptedControllerModes` in `modules/controllers/default.nix`.
 - Whether the wired pad persists its mode across disconnects.
 - A stable `by-id` disk path replacing today's probe-order
   `by-diskseq` one, once the real disk is known (see "Reinstall and disk

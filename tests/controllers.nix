@@ -371,11 +371,14 @@ in
       inherit (nodes.machine.emubox.kiosk) appdataDir ownedValuesFile;
       inherit (nodes.machine.users.users.player) home;
       py = builtins.toJSON;
+      bindings = import ./lib/controller-bindings.nix;
     in
     ''
       import base64
       import json
       import shlex
+
+      ${builtins.readFile ./lib/test_helpers.py}
 
       APPDATA = ${py appdataDir}
       OWNED_VALUES = ${py ownedValuesFile}
@@ -405,22 +408,6 @@ in
           node has no btrfs snapshot layer, so its backups section warns
           regardless of anything asserted here."""
           return machine.execute("emubox-status")
-
-      def status_sections(output):
-          """Split the aggregator's output into one block per section, keyed
-          by name. Each section opens with a "name: status" header at the
-          left margin and indents everything the reporter said beneath it,
-          so a header is any non-blank line that does not start with
-          whitespace, and a reporter's own blank lines stay in its block."""
-          sections = {}
-          current = None
-          for line in output.splitlines():
-              if line and not line[0].isspace():
-                  current = line.split(":", 1)[0]
-                  sections[current] = [line]
-              elif current is not None:
-                  sections[current].append(line)
-          return {name: "\n".join(lines) for name, lines in sections.items()}
 
       def snapshot_owned_files():
           """Every file the rendered owned-values document names, as it
@@ -471,13 +458,6 @@ in
           """The emubox-pN links udev has made to /dev/input/`node`."""
           return [link for link in udev_property(node, "DEVLINKS").split() if "emubox-p" in link]
 
-      def ini_sections(text):
-          """Every `[section]` header's name, in file order."""
-          return [
-              line.strip()[1:-1]
-              for line in text.splitlines()
-              if line.strip().startswith("[") and line.strip().endswith("]")
-          ]
 
       def rerun_prepare(owned_values=OWNED_VALUES):
           """Re-run emubox-prepare as player, with no custom-systems
@@ -489,23 +469,6 @@ in
           below passes the identity-empty variant's instead."""
           cmd = f'ESDE_APPDATA_DIR={APPDATA} emubox-prepare {owned_values} ""'
           machine.succeed(f"su player -s /bin/sh -c {shlex.quote(cmd)}")
-
-      def ini_value(text, section, key):
-          """The value of one `key = value` line under `[section]`, or None
-          if it is absent - a plain reader, mirroring emubox-prepare's own
-          section matching without importing it."""
-          in_section = False
-          for line in text.splitlines():
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  in_section = stripped[1:-1] == section
-                  continue
-              if not in_section or "=" not in stripped:
-                  continue
-              k, _, v = stripped.partition("=")
-              if k.strip() == key:
-                  return v.strip()
-          return None
 
       def read_ini(path):
           return machine.succeed(f"cat {shlex.quote(path)}")
@@ -530,72 +493,19 @@ in
       def set_ini_value(path, section, key, new_value):
           """Overwrite one `key = value` line under `[section]` to
           `new_value`, as `player`."""
-          lines = read_ini(path).splitlines(keepends=True)
-          out = []
-          in_section = False
-          replaced = False
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  in_section = stripped[1:-1] == section
-                  out.append(line)
-                  continue
-              if in_section and not replaced and "=" in stripped:
-                  k, _, _ = stripped.partition("=")
-                  if k.strip() == key:
-                      out.append(f"{key} = {new_value}\n")
-                      replaced = True
-                      continue
-              out.append(line)
-          assert replaced, f"{path}: no [{section}] {key} line to alter"
-          write_as_player(path, "".join(out))
+          write_as_player(path, ini_edited(read_ini(path), section, key, new_value))
 
       def remove_ini_line(path, section, key):
           """Delete one `key = value` line under `[section]`, as `player` -
           the complement to `set_ini_value`, putting a seeded key back into
           the "never yet assigned" state a fresh install leaves it in."""
-          lines = read_ini(path).splitlines(keepends=True)
-          out = []
-          in_section = False
-          removed = False
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  in_section = stripped[1:-1] == section
-                  out.append(line)
-                  continue
-              if in_section and not removed and "=" in stripped:
-                  k, _, _ = stripped.partition("=")
-                  if k.strip() == key:
-                      removed = True
-                      continue
-              out.append(line)
-          assert removed, f"{path}: no [{section}] {key} line to remove"
-          write_as_player(path, "".join(out))
+          write_as_player(path, ini_edited(read_ini(path), section, key))
 
       def insert_ini_key(path, section, key, value):
           """Insert one new `key = value` line into an existing `[section]`
           that does not yet assign this key - the complement to
           `set_ini_value`, which requires the key already present."""
-          lines = read_ini(path).splitlines(keepends=True)
-          out = []
-          in_section = False
-          inserted = False
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  if in_section and not inserted:
-                      out.append(f"{key} = {value}\n")
-                      inserted = True
-                  in_section = stripped[1:-1] == section
-                  out.append(line)
-                  continue
-              out.append(line)
-          if in_section and not inserted:
-              out.append(f"{key} = {value}\n")
-              inserted = True
-          assert inserted, f"{path}: no [{section}] section to insert into"
-          write_as_player(path, "".join(out))
+          write_as_player(path, ini_inserted(read_ini(path), section, key, value))
 
       def write_ini_file(path, sections):
           """Write a whole INI file from scratch, one `[section]` per
@@ -616,216 +526,24 @@ in
           lines = [f"\n[{section}]\n"] + [f"{k} = {v}\n" for k, v in keys.items()]
           write_as_player(path, "".join(lines), append=True)
 
-      def ini_section_keys(text, section):
-          """Every key name present under `[section]`, in the order it
-          appears - used to assert a recreated file's key set exactly,
-          rather than merely a subset of it."""
-          keys = []
-          in_section = False
-          for line in text.splitlines():
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  in_section = stripped[1:-1] == section
-                  continue
-              if not in_section or "=" not in stripped:
-                  continue
-              k, _, _ = stripped.partition("=")
-              keys.append(k.strip())
-          return keys
-
       def assert_ini_section(path, section, expected):
           text = read_ini(path)
           for key, value in expected.items():
               got = ini_value(text, section, key)
               assert got == value, (path, section, key, got, value)
 
-      # Independent reimplementations of the gameplay-binding value tables
-      # modules/controllers declares, hand-typed the same way SDL_GAMEPAD_NAME
-      # above already is, rather than read back from the module under test.
-
-      def gc_pad_bindings(i, name):
-          return {
-              "Device": f"SDL/{i}/{name}",
-              "Buttons/A": "`Button S`",
-              "Buttons/B": "`Button E`",
-              "Buttons/X": "`Button W`",
-              "Buttons/Y": "`Button N`",
-              "Buttons/Z": "`Shoulder R`",
-              "Buttons/Start": "Start",
-              "Main Stick/Up": "`Left Y+`",
-              "Main Stick/Down": "`Left Y-`",
-              "Main Stick/Left": "`Left X-`",
-              "Main Stick/Right": "`Left X+`",
-              "Main Stick/Calibration": "",
-              "C-Stick/Up": "`Right Y+`",
-              "C-Stick/Down": "`Right Y-`",
-              "C-Stick/Left": "`Right X-`",
-              "C-Stick/Right": "`Right X+`",
-              "C-Stick/Calibration": "",
-              "Triggers/L": "`Trigger L`",
-              "Triggers/R": "`Trigger R`",
-              "Triggers/L-Analog": "`Trigger L`",
-              "Triggers/R-Analog": "`Trigger R`",
-              "D-Pad/Up": "`Pad N`",
-              "D-Pad/Down": "`Pad S`",
-              "D-Pad/Left": "`Pad W`",
-              "D-Pad/Right": "`Pad E`",
-          }
-
-      def wiimote_bindings(i, name):
-          bindings = {
-              "Device": f"SDL/{i}/{name}",
-              "Buttons/A": "`Button S`",
-              "Buttons/B": "`Trigger R`",
-              "Buttons/1": "`Button W`",
-              "Buttons/2": "`Button N`",
-              "Buttons/-": "Back",
-              "Buttons/+": "Start",
-              "Buttons/Home": "Guide",
-              "D-Pad/Up": "`Pad N`",
-              "D-Pad/Down": "`Pad S`",
-              "D-Pad/Left": "`Pad W`",
-              "D-Pad/Right": "`Pad E`",
-              "IR/Up": "`Right Y+`",
-              "IR/Down": "`Right Y-`",
-              "IR/Left": "`Right X-`",
-              "IR/Right": "`Right X+`",
-              "Shake/X": "`Button E`",
-              "Shake/Y": "`Button E`",
-              "Shake/Z": "`Button E`",
-              "Extension": "Nunchuk",
-              "Nunchuk/Buttons/C": "`Shoulder L`",
-              "Nunchuk/Buttons/Z": "`Trigger L`",
-              "Nunchuk/Stick/Up": "`Left Y+`",
-              "Nunchuk/Stick/Down": "`Left Y-`",
-              "Nunchuk/Stick/Left": "`Left X-`",
-              "Nunchuk/Stick/Right": "`Left X+`",
-              "Nunchuk/Stick/Calibration": "",
-              "Nunchuk/Shake/X": "`Thumb L`",
-              "Nunchuk/Shake/Y": "`Thumb L`",
-              "Nunchuk/Shake/Z": "`Thumb L`",
-          }
-          if i != 0:
-              bindings["Source"] = "1"
-          return bindings
-
-      def pcsx2_pad_bindings(i):
-          return {
-              "Up": f"SDL-{i}/DPadUp",
-              "Right": f"SDL-{i}/DPadRight",
-              "Down": f"SDL-{i}/DPadDown",
-              "Left": f"SDL-{i}/DPadLeft",
-              "Triangle": f"SDL-{i}/FaceNorth",
-              "Circle": f"SDL-{i}/FaceEast",
-              "Cross": f"SDL-{i}/FaceSouth",
-              "Square": f"SDL-{i}/FaceWest",
-              "Select": f"SDL-{i}/Back",
-              "Start": f"SDL-{i}/Start",
-              "L1": f"SDL-{i}/LeftShoulder",
-              "L2": f"SDL-{i}/+LeftTrigger",
-              "R1": f"SDL-{i}/RightShoulder",
-              "R2": f"SDL-{i}/+RightTrigger",
-              "L3": f"SDL-{i}/LeftStick",
-              "R3": f"SDL-{i}/RightStick",
-              "Analog": f"SDL-{i}/Guide",
-              "LUp": f"SDL-{i}/-LeftY",
-              "LRight": f"SDL-{i}/+LeftX",
-              "LDown": f"SDL-{i}/+LeftY",
-              "LLeft": f"SDL-{i}/-LeftX",
-              "RUp": f"SDL-{i}/-RightY",
-              "RRight": f"SDL-{i}/+RightX",
-              "RDown": f"SDL-{i}/+RightY",
-              "RLeft": f"SDL-{i}/-RightX",
-              "LargeMotor": f"SDL-{i}/LargeMotor",
-              "SmallMotor": f"SDL-{i}/SmallMotor",
-          }
-
-      def duckstation_pad_bindings(i):
-          return {
-              "Up": f"SDL-{i}/DPadUp",
-              "Right": f"SDL-{i}/DPadRight",
-              "Down": f"SDL-{i}/DPadDown",
-              "Left": f"SDL-{i}/DPadLeft",
-              "Triangle": f"SDL-{i}/Y",
-              "Circle": f"SDL-{i}/B",
-              "Cross": f"SDL-{i}/A",
-              "Square": f"SDL-{i}/X",
-              "Select": f"SDL-{i}/Back",
-              "Start": f"SDL-{i}/Start",
-              "L1": f"SDL-{i}/LeftShoulder",
-              "L2": f"SDL-{i}/+LeftTrigger",
-              "R1": f"SDL-{i}/RightShoulder",
-              "R2": f"SDL-{i}/+RightTrigger",
-              "L3": f"SDL-{i}/LeftStick",
-              "R3": f"SDL-{i}/RightStick",
-              "Analog": f"SDL-{i}/Guide",
-              "LUp": f"SDL-{i}/-LeftY",
-              "LRight": f"SDL-{i}/+LeftX",
-              "LDown": f"SDL-{i}/+LeftY",
-              "LLeft": f"SDL-{i}/-LeftX",
-              "RUp": f"SDL-{i}/-RightY",
-              "RRight": f"SDL-{i}/+RightX",
-              "RDown": f"SDL-{i}/+RightY",
-              "RLeft": f"SDL-{i}/-RightX",
-              "LargeMotor": f"SDL-{i}/LargeMotor",
-              "SmallMotor": f"SDL-{i}/SmallMotor",
-          }
+      # The gameplay-binding value tables modules/controllers declares, from
+      # tests/lib/controller-bindings.nix's hand-typed copies rather than read
+      # back from the module under test, one entry per native player and
+      # rendered for this node's fixture identities.
+      GC_PAD_BINDINGS = ${py (lib.genList (i: bindings.gcPad i fixtureSdlGamepadName) 4)}
+      WIIMOTE_BINDINGS = ${py (lib.genList (i: bindings.wiimote i fixtureSdlGamepadName) 4)}
+      PCSX2_PAD_BINDINGS = ${py (lib.genList bindings.pcsx2Pad 2)}
+      DUCKSTATION_PAD_BINDINGS = ${py (lib.genList bindings.duckstationPad 2)}
+      PPSSPP_CONTROLS_BINDINGS = ${py bindings.ppssppControls}
+      AZAHAR_BINDINGS = ${py (bindings.azahar fixtureSdlJoystickGuid)}
 
       KEYBOARD_STICK_CALIBRATION = "100.00 141.42 100.00 141.42 100.00 141.42 100.00 141.42"
-
-      PPSSPP_CONTROLS_BINDINGS = {
-          "Up": "10-19",
-          "Down": "10-20",
-          "Left": "10-21",
-          "Right": "10-22",
-          "Cross": "10-189",
-          "Circle": "10-190",
-          "Square": "10-191",
-          "Triangle": "10-188",
-          "Start": "10-197",
-          "Select": "10-196",
-          "L": "10-193",
-          "R": "10-192",
-          "An.Up": "10-4003",
-          "An.Down": "10-4002",
-          "An.Left": "10-4001",
-          "An.Right": "10-4000",
-      }
-
-      def azahar_button(n):
-          return f'"button:{n},engine:sdl,guid:{SDL_JOYSTICK_GUID},port:0"'
-
-      def azahar_hat(direction):
-          return f'"direction:{direction},engine:sdl,guid:{SDL_JOYSTICK_GUID},hat:0,port:0"'
-
-      def azahar_axis_button(axis):
-          return f'"axis:{axis},direction:+,engine:sdl,guid:{SDL_JOYSTICK_GUID},port:0,threshold:0.5"'
-
-      def azahar_analog(x, y):
-          return (
-              f'"axis_x:{x},axis_y:{y},deadzone:0.100000,engine:sdl,'
-              f'guid:{SDL_JOYSTICK_GUID},port:0"'
-          )
-
-      AZAHAR_BINDINGS = {
-          "button_a": azahar_button(1),
-          "button_b": azahar_button(0),
-          "button_x": azahar_button(3),
-          "button_y": azahar_button(2),
-          "button_up": azahar_hat("up"),
-          "button_down": azahar_hat("down"),
-          "button_left": azahar_hat("left"),
-          "button_right": azahar_hat("right"),
-          "button_l": azahar_button(4),
-          "button_r": azahar_button(5),
-          "button_start": azahar_button(7),
-          "button_select": azahar_button(6),
-          "button_zl": azahar_axis_button(2),
-          "button_zr": azahar_axis_button(5),
-          "button_home": azahar_button(8),
-          "circle_pad": azahar_analog(0, 1),
-          "c_stick": azahar_analog(3, 4),
-      }
 
       # Full paths hand-typed against each emulator's own file names and
       # directories, independently of emubox.emulators.configDirs - the same
@@ -1050,9 +768,9 @@ in
       ):
           for n in range(1, 5):
               i = n - 1
-              for key, value in gc_pad_bindings(i, SDL_GAMEPAD_NAME).items():
+              for key, value in GC_PAD_BINDINGS[i].items():
                   assert_ini(DOLPHIN_GCPAD, f"GCPad{n}", key, value)
-              for key, value in wiimote_bindings(i, SDL_GAMEPAD_NAME).items():
+              for key, value in WIIMOTE_BINDINGS[i].items():
                   assert_ini(DOLPHIN_WIIMOTE, f"Wiimote{n}", key, value)
           assert_ini(DOLPHIN_INI, "Core", "SIDevice1", "6")
           assert_ini(DOLPHIN_INI, "Core", "SIDevice2", "6")
@@ -1068,8 +786,8 @@ in
           " for a third"
       ):
           for i in range(2):
-              assert_ini_section(PCSX2_INI, f"Pad{i + 1}", pcsx2_pad_bindings(i))
-              assert_ini_section(DUCKSTATION_INI, f"Pad{i + 1}", duckstation_pad_bindings(i))
+              assert_ini_section(PCSX2_INI, f"Pad{i + 1}", PCSX2_PAD_BINDINGS[i])
+              assert_ini_section(DUCKSTATION_INI, f"Pad{i + 1}", DUCKSTATION_PAD_BINDINGS[i])
           assert_ini(PCSX2_INI, "Pad1", "Type", "DualShock2")
           assert_ini(PCSX2_INI, "Pad2", "Type", "DualShock2")
           assert_ini(DUCKSTATION_INI, "Pad2", "Type", "AnalogController")
@@ -1114,10 +832,10 @@ in
           )
           rerun_prepare()
           recreated = [
-              (PCSX2_INI, f"Pad{i + 1}", {**pcsx2_pad_bindings(i), "Type": "DualShock2"})
+              (PCSX2_INI, f"Pad{i + 1}", {**PCSX2_PAD_BINDINGS[i], "Type": "DualShock2"})
               for i in range(2)
           ] + [
-              (DOLPHIN_GCPAD, f"GCPad{n}", gc_pad_bindings(n - 1, SDL_GAMEPAD_NAME))
+              (DOLPHIN_GCPAD, f"GCPad{n}", GC_PAD_BINDINGS[n - 1])
               for n in range(1, 5)
           ]
           for path, section, expected in recreated:
@@ -1219,7 +937,7 @@ in
           insert_ini_key(DOLPHIN_INI, "Core", "SIDevice3", "0")
 
           gc_pad_sections = {
-              f"GCPad{n}": {k: "WRONG" for k in gc_pad_bindings(n - 1, SDL_GAMEPAD_NAME)}
+              f"GCPad{n}": {k: "WRONG" for k in GC_PAD_BINDINGS[n - 1]}
               for n in range(1, 5)
           }
           # What Dolphin itself writes for a stick's calibration before any
@@ -1229,7 +947,7 @@ in
           write_ini_file(
               DOLPHIN_WIIMOTE,
               {
-                  f"Wiimote{n}": {k: "WRONG" for k in wiimote_bindings(n - 1, SDL_GAMEPAD_NAME)}
+                  f"Wiimote{n}": {k: "WRONG" for k in WIIMOTE_BINDINGS[n - 1]}
                   for n in range(1, 5)
               },
           )
@@ -1265,9 +983,9 @@ in
           assert_ini(DOLPHIN_GCPAD, "GCPad1", "Main Stick/Calibration", "")
           for n in range(1, 5):
               i = n - 1
-              for key, value in gc_pad_bindings(i, SDL_GAMEPAD_NAME).items():
+              for key, value in GC_PAD_BINDINGS[i].items():
                   assert_ini(DOLPHIN_GCPAD, f"GCPad{n}", key, value)
-              for key, value in wiimote_bindings(i, SDL_GAMEPAD_NAME).items():
+              for key, value in WIIMOTE_BINDINGS[i].items():
                   assert_ini(DOLPHIN_WIIMOTE, f"Wiimote{n}", key, value)
           assert_ini(DOLPHIN_HOTKEYS, "Hotkeys", "Device", f"SDL/0/{SDL_GAMEPAD_NAME}")
           assert_ini(DOLPHIN_HOTKEYS, "Hotkeys", "General/Stop", "Back&Start")

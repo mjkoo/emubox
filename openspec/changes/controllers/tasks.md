@@ -41,4 +41,4 @@
 - [x] 6.4 Move the backup helper's duplicate-binary guard into its install check, and correct the aggregator's docstring about undecodable output
 - [x] 6.5 Make `tests/controllers.nix` exercise the port rule's event-node and joystick filters, match every port link to its own device, prove the player limit on disk, prove the session hint in a PAM session's environment, and read its identity-empty owned values from a variant of its own node; prove the player limit at evaluation in `tests/controllers-config.nix`; and close the weak checks in `tests/status.nix`, `tests/default.nix` and `tests/kiosk.nix`
 - [x] 6.6 Make the README's controllers status item cover a pad in every recorded port
-- [ ] 6.7 Share the tests' INI and status-section helpers, and their hand-typed binding tables, between the kiosk and controllers tests
+- [x] 6.7 Share the tests' INI and status-section helpers, and their hand-typed binding tables, between the kiosk and controllers tests

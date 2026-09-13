@@ -238,6 +238,8 @@ in
     import contextlib
     import json
 
+    ${builtins.readFile ./lib/test_helpers.py}
+
     # The harness itself only waits for local-fs.target; every boot phase
     # starts by waiting for multi-user.target and asserts that nothing
     # failed on the way, since several paths here (persist units, secrets,
@@ -560,16 +562,8 @@ in
             # other call site: the same substring must appear under the
             # backups section when the aggregator runs the same reporter.
             _, aggregate = machine.execute("emubox-status")
-            # The backups section alone: its header line, then every line
-            # up to the next header at the left margin.
-            lines = aggregate.splitlines()
-            assert "backups: warn" in lines, aggregate
-            start = lines.index("backups: warn")
-            end = next(
-                (i for i in range(start + 1, len(lines)) if lines[i] and not lines[i][0].isspace()),
-                len(lines),
-            )
-            backups_section = "\n".join(lines[start:end])
+            backups_section = status_sections(aggregate)["backups"]
+            assert backups_section.splitlines()[0] == "backups: warn", aggregate
             assert "restic-backups-emubox.service: latest invocation failed" in backups_section, aggregate
 
     with checked("The wrapped backup helper reaches systemctl and journalctl through its own runtime path"):

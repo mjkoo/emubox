@@ -618,6 +618,7 @@ assert lib.assertMsg
       # accident, which is not what any of the group 5 subtests below are
       # about.
       customSystemsPath = pkgs.writeText "emubox-es_systems.xml" customSystems;
+      bindings = import ./lib/controller-bindings.nix;
     in
     ''
       import base64
@@ -628,6 +629,8 @@ assert lib.assertMsg
       import xml.etree.ElementTree as ET
 
       from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+      ${builtins.readFile ./lib/test_helpers.py}
 
       APPDATA = ${py appdataDir}
       OWNED_VALUES = ${py ownedValuesFile}
@@ -698,29 +701,6 @@ assert lib.assertMsg
               e.get("name"): (e.tag, e.get("value"))
               for e in ET.fromstring(f"<r>{body}</r>")
           }
-
-      def ini_value(text, section, key):
-          """The value of one `key = value` line, or None if it is absent.
-
-          `section=None` reads a sectionless file (RetroArch's flat config)
-          by never leaving the "in section" state; otherwise only lines
-          under the matching `[section]` header count, mirroring
-          emubox-prepare's own section matching without importing
-          it - this is a plain reader, not the independent-implementation
-          concern (that is the DuckStation decrypt below).
-          """
-          in_section = section is None
-          for line in text.splitlines():
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  in_section = stripped[1:-1] == section
-                  continue
-              if not in_section or "=" not in stripped:
-                  continue
-              k, _, v = stripped.partition("=")
-              if k.strip() == key:
-                  return v.strip()
-          return None
 
       def retroarch_all_values(text, key):
           """Every assignment of `key` in a RetroArch-format file, in file
@@ -1220,67 +1200,11 @@ assert lib.assertMsg
               # Pad1/Pad2: PCSX2's own Automatic Mapping output for a
               # freshly connected pad, kept as the pristine default gameplay
               # set; Pad2.Type is the setting that connects player two's
-              # slot, which PCSX2 leaves disconnected by default.
-              "Pad1": {
-                  "Up": "SDL-0/DPadUp",
-                  "Right": "SDL-0/DPadRight",
-                  "Down": "SDL-0/DPadDown",
-                  "Left": "SDL-0/DPadLeft",
-                  "Triangle": "SDL-0/FaceNorth",
-                  "Circle": "SDL-0/FaceEast",
-                  "Cross": "SDL-0/FaceSouth",
-                  "Square": "SDL-0/FaceWest",
-                  "Select": "SDL-0/Back",
-                  "Start": "SDL-0/Start",
-                  "L1": "SDL-0/LeftShoulder",
-                  "L2": "SDL-0/+LeftTrigger",
-                  "R1": "SDL-0/RightShoulder",
-                  "R2": "SDL-0/+RightTrigger",
-                  "L3": "SDL-0/LeftStick",
-                  "R3": "SDL-0/RightStick",
-                  "Analog": "SDL-0/Guide",
-                  "LUp": "SDL-0/-LeftY",
-                  "LRight": "SDL-0/+LeftX",
-                  "LDown": "SDL-0/+LeftY",
-                  "LLeft": "SDL-0/-LeftX",
-                  "RUp": "SDL-0/-RightY",
-                  "RRight": "SDL-0/+RightX",
-                  "RDown": "SDL-0/+RightY",
-                  "RLeft": "SDL-0/-RightX",
-                  "LargeMotor": "SDL-0/LargeMotor",
-                  "SmallMotor": "SDL-0/SmallMotor",
-                  "Type": "DualShock2",
-              },
-              "Pad2": {
-                  "Up": "SDL-1/DPadUp",
-                  "Right": "SDL-1/DPadRight",
-                  "Down": "SDL-1/DPadDown",
-                  "Left": "SDL-1/DPadLeft",
-                  "Triangle": "SDL-1/FaceNorth",
-                  "Circle": "SDL-1/FaceEast",
-                  "Cross": "SDL-1/FaceSouth",
-                  "Square": "SDL-1/FaceWest",
-                  "Select": "SDL-1/Back",
-                  "Start": "SDL-1/Start",
-                  "L1": "SDL-1/LeftShoulder",
-                  "L2": "SDL-1/+LeftTrigger",
-                  "R1": "SDL-1/RightShoulder",
-                  "R2": "SDL-1/+RightTrigger",
-                  "L3": "SDL-1/LeftStick",
-                  "R3": "SDL-1/RightStick",
-                  "Analog": "SDL-1/Guide",
-                  "LUp": "SDL-1/-LeftY",
-                  "LRight": "SDL-1/+LeftX",
-                  "LDown": "SDL-1/+LeftY",
-                  "LLeft": "SDL-1/-LeftX",
-                  "RUp": "SDL-1/-RightY",
-                  "RRight": "SDL-1/+RightX",
-                  "RDown": "SDL-1/+RightY",
-                  "RLeft": "SDL-1/-RightX",
-                  "LargeMotor": "SDL-1/LargeMotor",
-                  "SmallMotor": "SDL-1/SmallMotor",
-                  "Type": "DualShock2",
-              },
+              # slot, which PCSX2 leaves disconnected by default. The
+              # bindings are tests/lib/controller-bindings.nix's hand-typed
+              # tables, shared with tests/controllers.nix.
+              "Pad1": {**${py (bindings.pcsx2Pad 0)}, "Type": "DualShock2"},
+              "Pad2": {**${py (bindings.pcsx2Pad 1)}, "Type": "DualShock2"},
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
               "GPU": {"PGXPEnable": "true", "ResolutionScale": "4"},
@@ -1288,87 +1212,13 @@ assert lib.assertMsg
               # freshly connected pad; Pad1 needs no Type pin (DuckStation's
               # own fresh-file default already connects it), Pad2.Type is
               # the setting that connects player two's slot.
-              "Pad1": {
-                  "Up": "SDL-0/DPadUp",
-                  "Right": "SDL-0/DPadRight",
-                  "Down": "SDL-0/DPadDown",
-                  "Left": "SDL-0/DPadLeft",
-                  "Triangle": "SDL-0/Y",
-                  "Circle": "SDL-0/B",
-                  "Cross": "SDL-0/A",
-                  "Square": "SDL-0/X",
-                  "Select": "SDL-0/Back",
-                  "Start": "SDL-0/Start",
-                  "L1": "SDL-0/LeftShoulder",
-                  "L2": "SDL-0/+LeftTrigger",
-                  "R1": "SDL-0/RightShoulder",
-                  "R2": "SDL-0/+RightTrigger",
-                  "L3": "SDL-0/LeftStick",
-                  "R3": "SDL-0/RightStick",
-                  "Analog": "SDL-0/Guide",
-                  "LUp": "SDL-0/-LeftY",
-                  "LRight": "SDL-0/+LeftX",
-                  "LDown": "SDL-0/+LeftY",
-                  "LLeft": "SDL-0/-LeftX",
-                  "RUp": "SDL-0/-RightY",
-                  "RRight": "SDL-0/+RightX",
-                  "RDown": "SDL-0/+RightY",
-                  "RLeft": "SDL-0/-RightX",
-                  "LargeMotor": "SDL-0/LargeMotor",
-                  "SmallMotor": "SDL-0/SmallMotor",
-              },
-              "Pad2": {
-                  "Up": "SDL-1/DPadUp",
-                  "Right": "SDL-1/DPadRight",
-                  "Down": "SDL-1/DPadDown",
-                  "Left": "SDL-1/DPadLeft",
-                  "Triangle": "SDL-1/Y",
-                  "Circle": "SDL-1/B",
-                  "Cross": "SDL-1/A",
-                  "Square": "SDL-1/X",
-                  "Select": "SDL-1/Back",
-                  "Start": "SDL-1/Start",
-                  "L1": "SDL-1/LeftShoulder",
-                  "L2": "SDL-1/+LeftTrigger",
-                  "R1": "SDL-1/RightShoulder",
-                  "R2": "SDL-1/+RightTrigger",
-                  "L3": "SDL-1/LeftStick",
-                  "R3": "SDL-1/RightStick",
-                  "Analog": "SDL-1/Guide",
-                  "LUp": "SDL-1/-LeftY",
-                  "LRight": "SDL-1/+LeftX",
-                  "LDown": "SDL-1/+LeftY",
-                  "LLeft": "SDL-1/-LeftX",
-                  "RUp": "SDL-1/-RightY",
-                  "RRight": "SDL-1/+RightX",
-                  "RDown": "SDL-1/+RightY",
-                  "RLeft": "SDL-1/-RightX",
-                  "LargeMotor": "SDL-1/LargeMotor",
-                  "SmallMotor": "SDL-1/SmallMotor",
-                  "Type": "AnalogController",
-              },
+              "Pad1": ${py (bindings.duckstationPad 0)},
+              "Pad2": {**${py (bindings.duckstationPad 1)}, "Type": "AnalogController"},
           },
           # The complete PSP gameplay set the loader would drop otherwise,
           # minus Pause, which is the route back above and so enforced.
           f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini": {
-              "ControlMapping": {
-                  "Up": "10-19",
-                  "Down": "10-20",
-                  "Left": "10-21",
-                  "Right": "10-22",
-                  "Cross": "10-189",
-                  "Circle": "10-190",
-                  "Square": "10-191",
-                  "Triangle": "10-188",
-                  "Start": "10-197",
-                  "Select": "10-196",
-                  "L": "10-193",
-                  "R": "10-192",
-                  "An.Up": "10-4003",
-                  "An.Down": "10-4002",
-                  "An.Left": "10-4001",
-                  "An.Right": "10-4000",
-              },
+              "ControlMapping": ${py bindings.ppssppControls},
           },
       }
 

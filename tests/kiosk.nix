@@ -1078,6 +1078,14 @@ assert lib.assertMsg
       # (its own comment on `azaharConfigFile` records why - the setting is
       # compiled out of this flake's Azahar build, so there was nothing
       # left to pin).
+      # This node imports the real hosts/emubox/facts.nix, whose
+      # controllerIdentities fact holds no value, so a key that depends on
+      # it - Dolphin's gameplay Device lines and its GCPadNew.ini/
+      # WiimoteNew.ini/Hotkeys.ini profiles, Azahar's whole Controls
+      # section - is undeclared on this node and pinned nowhere below; it is
+      # asserted on the fixture node that records the identity instead.
+      # Azahar has no owned route back at the pinned version, so it
+      # contributes no key here at all.
       PINNED_OWNED_KEYS_ENFORCE = {
           f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
               "Display": {"Fullscreen": "True"},
@@ -1088,13 +1096,40 @@ assert lib.assertMsg
               # `PermissionAsked` is what suppresses it; `Enabled` pins the
               # answer the suppressed dialog would otherwise have decided.
               "Analytics": {"PermissionAsked": "True", "Enabled": "False"},
+              # Interface.ConfirmStop: the route back's own confirmation
+              # suppression, free of the pad's identity.
+              "Interface": {"ConfirmStop": "False"},
           },
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
-              "UI": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
+              "UI": {
+                  "StartFullscreen": "true",
+                  "SetupWizardIncomplete": "false",
+                  # SettingsVersion: the acceptance key a freshly prepared
+                  # file needs so PCSX2's own first start does not reset it.
+                  "SettingsVersion": "1",
+                  # ConfirmShutdown: suppresses the route back's own
+                  # confirmation.
+                  "ConfirmShutdown": "false",
+              },
               "Folders": {"Bios": "/data/bios"},
+              # InputSources.SDL: every SDL-<n>/... binding, route back and
+              # gameplay alike, reads nothing without this.
+              "InputSources": {"SDL": "true"},
+              # Hotkeys.ShutdownVM: the route back itself, Back then Start.
+              "Hotkeys": {"ShutdownVM": "SDL-0/Back & SDL-0/Start"},
           },
           f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini": {
               "Graphics": {"FullScreen": "True"},
+              # AskForExitConfirmationAfterSeconds: suppresses the pause
+              # menu's own exit confirmation outright.
+              "General": {"AskForExitConfirmationAfterSeconds": "0"},
+          },
+          # New to the editor: PPSSPP's own control-mapping file, distinct
+          # from ppsspp.ini above.
+          f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini": {
+              # ControlMapping.Pause: the route back, a Back+Start chord
+              # that opens the pause menu's Exit entry.
+              "ControlMapping": {"Pause": "10-196:10-197"},
           },
           f"{PLAYER_HOME}/.config/azahar-emu/qt-config.ini": {
               "UI": {
@@ -1105,14 +1140,48 @@ assert lib.assertMsg
               },
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
-              "Main": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
+              "Main": {
+                  "StartFullscreen": "true",
+                  "SetupWizardIncomplete": "false",
+                  # ConfirmPowerOff: suppresses the route back's own
+                  # confirmation.
+                  "ConfirmPowerOff": "false",
+              },
               "BIOS": {"SearchDirectory": "/data/bios"},
+              # InputSources.SDL: the same gate PCSX2's own key above is.
+              "InputSources": {"SDL": "true"},
+              # Hotkeys.PowerOff: the route back itself, Back then Start.
+              "Hotkeys": {"PowerOff": "SDL-0/Back & SDL-0/Start"},
           },
           f"{PLAYER_HOME}/.config/scummvm/scummvm.ini": {
               "scummvm": {
                   "fullscreen": "true",
                   "confirm_exit": "false",
                   "gui_return_to_launcher_at_exit": "false",
+                  # joystick_num: the joystick index every keymap below
+                  # opens through.
+                  "joystick_num": "0",
+              },
+              "keymapper": {
+                  # keymap_global_QUIT: Guide ends the process directly in
+                  # every engine but four, whose own keymaps take Guide for
+                  # a menu action instead.
+                  "keymap_global_QUIT": "JOY_GUIDE",
+                  # keymap_global_MENU: Start opens the Global Main Menu,
+                  # whose Quit reaches those four engines instead.
+                  "keymap_global_MENU": "JOY_START",
+                  # The Global Main Menu's own Quit button is reached
+                  # through the virtual mouse and the GUI's interact
+                  # action, not by D-pad focus - these five keys hold
+                  # ScummVM's own compiled defaults, spelled out because its
+                  # writer erases a value equal to its default on every
+                  # save, the same reason keymap_global_MENU above is
+                  # spelled explicitly.
+                  "keymap_global_VMOUSEUP": "JOY_LEFT_STICK_Y-",
+                  "keymap_global_VMOUSEDOWN": "JOY_LEFT_STICK_Y+",
+                  "keymap_global_VMOUSELEFT": "JOY_LEFT_STICK_X-",
+                  "keymap_global_VMOUSERIGHT": "JOY_LEFT_STICK_X+",
+                  "keymap_gui_INTRCT": "JOY_A",
               },
           },
       }
@@ -1133,9 +1202,158 @@ assert lib.assertMsg
           },
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
               "EmuCore/GS": {"upscale_multiplier": "1"},
+              # Pad1/Pad2: PCSX2's own Automatic Mapping output for a
+              # freshly connected pad, kept as the pristine default gameplay
+              # set; Pad2.Type is the setting that connects player two's
+              # slot, which PCSX2 leaves disconnected by default.
+              "Pad1": {
+                  "Up": "SDL-0/DPadUp",
+                  "Right": "SDL-0/DPadRight",
+                  "Down": "SDL-0/DPadDown",
+                  "Left": "SDL-0/DPadLeft",
+                  "Triangle": "SDL-0/FaceNorth",
+                  "Circle": "SDL-0/FaceEast",
+                  "Cross": "SDL-0/FaceSouth",
+                  "Square": "SDL-0/FaceWest",
+                  "Select": "SDL-0/Back",
+                  "Start": "SDL-0/Start",
+                  "L1": "SDL-0/LeftShoulder",
+                  "L2": "SDL-0/+LeftTrigger",
+                  "R1": "SDL-0/RightShoulder",
+                  "R2": "SDL-0/+RightTrigger",
+                  "L3": "SDL-0/LeftStick",
+                  "R3": "SDL-0/RightStick",
+                  "Analog": "SDL-0/Guide",
+                  "LUp": "SDL-0/-LeftY",
+                  "LRight": "SDL-0/+LeftX",
+                  "LDown": "SDL-0/+LeftY",
+                  "LLeft": "SDL-0/-LeftX",
+                  "RUp": "SDL-0/-RightY",
+                  "RRight": "SDL-0/+RightX",
+                  "RDown": "SDL-0/+RightY",
+                  "RLeft": "SDL-0/-RightX",
+                  "LargeMotor": "SDL-0/LargeMotor",
+                  "SmallMotor": "SDL-0/SmallMotor",
+                  "Type": "DualShock2",
+              },
+              "Pad2": {
+                  "Up": "SDL-1/DPadUp",
+                  "Right": "SDL-1/DPadRight",
+                  "Down": "SDL-1/DPadDown",
+                  "Left": "SDL-1/DPadLeft",
+                  "Triangle": "SDL-1/FaceNorth",
+                  "Circle": "SDL-1/FaceEast",
+                  "Cross": "SDL-1/FaceSouth",
+                  "Square": "SDL-1/FaceWest",
+                  "Select": "SDL-1/Back",
+                  "Start": "SDL-1/Start",
+                  "L1": "SDL-1/LeftShoulder",
+                  "L2": "SDL-1/+LeftTrigger",
+                  "R1": "SDL-1/RightShoulder",
+                  "R2": "SDL-1/+RightTrigger",
+                  "L3": "SDL-1/LeftStick",
+                  "R3": "SDL-1/RightStick",
+                  "Analog": "SDL-1/Guide",
+                  "LUp": "SDL-1/-LeftY",
+                  "LRight": "SDL-1/+LeftX",
+                  "LDown": "SDL-1/+LeftY",
+                  "LLeft": "SDL-1/-LeftX",
+                  "RUp": "SDL-1/-RightY",
+                  "RRight": "SDL-1/+RightX",
+                  "RDown": "SDL-1/+RightY",
+                  "RLeft": "SDL-1/-RightX",
+                  "LargeMotor": "SDL-1/LargeMotor",
+                  "SmallMotor": "SDL-1/SmallMotor",
+                  "Type": "DualShock2",
+              },
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
               "GPU": {"PGXPEnable": "true", "ResolutionScale": "4"},
+              # Pad1/Pad2: DuckStation's own Automatic Mapping output for a
+              # freshly connected pad; Pad1 needs no Type pin (DuckStation's
+              # own fresh-file default already connects it), Pad2.Type is
+              # the setting that connects player two's slot.
+              "Pad1": {
+                  "Up": "SDL-0/DPadUp",
+                  "Right": "SDL-0/DPadRight",
+                  "Down": "SDL-0/DPadDown",
+                  "Left": "SDL-0/DPadLeft",
+                  "Triangle": "SDL-0/Y",
+                  "Circle": "SDL-0/B",
+                  "Cross": "SDL-0/A",
+                  "Square": "SDL-0/X",
+                  "Select": "SDL-0/Back",
+                  "Start": "SDL-0/Start",
+                  "L1": "SDL-0/LeftShoulder",
+                  "L2": "SDL-0/+LeftTrigger",
+                  "R1": "SDL-0/RightShoulder",
+                  "R2": "SDL-0/+RightTrigger",
+                  "L3": "SDL-0/LeftStick",
+                  "R3": "SDL-0/RightStick",
+                  "Analog": "SDL-0/Guide",
+                  "LUp": "SDL-0/-LeftY",
+                  "LRight": "SDL-0/+LeftX",
+                  "LDown": "SDL-0/+LeftY",
+                  "LLeft": "SDL-0/-LeftX",
+                  "RUp": "SDL-0/-RightY",
+                  "RRight": "SDL-0/+RightX",
+                  "RDown": "SDL-0/+RightY",
+                  "RLeft": "SDL-0/-RightX",
+                  "LargeMotor": "SDL-0/LargeMotor",
+                  "SmallMotor": "SDL-0/SmallMotor",
+              },
+              "Pad2": {
+                  "Up": "SDL-1/DPadUp",
+                  "Right": "SDL-1/DPadRight",
+                  "Down": "SDL-1/DPadDown",
+                  "Left": "SDL-1/DPadLeft",
+                  "Triangle": "SDL-1/Y",
+                  "Circle": "SDL-1/B",
+                  "Cross": "SDL-1/A",
+                  "Square": "SDL-1/X",
+                  "Select": "SDL-1/Back",
+                  "Start": "SDL-1/Start",
+                  "L1": "SDL-1/LeftShoulder",
+                  "L2": "SDL-1/+LeftTrigger",
+                  "R1": "SDL-1/RightShoulder",
+                  "R2": "SDL-1/+RightTrigger",
+                  "L3": "SDL-1/LeftStick",
+                  "R3": "SDL-1/RightStick",
+                  "Analog": "SDL-1/Guide",
+                  "LUp": "SDL-1/-LeftY",
+                  "LRight": "SDL-1/+LeftX",
+                  "LDown": "SDL-1/+LeftY",
+                  "LLeft": "SDL-1/-LeftX",
+                  "RUp": "SDL-1/-RightY",
+                  "RRight": "SDL-1/+RightX",
+                  "RDown": "SDL-1/+RightY",
+                  "RLeft": "SDL-1/-RightX",
+                  "LargeMotor": "SDL-1/LargeMotor",
+                  "SmallMotor": "SDL-1/SmallMotor",
+                  "Type": "AnalogController",
+              },
+          },
+          # The complete PSP gameplay set the loader would drop otherwise,
+          # minus Pause, which is the route back above and so enforced.
+          f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini": {
+              "ControlMapping": {
+                  "Up": "10-19",
+                  "Down": "10-20",
+                  "Left": "10-21",
+                  "Right": "10-22",
+                  "Cross": "10-189",
+                  "Circle": "10-190",
+                  "Square": "10-191",
+                  "Triangle": "10-188",
+                  "Start": "10-197",
+                  "Select": "10-196",
+                  "L": "10-193",
+                  "R": "10-192",
+                  "An.Up": "10-4003",
+                  "An.Down": "10-4002",
+                  "An.Left": "10-4001",
+                  "An.Right": "10-4000",
+              },
           },
       }
 
@@ -1169,10 +1387,14 @@ assert lib.assertMsg
           # The walk: every file the rendered JSON actually names (not just
           # the pinned subset above), so a key a concurrent change adds is
           # checked against disk automatically rather than silently
-          # unverified until someone remembers to update this test. Every
-          # enforced key is checked by value, every seeded key only by
-          # presence - a seeded key is never corrected, so its on-disk
-          # value can legitimately be whatever a player last set it to.
+          # unverified until someone remembers to update this test. Both
+          # tiers are checked by value here, against the rendered contract's
+          # own declared default - not against each other, and not against
+          # this test's own pinned literals above, which is a separate,
+          # independent check. A seeded key is never corrected once written,
+          # so this only ever runs where nothing has changed it since
+          # `emubox-prepare` last wrote it; where a player's own later
+          # choice is expected to survive, nothing here re-runs the walk.
           def owned_paths(fmt, path, keys):
               if fmt == "retroarch":
                   return [(None, key, expected) for key, expected in keys.items()]
@@ -1185,53 +1407,81 @@ assert lib.assertMsg
               else:
                   raise AssertionError(f"{path}: unhandled owned-file format {fmt!r}")
 
-          for path, entry in owned["files"].items():
-              if path == "settings/es_settings.xml":
-                  continue  # its own pin-then-walk above already covers it
-              fmt = entry["format"]
-              enforce_assertions = owned_paths(fmt, path, entry["enforce"])
-              seed_assertions = owned_paths(fmt, path, entry["seed"])
+          def walk_owned_files(owned):
+              for path, entry in owned["files"].items():
+                  if path == "settings/es_settings.xml":
+                      continue  # its own pin-then-walk above already covers it
+                  fmt = entry["format"]
+                  enforce_assertions = owned_paths(fmt, path, entry["enforce"])
+                  seed_assertions = owned_paths(fmt, path, entry["seed"])
 
-              if not enforce_assertions and not seed_assertions:
-                  # A file the flake owns zero static keys in - PCSX2's
-                  # `secrets.ini` and Dolphin's `RetroAchievements.ini`, both
-                  # declared with empty `enforce`/`seed` tables in
-                  # modules/emulators because their only content is
-                  # retroachievements namespace keys (token, or
-                  # enabled/hardcore/username/token) written at runtime
-                  # rather than through this static table. There
-                  # is nothing this walk could check here even
-                  # if the file existed, and the matching prepare-side fix
-                  # (the ini/retroarch editors now leave a file alone
-                  # entirely rather than touching it for zero keys) means
-                  # such a file is legitimately absent until something
-                  # actually needs writing into it - a `cat` here would fail
-                  # on an absence that is correct, not a bug (this is what
-                  # broke this subtest in CI against PCSX2's `secrets.ini`
-                  # before a token had ever resolved). Skip it explicitly
-                  # rather than loosen the walk to "cat if it exists" for
-                  # every file: a file that DOES own a static key still has
-                  # to exist and carry it, unconditionally, below.
-                  #
-                  # Not asserted absent here either, deliberately: Dolphin's
-                  # `RetroAchievements.ini` has the same empty static tables
-                  # but is not reliably absent at this point - its
-                  # enabled/hardcore keys are written unconditionally by
-                  # `apply_retroachievements` regardless of network, unlike
-                  # PCSX2's, whose only key is the token itself.
-                  # A blanket "must be absent whenever there are no static
-                  # keys" would be wrong for one of these two files, not
-                  # merely early - so this walk stays silent on existence
-                  # for a zero-key file rather than asserting either way.
-                  continue
+                  if not enforce_assertions and not seed_assertions:
+                      # A file the flake owns zero static keys in - PCSX2's
+                      # `secrets.ini` and Dolphin's `RetroAchievements.ini`, both
+                      # declared with empty `enforce`/`seed` tables in
+                      # modules/emulators because their only content is
+                      # retroachievements namespace keys (token, or
+                      # enabled/hardcore/username/token) written at runtime
+                      # rather than through this static table. There
+                      # is nothing this walk could check here even
+                      # if the file existed, and the matching prepare-side fix
+                      # (the ini/retroarch editors now leave a file alone
+                      # entirely rather than touching it for zero keys) means
+                      # such a file is legitimately absent until something
+                      # actually needs writing into it - a `cat` here would fail
+                      # on an absence that is correct, not a bug (this is what
+                      # broke this subtest in CI against PCSX2's `secrets.ini`
+                      # before a token had ever resolved). Skip it explicitly
+                      # rather than loosen the walk to "cat if it exists" for
+                      # every file: a file that DOES own a static key still has
+                      # to exist and carry it, unconditionally, below.
+                      #
+                      # Not asserted absent here either, deliberately: Dolphin's
+                      # `RetroAchievements.ini` has the same empty static tables
+                      # but is not reliably absent at this point - its
+                      # enabled/hardcore keys are written unconditionally by
+                      # `apply_retroachievements` regardless of network, unlike
+                      # PCSX2's, whose only key is the token itself.
+                      # A blanket "must be absent whenever there are no static
+                      # keys" would be wrong for one of these two files, not
+                      # merely early - so this walk stays silent on existence
+                      # for a zero-key file rather than asserting either way.
+                      continue
 
-              text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
-              for section, key, expected in enforce_assertions:
-                  got = owned_file_value(fmt, text, section, key)
-                  assert got == expected, f"{path} [{section}]: {key}: {got!r} != {expected!r}"
-              for section, key, _expected in seed_assertions:
-                  got = owned_file_value(fmt, text, section, key)
-                  assert got is not None, f"{path} [{section}]: {key}: missing from disk (seeded key)"
+                  text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
+                  for section, key, expected in enforce_assertions:
+                      got = owned_file_value(fmt, text, section, key)
+                      assert got == expected, f"{path} [{section}] (enforce): {key}: {got!r} != {expected!r}"
+                  for section, key, expected in seed_assertions:
+                      got = owned_file_value(fmt, text, section, key)
+                      assert got == expected, f"{path} [{section}] (seed): {key}: {got!r} != {expected!r}"
+
+          walk_owned_files(owned)
+
+      with subtest("The on-disk walk's seeded branch catches a seeded value that drifted from the flake's default"):
+          # PPSSPP's own seeded ControlMapping.Up, altered directly on disk
+          # to a value the flake never declared - standing in for whatever
+          # wrote a seeded binding wrong, since nothing in this editor's own
+          # operation would ever do it deliberately. Presence alone would
+          # pass this unchanged; only a by-value comparison catches it.
+          ppsspp_controls = f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini"
+          drift = f"sed -i 's/^Up = 10-19$/Up = 10-999/' {ppsspp_controls}"
+          restore = f"sed -i 's/^Up = 10-999$/Up = 10-19/' {ppsspp_controls}"
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(drift)}")
+          try:
+              walk_owned_files(owned)
+          except AssertionError:
+              pass
+          else:
+              raise AssertionError(
+                  "the on-disk walk did not catch a seeded key altered away "
+                  "from the flake's default"
+              )
+          finally:
+              machine.succeed(f"su player -s /bin/sh -c {shlex.quote(restore)}")
+          # Confirms the restore actually put the file back, rather than
+          # leaving the drifted value in place for whatever runs next.
+          walk_owned_files(owned)
 
       # --- kiosk: custom systems, both branches -----------------------------
 

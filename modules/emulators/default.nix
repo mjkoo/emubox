@@ -1047,8 +1047,10 @@ in
       pkgs.azahar
       pkgs.scummvm
       pkgs.duckstation
-      # For the admin over SSH; the planned `emubox-status` is the only
-      # other consumer of this inventory, and it is not built yet.
+      # For the admin over SSH. `emubox-status` aggregates only the reports
+      # capabilities register with it, and this stays a separate command:
+      # deciding which missing BIOS file is a finding belongs to a later
+      # change, so nothing here registers a reporter for it yet.
       pkgs.emubox-check-bios
     ];
 

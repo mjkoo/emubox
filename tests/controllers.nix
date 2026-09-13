@@ -906,6 +906,12 @@ in
           assert_ini(PCSX2_INI, "UI", "ConfirmShutdown", "false")
           assert_ini(DUCKSTATION_INI, "Main", "ConfirmPowerOff", "false")
           assert_ini(PPSSPP_INI, "General", "AskForExitConfirmationAfterSeconds", "0")
+          # scummvm.confirm_exit and gui_return_to_launcher_at_exit: already
+          # enforced by modules/emulators, not owned again here - only
+          # asserted, the same way this subtest asserts every other
+          # exit-confirmation suppression setting.
+          assert_ini(SCUMMVM_INI, "scummvm", "confirm_exit", "false")
+          assert_ini(SCUMMVM_INI, "scummvm", "gui_return_to_launcher_at_exit", "false")
 
       with subtest(
           "An altered route back, an altered dependency setting and a re-enabled"
@@ -928,6 +934,8 @@ in
 
           set_ini_value(SCUMMVM_INI, "keymapper", "keymap_global_QUIT", "JOY_START")
           set_ini_value(SCUMMVM_INI, "scummvm", "joystick_num", "1")
+          set_ini_value(SCUMMVM_INI, "scummvm", "confirm_exit", "true")
+          set_ini_value(SCUMMVM_INI, "scummvm", "gui_return_to_launcher_at_exit", "true")
 
           rerun_prepare()
 
@@ -948,6 +956,8 @@ in
 
           assert_ini(SCUMMVM_INI, "keymapper", "keymap_global_QUIT", "JOY_GUIDE")
           assert_ini(SCUMMVM_INI, "scummvm", "joystick_num", "0")
+          assert_ini(SCUMMVM_INI, "scummvm", "confirm_exit", "false")
+          assert_ini(SCUMMVM_INI, "scummvm", "gui_return_to_launcher_at_exit", "false")
 
       with subtest(
           "Dolphin's complete GameCube and Wii gameplay profile, and its slot"

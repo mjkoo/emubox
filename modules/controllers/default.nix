@@ -57,8 +57,208 @@ let
   # leaves Dolphin's non-pad default device in place
   # (`ControllerEmu.cpp:117-119`). So the route back is declared only once
   # this fact holds a value; while it is null, `Hotkeys.ini` carries none of
-  # its keys and nothing stands in their place.
+  # its keys and nothing stands in their place. Every gameplay `Device`
+  # line below waits on the same fact for the same reason, and takes every
+  # other key in its own section down with it: a section Dolphin reads
+  # applies no defaults of its own (`InputCommon/InputConfig.cpp:68-116`),
+  # so a profile written with every key but `Device` would still leave the
+  # pad unbound.
   dolphinSdlDeviceName = identity.sdlGamepadName;
+
+  # Azahar's own SDL binding grammar carries the pad's GUID directly
+  # (`src/input_common/sdl/sdl_impl.cpp:345-358,754-757`); an unmatched GUID
+  # gives Azahar a placeholder joystick that never delivers input, so its
+  # whole `[Controls]` section - the profile array and every binding under
+  # it - waits on this fact the same way Dolphin's gameplay profiles wait on
+  # `dolphinSdlDeviceName`.
+  azaharGuid = identity.sdlJoystickGuid;
+  azaharIniFile = "${configDirs.azahar}/qt-config.ini";
+
+  # Dolphin's GC pad layout, upstream's own `Data/Sys/Profiles/GCPad/SDL
+  # Gamepad.ini`, mirrored per player by substituting only the SDL index
+  # `<i>` (0-3) into the writer-confirmed player-one spellings - the same
+  # substitution Dolphin's own `Device` line already carries. Alphabetic-
+  # only names are written bare, every other input name backticked
+  # (`InputCommon/ControllerInterface/MappingCommon.cpp:51-56`).
+  gcPadBindings = i: {
+    Device = "SDL/${toString i}/${dolphinSdlDeviceName}";
+    "Buttons/A" = "`Button S`";
+    "Buttons/B" = "`Button E`";
+    "Buttons/X" = "`Button W`";
+    "Buttons/Y" = "`Button N`";
+    "Buttons/Z" = "`Shoulder R`";
+    "Buttons/Start" = "Start";
+    "Main Stick/Up" = "`Left Y+`";
+    "Main Stick/Down" = "`Left Y-`";
+    "Main Stick/Left" = "`Left X-`";
+    "Main Stick/Right" = "`Left X+`";
+    "C-Stick/Up" = "`Right Y+`";
+    "C-Stick/Down" = "`Right Y-`";
+    "C-Stick/Left" = "`Right X-`";
+    "C-Stick/Right" = "`Right X+`";
+    "Triggers/L" = "`Trigger L`";
+    "Triggers/R" = "`Trigger R`";
+    "Triggers/L-Analog" = "`Trigger L`";
+    "Triggers/R-Analog" = "`Trigger R`";
+    "D-Pad/Up" = "`Pad N`";
+    "D-Pad/Down" = "`Pad S`";
+    "D-Pad/Left" = "`Pad W`";
+    "D-Pad/Right" = "`Pad E`";
+  };
+
+  # Dolphin's Wii profile, laid out the same way: player one's
+  # writer-confirmed spellings, index-substituted per further player, with
+  # `Source` added from player two on - the setting that connects that
+  # Wiimote's slot, since only player one's is connected by default
+  # (`Core/Config/WiimoteSettings.cpp:10-19`; `Core/HW/Wiimote.h:47-52`).
+  # `Extension = Nunchuk` rides in the same section and so the same
+  # identity gate as the bindings it serves.
+  wiimoteBindings =
+    i:
+    {
+      Device = "SDL/${toString i}/${dolphinSdlDeviceName}";
+      "Buttons/A" = "`Button S`";
+      "Buttons/B" = "`Trigger R`";
+      "Buttons/1" = "`Button W`";
+      "Buttons/2" = "`Button N`";
+      "Buttons/-" = "Back";
+      "Buttons/+" = "Start";
+      "Buttons/Home" = "Guide";
+      "D-Pad/Up" = "`Pad N`";
+      "D-Pad/Down" = "`Pad S`";
+      "D-Pad/Left" = "`Pad W`";
+      "D-Pad/Right" = "`Pad E`";
+      "IR/Up" = "`Right Y+`";
+      "IR/Down" = "`Right Y-`";
+      "IR/Left" = "`Right X-`";
+      "IR/Right" = "`Right X+`";
+      "Shake/X" = "`Button E`";
+      "Shake/Y" = "`Button E`";
+      "Shake/Z" = "`Button E`";
+      Extension = "Nunchuk";
+      "Nunchuk/Buttons/C" = "`Shoulder L`";
+      "Nunchuk/Buttons/Z" = "`Trigger L`";
+      "Nunchuk/Stick/Up" = "`Left Y+`";
+      "Nunchuk/Stick/Down" = "`Left Y-`";
+      "Nunchuk/Stick/Left" = "`Left X-`";
+      "Nunchuk/Stick/Right" = "`Left X+`";
+      "Nunchuk/Shake/X" = "`Thumb L`";
+      "Nunchuk/Shake/Y" = "`Thumb L`";
+      "Nunchuk/Shake/Z" = "`Thumb L`";
+    }
+    // lib.optionalAttrs (i != 0) {
+      Source = "1";
+    };
+
+  # PCSX2's own Controller Port > Automatic Mapping > SDL-<i> action wrote
+  # these bindings for a freshly connected pad (`pcsx2/Input/SDLInputSource.cpp`);
+  # kept as the pristine default set so a player never has to redo it, with
+  # only the SDL device index substituted per player
+  # (`pcsx2/Input/InputManager.cpp`, the player id PCSX2's own SDL source
+  # assigns first-free in add order).
+  pcsx2PadBindings = i: {
+    Up = "SDL-${toString i}/DPadUp";
+    Right = "SDL-${toString i}/DPadRight";
+    Down = "SDL-${toString i}/DPadDown";
+    Left = "SDL-${toString i}/DPadLeft";
+    Triangle = "SDL-${toString i}/FaceNorth";
+    Circle = "SDL-${toString i}/FaceEast";
+    Cross = "SDL-${toString i}/FaceSouth";
+    Square = "SDL-${toString i}/FaceWest";
+    Select = "SDL-${toString i}/Back";
+    Start = "SDL-${toString i}/Start";
+    L1 = "SDL-${toString i}/LeftShoulder";
+    L2 = "SDL-${toString i}/+LeftTrigger";
+    R1 = "SDL-${toString i}/RightShoulder";
+    R2 = "SDL-${toString i}/+RightTrigger";
+    L3 = "SDL-${toString i}/LeftStick";
+    R3 = "SDL-${toString i}/RightStick";
+    Analog = "SDL-${toString i}/Guide";
+    LUp = "SDL-${toString i}/-LeftY";
+    LRight = "SDL-${toString i}/+LeftX";
+    LDown = "SDL-${toString i}/+LeftY";
+    LLeft = "SDL-${toString i}/-LeftX";
+    RUp = "SDL-${toString i}/-RightY";
+    RRight = "SDL-${toString i}/+RightX";
+    RDown = "SDL-${toString i}/+RightY";
+    RLeft = "SDL-${toString i}/-RightX";
+    LargeMotor = "SDL-${toString i}/LargeMotor";
+    SmallMotor = "SDL-${toString i}/SmallMotor";
+  };
+
+  # DuckStation's own Controller Port > Automatic Mapping > SDL-<i> action,
+  # the same shape as PCSX2's above but with DuckStation's own face-button
+  # names (`src/util/input_manager.cpp`).
+  duckstationPadBindings = i: {
+    Up = "SDL-${toString i}/DPadUp";
+    Right = "SDL-${toString i}/DPadRight";
+    Down = "SDL-${toString i}/DPadDown";
+    Left = "SDL-${toString i}/DPadLeft";
+    Triangle = "SDL-${toString i}/Y";
+    Circle = "SDL-${toString i}/B";
+    Cross = "SDL-${toString i}/A";
+    Square = "SDL-${toString i}/X";
+    Select = "SDL-${toString i}/Back";
+    Start = "SDL-${toString i}/Start";
+    L1 = "SDL-${toString i}/LeftShoulder";
+    L2 = "SDL-${toString i}/+LeftTrigger";
+    R1 = "SDL-${toString i}/RightShoulder";
+    R2 = "SDL-${toString i}/+RightTrigger";
+    L3 = "SDL-${toString i}/LeftStick";
+    R3 = "SDL-${toString i}/RightStick";
+    Analog = "SDL-${toString i}/Guide";
+    LUp = "SDL-${toString i}/-LeftY";
+    LRight = "SDL-${toString i}/+LeftX";
+    LDown = "SDL-${toString i}/+LeftY";
+    LLeft = "SDL-${toString i}/-LeftX";
+    RUp = "SDL-${toString i}/-RightY";
+    RRight = "SDL-${toString i}/+RightX";
+    RDown = "SDL-${toString i}/+RightY";
+    RLeft = "SDL-${toString i}/-RightX";
+    LargeMotor = "SDL-${toString i}/LargeMotor";
+    SmallMotor = "SDL-${toString i}/SmallMotor";
+  };
+
+  # Azahar's SDL binding grammars, each carrying the pad's own GUID
+  # (`src/input_common/sdl/sdl_impl.cpp`); keys are written sorted by
+  # Azahar's own `ParamPackage` (`param_package.h:16`), reproduced here in
+  # that order for the same reason the value spellings below are copied
+  # verbatim rather than reformatted.
+  azaharButtonValue = n: ''"button:${toString n},engine:sdl,guid:${azaharGuid},port:0"'';
+  azaharHatValue = dir: ''"direction:${dir},engine:sdl,guid:${azaharGuid},hat:0,port:0"'';
+  azaharAxisButtonValue =
+    axis: ''"axis:${toString axis},direction:+,engine:sdl,guid:${azaharGuid},port:0,threshold:0.5"'';
+  azaharAnalogValue =
+    x: y:
+    ''"axis_x:${toString x},axis_y:${toString y},deadzone:0.100000,engine:sdl,guid:${azaharGuid},port:0"'';
+
+  # Azahar's own raw button, hat and axis indices, declared statically:
+  # they follow from xpad's `XTYPE_XBOX360` capability set (`xpad.c:157`,
+  # cited at Linux 6.18.47) and SDL's own Linux enumeration order
+  # (`src/joystick/linux/SDL_sysjoystick.c:1244-1310`), not from the pad's
+  # identity, so they need no bring-up capture - only the GUID above does.
+  # `b1` A, `b0` B, `b3` X, `b2` Y, `b4` L, `b5` R, `b6` Select, `b7` Start,
+  # `b8` Home, `a2` ZL, `a5` ZR, hat0 the D-pad, `a0`/`a1` the circle pad,
+  # `a3`/`a4` the C-stick.
+  azaharBindings = {
+    button_a = azaharButtonValue 1;
+    button_b = azaharButtonValue 0;
+    button_x = azaharButtonValue 3;
+    button_y = azaharButtonValue 2;
+    button_up = azaharHatValue "up";
+    button_down = azaharHatValue "down";
+    button_left = azaharHatValue "left";
+    button_right = azaharHatValue "right";
+    button_l = azaharButtonValue 4;
+    button_r = azaharButtonValue 5;
+    button_start = azaharButtonValue 7;
+    button_select = azaharButtonValue 6;
+    button_zl = azaharAxisButtonValue 2;
+    button_zr = azaharAxisButtonValue 5;
+    button_home = azaharButtonValue 8;
+    circle_pad = azaharAnalogValue 0 1;
+    c_stick = azaharAnalogValue 3 4;
+  };
 in
 {
   # /dev/input/emubox-pN from each port's ID_PATH; rules apply on hotplug.
@@ -144,6 +344,22 @@ in
         # suppresses that question; it is the one Dolphin key this route
         # back needs that does not wait on the pad's identity.
         Interface.ConfirmStop = "False";
+      }
+      // lib.optionalAttrs (dolphinSdlDeviceName != null) {
+        Core = {
+          # Core.SIDevice1-3: Dolphin-Emulator/dolphin
+          # Core/Config/MainSettings.cpp:168-178 and Core/HW/SI/SI_Device.h:87-105
+          # - GameCube controller ports 2-4 default disconnected (`6`,
+          # `SIDEVICE_NONE`); `6` is `SIDEVICE_GC_CONTROLLER`, the same
+          # value port 1 already defaults to. Connects the slot each
+          # further player's `GCPadNew.ini` profile below binds; withheld
+          # with those profiles until the pad's identity is recorded, since
+          # a connected but unbound port is no better than a disconnected
+          # one.
+          SIDevice1 = "6";
+          SIDevice2 = "6";
+          SIDevice3 = "6";
+        };
       };
     };
 
@@ -180,17 +396,90 @@ in
     # a file the editor creates holds only the keys it owns, so leaving
     # this file unregistered would leave Wii with no owned route back at
     # all even though `Hotkeys.ini` above is shared between both systems.
-    # No key of its own from this module: the route back lives entirely in
-    # `Hotkeys.ini`.
+    # No route-back key of its own - that lives entirely in `Hotkeys.ini` -
+    # but every Wii Remote's complete gameplay profile, one section per
+    # player up to the system's native four, each withheld until the pad's
+    # identity is recorded for the same reason `Hotkeys.ini` withholds its
+    # own keys: an absent or empty `Device` leaves Dolphin's non-pad
+    # default device in place rather than binding nothing
+    # (`InputCommon/ControllerEmu/ControllerEmu.cpp:117-119`), and a
+    # section without one still reads as bound to that non-pad default.
     "${dolphinWiimoteFile}" = {
       format = "ini";
+      enforce = lib.optionalAttrs (dolphinSdlDeviceName != null) (
+        lib.listToAttrs (
+          map
+            (n: {
+              name = "Wiimote${toString n}";
+              value = wiimoteBindings (n - 1);
+            })
+            [
+              1
+              2
+              3
+              4
+            ]
+        )
+      );
     };
 
     # New to the editor, registered for the same reason `WiimoteNew.ini`
     # above is: Dolphin's `GCPad<N>` sections hold no route-back key of
-    # their own either, only gameplay bindings.
+    # their own either, only every GameCube pad's complete gameplay
+    # profile, one section per player up to the system's native four, each
+    # withheld with `WiimoteNew.ini`'s own profiles until the pad's
+    # identity is recorded.
     "${dolphinGCPadFile}" = {
       format = "ini";
+      enforce = lib.optionalAttrs (dolphinSdlDeviceName != null) (
+        lib.listToAttrs (
+          map
+            (n: {
+              name = "GCPad${toString n}";
+              value = gcPadBindings (n - 1);
+            })
+            [
+              1
+              2
+              3
+              4
+            ]
+        )
+      );
+    };
+
+    # New to the editor: Azahar's own `[Controls]` section - the profile
+    # array's count and active index, and every gameplay binding under
+    # `profiles\1\` - waits on the pad's GUID for the same reason Dolphin's
+    # gameplay profiles wait on its own identity fact: every SDL binding
+    # value carries the GUID directly, and an unmatched one gives a
+    # placeholder joystick that never delivers input
+    # (`src/input_common/sdl/sdl_impl.cpp:345-358,754-757`). Already owned
+    # by `modules/emulators` for its own, identity-free `[UI]` keys; this
+    # module's own `[Controls]` keys sit in the same file, merged by the
+    # module system rather than declared twice.
+    "${azaharIniFile}" = {
+      format = "ini";
+      enforce = lib.optionalAttrs (azaharGuid != null) {
+        Controls = {
+          # profiles\size: azahar-emu/azahar src/citra_qt/configuration/config.cpp,
+          # `QtConfig::ReadControlValues` reads the profile array whose
+          # length this key gives, and its writer emits no `\default`
+          # companion for it (unlike every key below).
+          "profiles\\size" = "1";
+          # profile / profile\default: the active profile index, and the
+          # backslashed QSettings companion every Azahar-initiated save
+          # writes beside a key it owns (`config.cpp:189-212`,
+          # `1442-1450`). Azahar's own writer sets `profile\default=true`
+          # whenever the index is 0, on every save - harmless, since both
+          # the literal and the compiled default read as index 0, and
+          # corrected back to `false` the next time this editor runs.
+          profile = "0";
+          "profile\\default" = "false";
+        }
+        // lib.mapAttrs' (key: value: lib.nameValuePair "profiles\\1\\${key}" value) azaharBindings
+        // lib.mapAttrs' (key: _: lib.nameValuePair "profiles\\1\\${key}\\default" "false") azaharBindings;
+      };
     };
 
     "${pcsx2IniFile}" = {
@@ -219,6 +508,24 @@ in
         # alone.
         Hotkeys.ShutdownVM = "SDL-0/Back & SDL-0/Start";
       };
+      # Seeded, not enforced: PCSX2 names an SDL input by its enumeration
+      # index alone, so none of this depends on the pad's identity, and a
+      # player who rebinds a control through PCSX2's own settings keeps
+      # that choice across a reboot.
+      seed = {
+        # Pad1.Type: PCSX2/pcsx2 (v2.6.3) already falls back to
+        # `DualShock2` for port one, so this pins the same value the
+        # emulator's own fresh-file default already carries.
+        Pad1 = pcsx2PadBindings 0 // {
+          Type = "DualShock2";
+        };
+        # Pad2.Type: PCSX2's own fresh-file default is `None`, which reads
+        # nothing at all through `[Pad2]`'s bindings below - the setting
+        # that connects player two's slot.
+        Pad2 = pcsx2PadBindings 1 // {
+          Type = "DualShock2";
+        };
+      };
     };
 
     "${duckstationIniFile}" = {
@@ -242,6 +549,18 @@ in
         # `util/input_manager.cpp:481-493`), free of the pad's identity for
         # the same reason.
         Hotkeys.PowerOff = "SDL-0/Back & SDL-0/Start";
+      };
+      # Seeded, not enforced, for the same reason PCSX2's own gameplay
+      # bindings are: free of the pad's identity, and left alone once a
+      # player rebinds a control through DuckStation's own settings.
+      seed = {
+        Pad1 = duckstationPadBindings 0;
+        # Pad2.Type: DuckStation's own fresh-file default is `None`, which
+        # reads nothing at all through `[Pad2]`'s bindings below - the
+        # setting that connects player two's slot.
+        Pad2 = duckstationPadBindings 1 // {
+          Type = "AnalogController";
+        };
       };
     };
 
@@ -279,6 +598,34 @@ in
         # considered and rejected, since it only matches a single mapping,
         # never a chord (`Core/KeyMap.cpp:601-614`).
         ControlMapping.Pause = "10-196:10-197";
+      };
+      # Seeded: PPSSPP's own loader drops every mapping this file omits
+      # (`Core/KeyMap.cpp:818-852`), so this is the complete gameplay set a
+      # pristine install would have produced for the PSP's single native
+      # player, free of the pad's identity - PPSSPP names a pad input by a
+      # fixed keycode, not by the device it came from. `L`, `R`'s and
+      # `Pause`'s own device-10 key codes rest on PPSSPP's own fixed
+      # keycode switch; `Pause` above is confirmed by round trip, and `L`,
+      # `R` share its device-10 numbering.
+      seed = {
+        ControlMapping = {
+          Up = "10-19";
+          Down = "10-20";
+          Left = "10-21";
+          Right = "10-22";
+          Cross = "10-189";
+          Circle = "10-190";
+          Square = "10-191";
+          Triangle = "10-188";
+          Start = "10-197";
+          Select = "10-196";
+          L = "10-193";
+          R = "10-192";
+          "An.Up" = "10-4003";
+          "An.Down" = "10-4002";
+          "An.Left" = "10-4001";
+          "An.Right" = "10-4000";
+        };
       };
     };
 

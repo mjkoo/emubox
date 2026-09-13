@@ -483,52 +483,10 @@ assert lib.assertMsg
       imports = [
         self.nixosModules.emubox
         ../hosts/emubox/facts.nix
+        ./boot-adaptations.nix
       ];
 
       system.stateVersion = "26.05";
-
-      # No disko layout and no boot loader here, so the initrd units that
-      # roll the root subvolume back and bind /persist have nothing to act
-      # on. Their behaviour is the install test's subject, not this one's.
-      #
-      # `suppressedUnits`, emphatically not `services.<name>.enable = false`:
-      # `enable = false` *masks* a unit (a symlink to /dev/null) but still
-      # emits its `.requires` links, and `modules/persistence` declares
-      # `requiredBy = [ "sysroot.mount" ]` and `requiredBy =
-      # [ "initrd-nixos-activation.service" ]`. systemd refuses to enqueue a
-      # job that Requires= a masked unit, so sysroot.mount would fail, the
-      # initrd would drop to emergency, and the test node would never boot.
-      boot.initrd.systemd.suppressedUnits = [
-        "rollback-root.service"
-        "persist-dirs.service"
-        "persist-machine-id.service"
-      ];
-
-      # Memory-backed stand-ins for the two subvolumes the layout would
-      # provide. neededForBoot because impermanence binds directories under
-      # /persist before the switch to the real root.
-      fileSystems."/persist" = {
-        device = "tmpfs";
-        fsType = "tmpfs";
-        neededForBoot = true;
-      };
-      fileSystems."/data" = {
-        device = "tmpfs";
-        fsType = "tmpfs";
-        neededForBoot = true;
-      };
-
-      # The committed test host key decrypts secrets/test.yaml, as the
-      # install test does. Both mkForce, because modules/secrets defines the
-      # same options for the box.
-      sops = {
-        defaultSopsFile = lib.mkForce ../secrets/test.yaml;
-        age.sshKeyPaths = lib.mkForce [ ./test_host_ed25519_key ];
-      };
-
-      # No host key is injected here, so sshd's key generation would fail on
-      # every run. Nothing in this test asserts on it.
-      services.openssh.enable = lib.mkForce false;
 
       # SDDM, cage and ES-DE under llvmpipe. 2 GB and a virtio GPU are what
       # nixpkgs' own cage test uses; both are one-line adjustments if the

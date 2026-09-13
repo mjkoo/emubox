@@ -176,6 +176,10 @@
             inherit self;
             pkgs = pkgsFor system;
           };
+          perSystem.controllers-hint = import ./tests/controllers-hint.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
           perSystem.snapshots = import ./tests/snapshots.nix {
             inherit self;
             pkgs = pkgsFor system;
@@ -200,6 +204,10 @@
             # The host's software modules as a plain node with a graphical
             # stack: the session, its crash counter and the greeter.
             kiosk = hostPkgs.testers.runNixOSTest (import ./tests/kiosk.nix { inherit self; });
+            # The host's software modules as a plain node with fixture
+            # controller ports: the port-to-player mapping, the session
+            # hint, and the owned-key harness later groups extend.
+            controllers = hostPkgs.testers.runNixOSTest (import ./tests/controllers.nix { inherit self; });
             # The kiosk session script on its own, because building it is
             # what runs its shellcheck: `writeShellApplication` does that in
             # its check phase, and nothing the admin's Mac can run reaches

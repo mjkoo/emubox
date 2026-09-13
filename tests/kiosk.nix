@@ -915,6 +915,12 @@ assert lib.assertMsg
               f"tr '\\0' '\\n' < /proc/{esde_pids()[0]}/environ"
           )
           assert "EMUBOX_CRASH_WINDOW=${toString crashWindow}" in environ, environ
+          # This node imports the real hosts/emubox/facts.nix, which records
+          # no controller ports, so the session hint is undeclared and never
+          # reaches the frontend's environment - the absence half of the
+          # controllers spec's enumeration-order scenario; its presence half
+          # is proven on tests/controllers.nix, which records fixture ports.
+          assert "SDL_JOYSTICK_DEVICE" not in environ, environ
 
       # --- kiosk: the settings the flake owns -------------------------------
 

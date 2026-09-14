@@ -12,6 +12,7 @@
     ./library
     ./saves
     ./backups
+    ./status
     ./remote
     ./secrets
   ];

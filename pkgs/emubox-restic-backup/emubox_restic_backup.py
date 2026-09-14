@@ -275,29 +275,37 @@ def status_layer(
     return True, f"{unit}: success at {timestamp}; recovery point {recovery}"
 
 
-def print_status(backup_unit: str, maintenance_unit: str) -> int:
+def print_status(backup_unit: str, maintenance_unit: str, *, local_only: bool = False) -> int:
     """Print one authoritative status line for local, backup and maintenance.
 
     The unit names are passed in rather than written here: `services.restic`
     derives them from the backup's name, so hardcoding them would couple this
     program to a string the Nix module owns.
+
+    ``local_only`` limits the report to the local snapshot layer, which every
+    box takes unconditionally; the two off-site layers exist only where
+    off-site backup is enabled, and this leaves them out entirely rather than
+    reporting them as unhealthy. It changes only which layers are reported:
+    the layers it does report, their freshness thresholds and their exit
+    statuses are exactly as the unrestricted report gives them.
     """
 
-    layers = [
-        ("btrbk-local.service", "local", ["path", "timestamp"], 2 * 60 * 60),
-        (
-            backup_unit,
-            "backup",
-            ["snapshotId", "repositoryId", "host", "tag", "timestamp"],
-            8 * 60 * 60,
-        ),
-        (
-            maintenance_unit,
-            "maintenance",
-            ["repositoryId", "newestProtectedSnapshotId", "timestamp"],
-            14 * 24 * 60 * 60,
-        ),
-    ]
+    layers = [("btrbk-local.service", "local", ["path", "timestamp"], 2 * 60 * 60)]
+    if not local_only:
+        layers += [
+            (
+                backup_unit,
+                "backup",
+                ["snapshotId", "repositoryId", "host", "tag", "timestamp"],
+                8 * 60 * 60,
+            ),
+            (
+                maintenance_unit,
+                "maintenance",
+                ["repositoryId", "newestProtectedSnapshotId", "timestamp"],
+                14 * 24 * 60 * 60,
+            ),
+        ]
     healthy = True
     for unit, kind, fields, age in layers:
         current, line = status_layer(
@@ -453,11 +461,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--emit-maintenance-marker", action="store_true")
     parser.add_argument("--emit-local-marker", action="store_true")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument(
+        "--local-only",
+        action="store_true",
+        help="With --status, report the local snapshot layer alone, leaving out both off-site layers.",
+    )
     parser.add_argument("--backup-unit", default="restic-backups-emubox.service")
     parser.add_argument("--maintenance-unit", default="restic-backups-emubox-maintenance.service")
     args = parser.parse_args(argv)
-    if Path(sys.argv[0]).name == "emubox-status":
-        args.status = True
     spec_actions = args.emit_backup_marker or args.emit_maintenance_marker or args.prepare
     if spec_actions and args.source_spec is None:
         parser.error("--source-spec is required for this action")
@@ -507,7 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.emit_local_marker:
         emit_local_marker(args.snapshot_dir)
     else:
-        return print_status(args.backup_unit, args.maintenance_unit)
+        return print_status(args.backup_unit, args.maintenance_unit, local_only=args.local_only)
     return 0
 
 

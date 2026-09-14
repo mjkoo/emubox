@@ -483,52 +483,21 @@ assert lib.assertMsg
       imports = [
         self.nixosModules.emubox
         ../hosts/emubox/facts.nix
+        ./boot-adaptations.nix
       ];
 
       system.stateVersion = "26.05";
 
-      # No disko layout and no boot loader here, so the initrd units that
-      # roll the root subvolume back and bind /persist have nothing to act
-      # on. Their behaviour is the install test's subject, not this one's.
-      #
-      # `suppressedUnits`, emphatically not `services.<name>.enable = false`:
-      # `enable = false` *masks* a unit (a symlink to /dev/null) but still
-      # emits its `.requires` links, and `modules/persistence` declares
-      # `requiredBy = [ "sysroot.mount" ]` and `requiredBy =
-      # [ "initrd-nixos-activation.service" ]`. systemd refuses to enqueue a
-      # job that Requires= a masked unit, so sysroot.mount would fail, the
-      # initrd would drop to emergency, and the test node would never boot.
-      boot.initrd.systemd.suppressedUnits = [
-        "rollback-root.service"
-        "persist-dirs.service"
-        "persist-machine-id.service"
-      ];
-
-      # Memory-backed stand-ins for the two subvolumes the layout would
-      # provide. neededForBoot because impermanence binds directories under
-      # /persist before the switch to the real root.
-      fileSystems."/persist" = {
-        device = "tmpfs";
-        fsType = "tmpfs";
-        neededForBoot = true;
-      };
-      fileSystems."/data" = {
-        device = "tmpfs";
-        fsType = "tmpfs";
-        neededForBoot = true;
-      };
-
-      # The committed test host key decrypts secrets/test.yaml, as the
-      # install test does. Both mkForce, because modules/secrets defines the
-      # same options for the box.
-      sops = {
-        defaultSopsFile = lib.mkForce ../secrets/test.yaml;
-        age.sshKeyPaths = lib.mkForce [ ./test_host_ed25519_key ];
-      };
-
-      # No host key is injected here, so sshd's key generation would fail on
-      # every run. Nothing in this test asserts on it.
-      services.openssh.enable = lib.mkForce false;
+      # Forced to "nothing recorded" rather than inherited from
+      # hosts/emubox/facts.nix: this node is a box whose bring-up has
+      # recorded no controller port and no pad identity, and both the
+      # session-hint absence and the owned-key pins below that leave
+      # identity-gated keys out mean exactly that state, whatever the real
+      # host goes on to record. A list option concatenates definitions of
+      # equal priority, so the ports need forcing as much as the identities.
+      emubox.facts.controllerPorts = lib.mkForce [ ];
+      emubox.facts.controllerIdentities.sdlGamepadName = lib.mkForce null;
+      emubox.facts.controllerIdentities.sdlJoystickGuid = lib.mkForce null;
 
       # SDDM, cage and ES-DE under llvmpipe. 2 GB and a virtio GPU are what
       # nixpkgs' own cage test uses; both are one-line adjustments if the
@@ -649,6 +618,7 @@ assert lib.assertMsg
       # accident, which is not what any of the group 5 subtests below are
       # about.
       customSystemsPath = pkgs.writeText "emubox-es_systems.xml" customSystems;
+      bindings = import ./lib/controller-bindings.nix;
     in
     ''
       import base64
@@ -659,6 +629,8 @@ assert lib.assertMsg
       import xml.etree.ElementTree as ET
 
       from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+      ${builtins.readFile ./lib/test_helpers.py}
 
       APPDATA = ${py appdataDir}
       OWNED_VALUES = ${py ownedValuesFile}
@@ -729,29 +701,6 @@ assert lib.assertMsg
               e.get("name"): (e.tag, e.get("value"))
               for e in ET.fromstring(f"<r>{body}</r>")
           }
-
-      def ini_value(text, section, key):
-          """The value of one `key = value` line, or None if it is absent.
-
-          `section=None` reads a sectionless file (RetroArch's flat config)
-          by never leaving the "in section" state; otherwise only lines
-          under the matching `[section]` header count, mirroring
-          emubox-prepare's own section matching without importing
-          it - this is a plain reader, not the independent-implementation
-          concern (that is the DuckStation decrypt below).
-          """
-          in_section = section is None
-          for line in text.splitlines():
-              stripped = line.strip()
-              if stripped.startswith("[") and stripped.endswith("]"):
-                  in_section = stripped[1:-1] == section
-                  continue
-              if not in_section or "=" not in stripped:
-                  continue
-              k, _, v = stripped.partition("=")
-              if k.strip() == key:
-                  return v.strip()
-          return None
 
       def retroarch_all_values(text, key):
           """Every assignment of `key` in a RetroArch-format file, in file
@@ -957,6 +906,16 @@ assert lib.assertMsg
               f"tr '\\0' '\\n' < /proc/{esde_pids()[0]}/environ"
           )
           assert "EMUBOX_CRASH_WINDOW=${toString crashWindow}" in environ, environ
+          # This node forces "no controller port recorded", so the session
+          # hint is undeclared and never reaches the frontend's
+          # environment. EMUBOX_CRASH_WINDOW, asserted just above, is
+          # declared through the same environment.sessionVariables and does
+          # arrive here, which is what makes this absence mean something.
+          # The hint's presence is proven on tests/controllers.nix, which
+          # records fixture ports and has no session of its own: there it is
+          # read from /etc/set-environment and from the environment a PAM
+          # login receives, the mechanism this session's own login uses.
+          assert "SDL_JOYSTICK_DEVICE" not in environ, environ
 
       # --- kiosk: the settings the flake owns -------------------------------
 
@@ -1043,11 +1002,11 @@ assert lib.assertMsg
       # right and unapplied, or applied and wrong" reasoning the ES-DE pin
       # above already applies). `None` in place of a section name is
       # RetroArch's own flat, sectionless format (`ini_value`'s own
-      # convention above). Split in two because the two tiers are checked
-      # differently against DISK below: an enforced key's value is asserted
-      # there, a seeded key's presence is, since a seeded value on disk is
-      # whatever a player last chose. Against the rendered contract, which
-      # is what `check_pins` reads, both tiers are checked by value.
+      # convention above). Split in two because the rendered contract keeps
+      # the tiers apart, and `check_pins` below reads each against its own
+      # table, by value in both. The on-disk walk after it checks both tiers
+      # by value as well, which holds for a seeded key only because nothing
+      # on this node changes one after the editor writes it.
       #
       # A later review round found this table guarded key PRESENCE only -
       # `names - actual.keys()` - never the value sitting behind a present
@@ -1114,6 +1073,14 @@ assert lib.assertMsg
       # (its own comment on `azaharConfigFile` records why - the setting is
       # compiled out of this flake's Azahar build, so there was nothing
       # left to pin).
+      # This node forces its controllerIdentities facts to null (see the
+      # node above), so a key that depends on them - Dolphin's gameplay
+      # Device lines and its GCPadNew.ini/
+      # WiimoteNew.ini/Hotkeys.ini profiles, Azahar's whole Controls
+      # section - is undeclared on this node and pinned nowhere below; it is
+      # asserted on the fixture node that records the identity instead.
+      # Azahar has no owned route back at the pinned version, so it
+      # contributes no key here at all.
       PINNED_OWNED_KEYS_ENFORCE = {
           f"{PLAYER_HOME}/.config/dolphin-emu/Dolphin.ini": {
               "Display": {"Fullscreen": "True"},
@@ -1124,13 +1091,40 @@ assert lib.assertMsg
               # `PermissionAsked` is what suppresses it; `Enabled` pins the
               # answer the suppressed dialog would otherwise have decided.
               "Analytics": {"PermissionAsked": "True", "Enabled": "False"},
+              # Interface.ConfirmStop: the route back's own confirmation
+              # suppression, free of the pad's identity.
+              "Interface": {"ConfirmStop": "False"},
           },
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
-              "UI": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
+              "UI": {
+                  "StartFullscreen": "true",
+                  "SetupWizardIncomplete": "false",
+                  # SettingsVersion: the acceptance key a freshly prepared
+                  # file needs so PCSX2's own first start does not reset it.
+                  "SettingsVersion": "1",
+                  # ConfirmShutdown: suppresses the route back's own
+                  # confirmation.
+                  "ConfirmShutdown": "false",
+              },
               "Folders": {"Bios": "/data/bios"},
+              # InputSources.SDL: every SDL-<n>/... binding, route back and
+              # gameplay alike, reads nothing without this.
+              "InputSources": {"SDL": "true"},
+              # Hotkeys.ShutdownVM: the route back itself, Back then Start.
+              "Hotkeys": {"ShutdownVM": "SDL-0/Back & SDL-0/Start"},
           },
           f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini": {
               "Graphics": {"FullScreen": "True"},
+              # AskForExitConfirmationAfterSeconds: suppresses the pause
+              # menu's own exit confirmation outright.
+              "General": {"AskForExitConfirmationAfterSeconds": "0"},
+          },
+          # New to the editor: PPSSPP's own control-mapping file, distinct
+          # from ppsspp.ini above.
+          f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini": {
+              # ControlMapping.Pause: the route back, a Back+Start chord
+              # that opens the pause menu's Exit entry.
+              "ControlMapping": {"Pause": "10-196:10-197"},
           },
           f"{PLAYER_HOME}/.config/azahar-emu/qt-config.ini": {
               "UI": {
@@ -1141,14 +1135,48 @@ assert lib.assertMsg
               },
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
-              "Main": {"StartFullscreen": "true", "SetupWizardIncomplete": "false"},
+              "Main": {
+                  "StartFullscreen": "true",
+                  "SetupWizardIncomplete": "false",
+                  # ConfirmPowerOff: suppresses the route back's own
+                  # confirmation.
+                  "ConfirmPowerOff": "false",
+              },
               "BIOS": {"SearchDirectory": "/data/bios"},
+              # InputSources.SDL: the same gate PCSX2's own key above is.
+              "InputSources": {"SDL": "true"},
+              # Hotkeys.PowerOff: the route back itself, Back then Start.
+              "Hotkeys": {"PowerOff": "SDL-0/Back & SDL-0/Start"},
           },
           f"{PLAYER_HOME}/.config/scummvm/scummvm.ini": {
               "scummvm": {
                   "fullscreen": "true",
                   "confirm_exit": "false",
                   "gui_return_to_launcher_at_exit": "false",
+                  # joystick_num: the joystick index every keymap below
+                  # opens through.
+                  "joystick_num": "0",
+              },
+              "keymapper": {
+                  # keymap_global_QUIT: Guide ends the process directly in
+                  # every engine but four, whose own keymaps take Guide for
+                  # a menu action instead.
+                  "keymap_global_QUIT": "JOY_GUIDE",
+                  # keymap_global_MENU: Start opens the Global Main Menu,
+                  # whose Quit reaches those four engines instead.
+                  "keymap_global_MENU": "JOY_START",
+                  # The Global Main Menu's own Quit button is reached
+                  # through the virtual mouse and the GUI's interact
+                  # action, not by D-pad focus - these five keys hold
+                  # ScummVM's own compiled defaults, spelled out because its
+                  # writer erases a value equal to its default on every
+                  # save, the same reason keymap_global_MENU above is
+                  # spelled explicitly.
+                  "keymap_global_VMOUSEUP": "JOY_LEFT_STICK_Y-",
+                  "keymap_global_VMOUSEDOWN": "JOY_LEFT_STICK_Y+",
+                  "keymap_global_VMOUSELEFT": "JOY_LEFT_STICK_X-",
+                  "keymap_global_VMOUSERIGHT": "JOY_LEFT_STICK_X+",
+                  "keymap_gui_INTRCT": "JOY_A",
               },
           },
       }
@@ -1169,9 +1197,28 @@ assert lib.assertMsg
           },
           f"{PLAYER_HOME}/.config/PCSX2/inis/PCSX2.ini": {
               "EmuCore/GS": {"upscale_multiplier": "1"},
+              # Pad1/Pad2: PCSX2's own Automatic Mapping output for a
+              # freshly connected pad, kept as the pristine default gameplay
+              # set; Pad2.Type is the setting that connects player two's
+              # slot, which PCSX2 leaves disconnected by default. The
+              # bindings are tests/lib/controller-bindings.nix's hand-typed
+              # tables, shared with tests/controllers.nix.
+              "Pad1": {**${py (bindings.pcsx2Pad 0)}, "Type": "DualShock2"},
+              "Pad2": {**${py (bindings.pcsx2Pad 1)}, "Type": "DualShock2"},
           },
           f"{PLAYER_HOME}/.local/share/duckstation/settings.ini": {
               "GPU": {"PGXPEnable": "true", "ResolutionScale": "4"},
+              # Pad1/Pad2: DuckStation's own Automatic Mapping output for a
+              # freshly connected pad; Pad1 needs no Type pin (DuckStation's
+              # own fresh-file default already connects it), Pad2.Type is
+              # the setting that connects player two's slot.
+              "Pad1": ${py (bindings.duckstationPad 0)},
+              "Pad2": {**${py (bindings.duckstationPad 1)}, "Type": "AnalogController"},
+          },
+          # The complete PSP gameplay set the loader would drop otherwise,
+          # minus Pause, which is the route back above and so enforced.
+          f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini": {
+              "ControlMapping": ${py bindings.ppssppControls},
           },
       }
 
@@ -1194,9 +1241,10 @@ assert lib.assertMsg
                           # rendered contract rather than the disk: what the
                           # module declares is the same on every boot, so a
                           # seeded default that drifted here is a module edit,
-                          # not a player's choice. Presence-only belongs to the
-                          # on-disk walk below, and stays there. The ES-DE pin
-                          # above checks its own seeded pair the same way.
+                          # not a player's choice. The on-disk walk below
+                          # checks disk against that same contract, by value
+                          # in both tiers too. The ES-DE pin above checks its
+                          # own seeded pair the same way.
                           assert got == expected, f"{path} [{section}] ({tier}): {name}: {got!r} != {expected!r}"
 
           check_pins(PINNED_OWNED_KEYS_ENFORCE, "enforce")
@@ -1205,10 +1253,14 @@ assert lib.assertMsg
           # The walk: every file the rendered JSON actually names (not just
           # the pinned subset above), so a key a concurrent change adds is
           # checked against disk automatically rather than silently
-          # unverified until someone remembers to update this test. Every
-          # enforced key is checked by value, every seeded key only by
-          # presence - a seeded key is never corrected, so its on-disk
-          # value can legitimately be whatever a player last set it to.
+          # unverified until someone remembers to update this test. Both
+          # tiers are checked by value here, against the rendered contract's
+          # own declared default - not against each other, and not against
+          # this test's own pinned literals above, which is a separate,
+          # independent check. A seeded key is never corrected once written,
+          # so this only ever runs where nothing has changed it since
+          # `emubox-prepare` last wrote it; where a player's own later
+          # choice is expected to survive, nothing here re-runs the walk.
           def owned_paths(fmt, path, keys):
               if fmt == "retroarch":
                   return [(None, key, expected) for key, expected in keys.items()]
@@ -1221,53 +1273,91 @@ assert lib.assertMsg
               else:
                   raise AssertionError(f"{path}: unhandled owned-file format {fmt!r}")
 
-          for path, entry in owned["files"].items():
-              if path == "settings/es_settings.xml":
-                  continue  # its own pin-then-walk above already covers it
-              fmt = entry["format"]
-              enforce_assertions = owned_paths(fmt, path, entry["enforce"])
-              seed_assertions = owned_paths(fmt, path, entry["seed"])
+          def walk_owned_files(owned):
+              for path, entry in owned["files"].items():
+                  if path == "settings/es_settings.xml":
+                      continue  # its own pin-then-walk above already covers it
+                  fmt = entry["format"]
+                  enforce_assertions = owned_paths(fmt, path, entry["enforce"])
+                  seed_assertions = owned_paths(fmt, path, entry["seed"])
 
-              if not enforce_assertions and not seed_assertions:
-                  # A file the flake owns zero static keys in - PCSX2's
-                  # `secrets.ini` and Dolphin's `RetroAchievements.ini`, both
-                  # declared with empty `enforce`/`seed` tables in
-                  # modules/emulators because their only content is
-                  # retroachievements namespace keys (token, or
-                  # enabled/hardcore/username/token) written at runtime
-                  # rather than through this static table. There
-                  # is nothing this walk could check here even
-                  # if the file existed, and the matching prepare-side fix
-                  # (the ini/retroarch editors now leave a file alone
-                  # entirely rather than touching it for zero keys) means
-                  # such a file is legitimately absent until something
-                  # actually needs writing into it - a `cat` here would fail
-                  # on an absence that is correct, not a bug (this is what
-                  # broke this subtest in CI against PCSX2's `secrets.ini`
-                  # before a token had ever resolved). Skip it explicitly
-                  # rather than loosen the walk to "cat if it exists" for
-                  # every file: a file that DOES own a static key still has
-                  # to exist and carry it, unconditionally, below.
-                  #
-                  # Not asserted absent here either, deliberately: Dolphin's
-                  # `RetroAchievements.ini` has the same empty static tables
-                  # but is not reliably absent at this point - its
-                  # enabled/hardcore keys are written unconditionally by
-                  # `apply_retroachievements` regardless of network, unlike
-                  # PCSX2's, whose only key is the token itself.
-                  # A blanket "must be absent whenever there are no static
-                  # keys" would be wrong for one of these two files, not
-                  # merely early - so this walk stays silent on existence
-                  # for a zero-key file rather than asserting either way.
-                  continue
+                  if not enforce_assertions and not seed_assertions:
+                      # A file the flake owns zero static keys in. Two kinds
+                      # reach here: PCSX2's `secrets.ini` and Dolphin's
+                      # `RetroAchievements.ini`, both declared with empty
+                      # `enforce`/`seed` tables in modules/emulators because
+                      # their only content is retroachievements namespace
+                      # keys (token, or enabled/hardcore/username/token)
+                      # written at runtime rather than through this static
+                      # table; and, on this node, whose pad-identity facts
+                      # are forced empty, Dolphin's `Hotkeys.ini`,
+                      # `GCPadNew.ini` and `WiimoteNew.ini`, every key of
+                      # which waits on that identity. There
+                      # is nothing this walk could check here even
+                      # if the file existed, and the matching prepare-side fix
+                      # (the ini/retroarch editors now leave a file alone
+                      # entirely rather than touching it for zero keys) means
+                      # such a file is legitimately absent until something
+                      # actually needs writing into it - a `cat` here would fail
+                      # on an absence that is correct, not a bug (this is what
+                      # broke this subtest in CI against PCSX2's `secrets.ini`
+                      # before a token had ever resolved). Skip it explicitly
+                      # rather than loosen the walk to "cat if it exists" for
+                      # every file: a file that DOES own a static key still has
+                      # to exist and carry it, unconditionally, below.
+                      #
+                      # Not asserted absent here either, deliberately: Dolphin's
+                      # `RetroAchievements.ini` has the same empty static tables
+                      # but is not reliably absent at this point - its
+                      # enabled/hardcore keys are written unconditionally by
+                      # `apply_retroachievements` regardless of network, unlike
+                      # PCSX2's, whose only key is the token itself.
+                      # A blanket "must be absent whenever there are no static
+                      # keys" would be wrong for one of these two files, not
+                      # merely early - so this walk stays silent on existence
+                      # for a zero-key file rather than asserting either way.
+                      continue
 
-              text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
-              for section, key, expected in enforce_assertions:
-                  got = owned_file_value(fmt, text, section, key)
-                  assert got == expected, f"{path} [{section}]: {key}: {got!r} != {expected!r}"
-              for section, key, _expected in seed_assertions:
-                  got = owned_file_value(fmt, text, section, key)
-                  assert got is not None, f"{path} [{section}]: {key}: missing from disk (seeded key)"
+                  text = machine.succeed(f"cat {shlex.quote(resolve(APPDATA, path))}")
+                  for section, key, expected in enforce_assertions:
+                      got = owned_file_value(fmt, text, section, key)
+                      assert got == expected, f"{path} [{section}] (enforce): {key}: {got!r} != {expected!r}"
+                  for section, key, expected in seed_assertions:
+                      got = owned_file_value(fmt, text, section, key)
+                      assert got == expected, f"{path} [{section}] (seed): {key}: {got!r} != {expected!r}"
+
+          walk_owned_files(owned)
+
+      with subtest("The on-disk walk's seeded branch catches a seeded value that drifted from the flake's default"):
+          # PPSSPP's own seeded ControlMapping.Up, altered directly on disk
+          # to a value the flake never declared - standing in for whatever
+          # wrote a seeded binding wrong, since nothing in this editor's own
+          # operation would ever do it deliberately. Presence alone would
+          # pass this unchanged; only a by-value comparison catches it.
+          ppsspp_controls = f"{PLAYER_HOME}/.config/ppsspp/PSP/SYSTEM/controls.ini"
+          drift = f"sed -i 's/^Up = 10-19$/Up = 10-999/' {ppsspp_controls}"
+          restore = f"sed -i 's/^Up = 10-999$/Up = 10-19/' {ppsspp_controls}"
+          machine.succeed(f"su player -s /bin/sh -c {shlex.quote(drift)}")
+          # The edit itself landed: `sed` exits 0 whether or not it matched,
+          # and a missed match would otherwise blame the walk below.
+          machine.succeed(f"grep -qx 'Up = 10-999' {ppsspp_controls}")
+          try:
+              walk_owned_files(owned)
+          except AssertionError as error:
+              # The drifted key itself, not some other failure the walk
+              # happened to hit first.
+              message = str(error)
+              assert "controls.ini" in message and "(seed): Up:" in message, message
+          else:
+              raise AssertionError(
+                  "the on-disk walk did not catch a seeded key altered away "
+                  "from the flake's default"
+              )
+          finally:
+              machine.succeed(f"su player -s /bin/sh -c {shlex.quote(restore)}")
+          # Confirms the restore actually put the file back, rather than
+          # leaving the drifted value in place for whatever runs next.
+          walk_owned_files(owned)
 
       # --- kiosk: custom systems, both branches -----------------------------
 

@@ -157,6 +157,10 @@
           perSystem.emubox-restic-backup =
             (pkgsFor system).callPackage ./pkgs/emubox-restic-backup/package.nix
               { };
+          perSystem.emubox-status = (pkgsFor system).callPackage ./pkgs/emubox-status/package.nix { };
+          perSystem.emubox-controllers-status =
+            (pkgsFor system).callPackage ./pkgs/emubox-controllers-status/package.nix
+              { };
 
           # The retroachievements spec's Disabled scenario, asserted at eval
           # time. Per-system like the two above rather than under `hostOnly`,
@@ -173,6 +177,22 @@
             pkgs = pkgsFor system;
           };
           perSystem.owned-key-tiers = import ./tests/owned-key-tiers.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
+          perSystem.controllers-hint = import ./tests/controllers-hint.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
+          perSystem.controllers-config = import ./tests/controllers-config.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
+          perSystem.emubox-status-packaging = import ./tests/emubox-status-packaging.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
+          perSystem.status = import ./tests/status.nix {
             inherit self;
             pkgs = pkgsFor system;
           };
@@ -200,6 +220,11 @@
             # The host's software modules as a plain node with a graphical
             # stack: the session, its crash counter and the greeter.
             kiosk = hostPkgs.testers.runNixOSTest (import ./tests/kiosk.nix { inherit self; });
+            # The host's software modules as a plain node with fixture
+            # controller ports and fixture pad identities: the port-to-player
+            # mapping, the session hint, the owned controller keys and the
+            # status aggregation.
+            controllers = hostPkgs.testers.runNixOSTest (import ./tests/controllers.nix { inherit self; });
             # The kiosk session script on its own, because building it is
             # what runs its shellcheck: `writeShellApplication` does that in
             # its check phase, and nothing the admin's Mac can run reaches

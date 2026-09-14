@@ -7,26 +7,7 @@ to it, the frontend's per-system emulator overrides, and the BIOS
 directory with its checking tool. The controller-only route out of a
 standalone emulator is owned by the `controllers` capability, not here.
 
-## Requirements
-### Requirement: Each system launches with its assigned emulator
-The frontend SHALL launch every configured game system with the emulator
-the configuration assigns it - the RetroArch core or standalone program
-from the design's system table - full screen, with no emulator setup
-screen in the path from choosing a game to playing it. Systems whose
-assigned emulator differs from the frontend's bundled default SHALL get
-that assignment through the frontend's custom systems definition, so the
-frontend's own files stay unmodified. PS1 SHALL launch DuckStation, with
-the Beetle PSX HW core remaining selectable in the frontend as the
-alternate emulator so PS1 survives a broken DuckStation.
-
-#### Scenario: Game launch uses the assigned emulator
-- **WHEN** a game is chosen in the frontend for a system whose assigned
-  emulator differs from the frontend's default
-- **THEN** the assigned emulator is the process that runs the game
-
-#### Scenario: PS1 alternate present
-- **WHEN** the frontend's alternate emulator list for PS1 is read
-- **THEN** DuckStation is the default entry and Beetle PSX HW is offered
+## MODIFIED Requirements
 
 ### Requirement: The flake owns each emulator's launch settings
 The flake owns a setting in one of two tiers. An **enforced** setting is
@@ -268,71 +249,3 @@ governs and the replacement carries only the owned values.
 - **THEN** it is replaced by a file carrying every owned value of both
   tiers that this system writes into it before the frontend launches,
   and the session goes on to launch the frontend rather than ending
-
-### Requirement: RetroArch's static enforced settings are delivered at launch
-Eight of RetroArch's enforced settings have values fixed at build time
-and are delivered at launch rather than written into `retroarch.cfg`: the
-core directory, the system directory, the autosave interval, fullscreen,
-the two updater menu entries and the two controller button combos. They
-SHALL be delivered to RetroArch through configuration the flake provides
-read-only at launch, which RetroArch reads on every start and which takes
-precedence over `retroarch.cfg` for those settings. Those settings SHALL
-take effect regardless of what `retroarch.cfg` holds for them, and this
-system SHALL NOT edit `retroarch.cfg` to assert, correct, reduce or
-remove them - a stale copy there is overridden at every load and is left
-alone, where "left alone" means this system does not edit it. RetroArch
-itself rewrites `retroarch.cfg` from its effective settings when it
-exits, so a copy there may come to hold the flake's value; that is the
-emulator's own write, outside this system's guarantees, and nothing here
-depends on it or prevents it. The flake-provided configuration SHALL
-carry, at least, every one of those eight settings with the flake's
-values and the RetroArch package wrapper's own asset, autoconfig and
-core-info directory paths, and SHALL carry no credential and no seeded
-setting. Every other
-enforced RetroArch setting - the save and state directories the `saves`
-capability routes, and the RetroAchievements credentials and switches,
-which are decided at runtime - and every seeded RetroArch setting stays
-in `retroarch.cfg` under the ownership requirement's rules.
-
-#### Scenario: Stale value in the emulator's own file loses
-- **WHEN** `retroarch.cfg` assigns one of the launch-delivered settings a
-  different value than the flake declares and RetroArch launches
-- **THEN** RetroArch runs with the flake's value, and the next launch of
-  the frontend does not write `retroarch.cfg` for that setting
-
-#### Scenario: The delivered configuration is complete
-- **WHEN** the flake's RetroArch package is built
-- **THEN** the configuration it delivers at launch exists, carries every
-  one of the eight launch-delivered settings with the flake's value
-  alongside the package wrapper's own asset, autoconfig and core-info
-  directory paths, and carries no credential and no seeded setting
-
-#### Scenario: Save directories stay in the emulator's own file
-- **WHEN** the frontend is about to launch
-- **THEN** `retroarch.cfg` carries the save and state directories the
-  `saves` capability routes as enforced settings, written and corrected
-  there under the ownership requirement, and the launch-time
-  configuration does not carry them
-
-### Requirement: BIOS files live in one place and are checkable
-Emulators SHALL read firmware and BIOS images from `/data/bios`, laid
-out under the names the configuration's declared BIOS inventory lists. The system SHALL
-provide `emubox-check-bios`, a report-only command that compares
-`/data/bios` against the declared name and checksum list and reports
-each file as present and matching, present with a wrong checksum, or
-missing; files present under `/data/bios` but not declared SHALL be
-listed as informational extras without affecting the exit status. It
-SHALL modify nothing and SHALL exit successfully when everything
-declared matches and unsuccessfully otherwise, so scripts can gate on
-it.
-
-#### Scenario: Complete BIOS set
-- **WHEN** every declared file is present under `/data/bios` with the
-  declared checksum and `emubox-check-bios` runs
-- **THEN** it reports every file as matching and exits successfully
-
-#### Scenario: Missing or wrong file
-- **WHEN** a declared file is absent or its checksum differs and
-  `emubox-check-bios` runs
-- **THEN** the report names that file and its state and the exit status
-  is unsuccessful, and `/data/bios` is unmodified

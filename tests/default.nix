@@ -207,6 +207,13 @@ in
   # The display-manager fallback (see the header).
   services.displayManager.sddm.enable = lib.mkForce false;
 
+  # Forced rather than inherited from hosts/emubox/facts.nix: the status
+  # checks below prove the controllers section on a box that records no
+  # controller port at all, and that has to stay true once bring-up records
+  # the real ports. A list option concatenates definitions of equal
+  # priority, so only a forced empty list replaces them.
+  emubox.facts.controllerPorts = lib.mkForce [ ];
+
   # Eval-time checks of what the configuration declares. The firewall
   # invariant itself lives in modules/hardware so it guards the shipped
   # system; these guard the test's own inputs.
@@ -230,6 +237,8 @@ in
   disko.tests.extraChecks = ''
     import contextlib
     import json
+
+    ${builtins.readFile ./lib/test_helpers.py}
 
     # The harness itself only waits for local-fs.target; every boot phase
     # starts by waiting for multi-user.target and asserts that nothing
@@ -272,7 +281,7 @@ in
         refusal or a misspelled unit name just as readily as by the backup
         running and failing, which is the only thing the fault-injection
         subtests actually mean. A run that never happened leaves the id, and
-        so `emubox-status`, pointing at the previous success.
+        so `emubox-restic-backup --status`, pointing at the previous success.
         """
         reset_restic_units()
         before = unit_property(BACKUP, "InvocationID")
@@ -533,14 +542,54 @@ in
         machine.succeed(
             "journalctl -u restic-backups-emubox-maintenance.service -o cat --no-pager | grep -F 'EMUBOX_MARKER='"
         )
-        machine.succeed("emubox-status")
+        # Succeeds only while the backups section is `ok` and no controller
+        # outside the accepted modes is present: an unoccupied or unrecorded
+        # port is never a finding, so the controllers section is `ok` here
+        # either way.
+        status = machine.succeed("emubox-status")
+        # This is also the node that forces no controller port recorded at
+        # all, which the fixture-driven controllers node cannot exercise
+        # itself: the section says so, plainly, and does not warn about it.
+        assert "no controller ports are recorded" in status, status
         # `start_backup` asserts the backup actually ran and failed. Status
         # reads the unit's current invocation, so a backup that never started
         # would leave the previous success standing and report healthy.
         with restic_fault("restic-test-fail"):
             start_backup(expect="exit-code")
-            status = machine.fail("emubox-status")
+            status = machine.fail("emubox-restic-backup --status")
             assert "restic-backups-emubox.service: latest invocation failed" in status, status
+            # Proves the section labelling once, here, rather than at every
+            # other call site: the same substring must appear under the
+            # backups section when the aggregator runs the same reporter.
+            _, aggregate = machine.execute("emubox-status")
+            backups_section = status_sections(aggregate)["backups"]
+            assert backups_section.splitlines()[0] == "backups: warn", aggregate
+            assert "restic-backups-emubox.service: latest invocation failed" in backups_section, aggregate
+
+    with checked("The wrapped backup helper reaches systemctl and journalctl through its own runtime path"):
+        # Read the registered argv rather than retyping it, so a rename of
+        # the helper's own path fails here instead of silently testing a
+        # stale command. Run with an environment whose PATH carries neither
+        # systemctl nor journalctl: naming the helper by store path is what
+        # makes its own wrapper responsible for both, so this must still
+        # report the box's layers rather than crash on a missing program.
+        reporters = json.loads(machine.succeed("cat /etc/emubox/status-reporters"))
+        backups_reporter = next(r for r in reporters if r["name"] == "backups")
+        argv = " ".join(shlex.quote(part) for part in backups_reporter["command"])
+        # Both streams, since a traceback from a missing program goes to
+        # stderr, which `execute` alone would not return.
+        _, output = machine.execute(f"env -i PATH= {argv} 2>&1")
+        assert "btrbk-local.service" in output, output
+        assert "Traceback" not in output, output
+        assert "FileNotFoundError" not in output, output
+        assert "No such file or directory" not in output, output
+        # The real entry point under the same empty PATH: the system path's
+        # own emubox-status runs every registered reporter, each through its
+        # own packaging, and none of them fails to run.
+        _, output = machine.execute("env -i PATH= /run/current-system/sw/bin/emubox-status 2>&1")
+        assert "backups:" in output, output
+        assert "controllers:" in output, output
+        assert "did not run" not in output, output
 
     with checked("Cloud failures do not disable local gameplay or future backup scheduling"):
         with restic_fault("restic-test-fail"):
@@ -566,7 +615,7 @@ in
             assert machine.succeed(
                 "stat -c %Y /data/cache/emubox-restic-test/backup-ran"
             ).strip() == before, "restic backed up despite a failed init gate"
-            status = machine.fail("emubox-status")
+            status = machine.fail("emubox-restic-backup --status")
             assert "restic-backups-emubox.service: latest invocation failed" in status, status
         start_backup()
 

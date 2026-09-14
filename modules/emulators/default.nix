@@ -52,24 +52,33 @@ let
   # is run in portable mode: that would need a marker file
   # (`portable.txt`/`portable.ini`) sitting beside the binary in the Nix
   # store, which none of these derivations puts there.
+  # Each standalone's own directory is bound once here and reused for
+  # every file this module owns inside it, and again through
+  # `emubox.emulators.configDirs` below for `modules/controllers` - one
+  # binding per emulator rather than a file-path string parsed apart in two
+  # places, so the two modules' paths cannot drift.
   retroarchConfigFile = "${playerHome}/.config/retroarch/retroarch.cfg";
-  dolphinConfigFile = "${playerHome}/.config/dolphin-emu/Dolphin.ini";
+  dolphinConfigDir = "${playerHome}/.config/dolphin-emu";
+  dolphinConfigFile = "${dolphinConfigDir}/Dolphin.ini";
   # Dolphin keeps its RetroAchievements settings in a *second* ini beside
   # Dolphin.ini, not inside it (Core/Config/AchievementSettings.cpp reads
   # and writes a config layer scoped to this file's own name) - both files
   # need their own `format` entry in ownedFiles below.
-  dolphinAchievementsFile = "${playerHome}/.config/dolphin-emu/RetroAchievements.ini";
-  pcsx2ConfigFile = "${playerHome}/.config/PCSX2/inis/PCSX2.ini";
+  dolphinAchievementsFile = "${dolphinConfigDir}/RetroAchievements.ini";
+  pcsx2ConfigDir = "${playerHome}/.config/PCSX2/inis";
+  pcsx2ConfigFile = "${pcsx2ConfigDir}/PCSX2.ini";
   # PCSX2 keeps the RA token only here, in a second file, never in
   # PCSX2.ini itself (Achievements.cpp's SetSecretsSettingsLayer) - both
   # files share the literal section name `Achievements`.
-  pcsx2SecretsFile = "${playerHome}/.config/PCSX2/inis/secrets.ini";
-  ppssppConfigFile = "${playerHome}/.config/ppsspp/PSP/SYSTEM/ppsspp.ini";
+  pcsx2SecretsFile = "${pcsx2ConfigDir}/secrets.ini";
+  ppssppConfigDir = "${playerHome}/.config/ppsspp/PSP/SYSTEM";
+  ppssppConfigFile = "${ppssppConfigDir}/ppsspp.ini";
   # Not in `ownedFiles`: this holds the RA token as raw bytes with no
   # `key=value` framing at all, so none of prepare's file-format editors
   # can touch it. See the `ppsspp` entry in `raEmulators` below.
-  ppssppTokenFile = "${playerHome}/.config/ppsspp/PSP/SYSTEM/ppsspp_retroachievements.dat";
-  azaharConfigFile = "${playerHome}/.config/azahar-emu/qt-config.ini";
+  ppssppTokenFile = "${ppssppConfigDir}/ppsspp_retroachievements.dat";
+  azaharConfigDir = "${playerHome}/.config/azahar-emu";
+  azaharConfigFile = "${azaharConfigDir}/qt-config.ini";
   # DuckStation is the one emulator here whose data root is NOT under
   # `.config`: `Core::SetDataRoot` falls back to a *hardcoded*
   # `$HOME/.local/share/duckstation` on Linux when `XDG_CONFIG_HOME` is
@@ -88,8 +97,10 @@ let
   # future DuckStation bump could change this wrapper's behaviour; if it
   # ever starts setting `APPIMAGE`, or nixpkgs switches this package off
   # `wrapType2`, this verdict needs rechecking before the bump lands.
-  duckstationConfigFile = "${playerHome}/.local/share/duckstation/settings.ini";
-  scummvmConfigFile = "${playerHome}/.config/scummvm/scummvm.ini";
+  duckstationConfigDir = "${playerHome}/.local/share/duckstation";
+  duckstationConfigFile = "${duckstationConfigDir}/settings.ini";
+  scummvmConfigDir = "${playerHome}/.config/scummvm";
+  scummvmConfigFile = "${scummvmConfigDir}/scummvm.ini";
 
   # DuckStation's token encryption keys off the raw bytes of this file;
   # it is not under the appdata root because the base system already keeps
@@ -242,8 +253,8 @@ let
   # specifically `resources/systems/linux/es_systems.xml`. ES-DE's own rule
   # (`FileData::findEmulator`, `es-app/src/FileData.cpp`) treats a system's
   # *first* `<command>` as the default when no per-game preference is
-  # saved, so overriding an assignment means rewriting command order, not
-  # inventing new command text. Its custom-systems loader
+  # saved, so overriding an assignment means rewriting command order -
+  # almost never inventing new command text. Its custom-systems loader
   # (`SystemData::loadConfig`, `es-app/src/SystemData.cpp`) skips any
   # `<system>` missing a `<fullname>`, `<path>`, `<extension>` or at least
   # one `<command>` - there is no partial-override form that names only the
@@ -252,9 +263,12 @@ let
   # will be overwritten by the last occurrence"). Every entry below is
   # therefore the bundled system copied in full and verbatim - every field,
   # every `<command label>` string, every `%EMULATOR_X%`/`%CORE_RETROARCH%`
-  # placeholder - with only the command order rewritten. `<path>` is never
-  # touched, since that identity is what makes the override take effect at
-  # all.
+  # placeholder - with only the command order rewritten, `pspOverride`
+  # excepted: its standalone command also gains `--pause-menu-exit`, a
+  # launch flag PPSSPP needs to give a pad a route back to the frontend at
+  # all, which is genuinely new command text rather than a reordering - see
+  # its own comment for why. `<path>` is never touched, since that identity
+  # is what makes the override take effect at all.
   #
   # The placeholders resolve with no override needed: every standalone this
   # flake installs lands in `environment.systemPackages`, which puts it on
@@ -446,14 +460,24 @@ let
     </system>'';
 
   # Only the standalone `ppsspp` package is installed, not the RetroArch
-  # PPSSPP core ES-DE defaults to.
+  # PPSSPP core ES-DE defaults to. Its standalone command also carries
+  # `--pause-menu-exit`: without it, the pause menu PPSSPP's own Pause
+  # hotkey opens has no way out but PPSSPP's own menu
+  # (`UI/PauseScreen.cpp`); with it, the menu's last entry is Exit, which
+  # ends the process (`PauseScreen.cpp:687-693,861-884`;
+  # `UI/NativeApp.cpp:576-577`) and returns to the frontend under the
+  # command it launched PPSSPP with - the standalone's whole route back.
+  # This is the one override in this table whose command text is more than
+  # the bundled system's own commands reordered - see the comment on
+  # `customSystems` below for why that departure is limited to this one
+  # flag.
   pspOverride = ''
     <system>
       <name>psp</name>
       <fullname>Sony PlayStation Portable</fullname>
       <path>%ROMPATH%/psp</path>
       <extension>.chd .CHD .cso .CSO .elf .ELF .iso .ISO .pbp .PBP .prx .PRX .7z .7Z .zip .ZIP</extension>
-      <command label="PPSSPP (Standalone)">%EMULATOR_PPSSPP% %ROM%</command>
+      <command label="PPSSPP (Standalone)">%EMULATOR_PPSSPP% --pause-menu-exit %ROM%</command>
       <command label="PPSSPP">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/ppsspp_libretro.so %ROM%</command>
       <platform>psp</platform>
       <theme>psp</theme>
@@ -976,6 +1000,35 @@ let
     ) { } (lib.attrValues raEmulators);
 in
 {
+  # An internal, read-only view of the same per-emulator directories the
+  # bindings above already use for this module's own `ownedFiles` entries,
+  # so `modules/controllers` builds every path it contributes - a new
+  # profile file, or a key in a file this module already owns - from the
+  # same string this module built its own paths from, rather than typing
+  # the directory a second time and risking the two drifting apart.
+  # RetroArch has no entry: it is the frontend's core-based emulator, not
+  # one of the standalones this option names.
+  options.emubox.emulators.configDirs = lib.mkOption {
+    type = lib.types.attrsOf lib.types.str;
+    readOnly = true;
+    internal = true;
+    default = {
+      dolphin = dolphinConfigDir;
+      azahar = azaharConfigDir;
+      pcsx2 = pcsx2ConfigDir;
+      duckstation = duckstationConfigDir;
+      ppsspp = ppssppConfigDir;
+      scummvm = scummvmConfigDir;
+    };
+    description = ''
+      Each standalone emulator's own configuration directory, keyed by
+      name. Every file this module owns inside one of them, and every file
+      or key `modules/controllers` contributes, is built by appending a
+      file name to the directory named here - never a second, independent
+      copy of the directory string.
+    '';
+  };
+
   options.emubox.retroachievements = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -1047,8 +1100,10 @@ in
       pkgs.azahar
       pkgs.scummvm
       pkgs.duckstation
-      # For the admin over SSH; the planned `emubox-status` is the only
-      # other consumer of this inventory, and it is not built yet.
+      # For the admin over SSH. `emubox-status` aggregates only the reports
+      # capabilities register with it, and this stays a separate command:
+      # deciding which missing BIOS file is a finding belongs to a later
+      # change, so nothing here registers a reporter for it yet.
       pkgs.emubox-check-bios
     ];
 
@@ -1097,11 +1152,14 @@ in
           # they declare no hotkey of their own and keep their upstream
           # defaults. These are *keyboard* key-name strings, and a
           # keyboard is not part of the box, so they are a first-boot
-          # default rather than a guarantee; the controller-only routes
-          # out of a running game are the two gamepad combos above, which
-          # stay enforced. RetroArch's separate per-pad `_btn` keys are
-          # written by autoconfig per controller, which is controller
-          # work still to come, so none appears here on purpose.
+          # default rather than a guarantee; the controller-only routes out
+          # of a running core-based game are the two gamepad combos above,
+          # which stay enforced - the core-based frontend's only ones,
+          # where every standalone but Azahar instead gets its own owned
+          # route back (`modules/controllers`). RetroArch's separate
+          # per-pad `_btn` keys are written by autoconfig per controller,
+          # which is controller work still to come, so none appears here on
+          # purpose.
           input_menu_toggle = "f1";
           input_save_state = "f2";
           input_load_state = "f4";
@@ -1194,6 +1252,19 @@ in
         format = "ini";
         enforce = {
           UI.StartFullscreen = "true";
+          # UI.SettingsVersion: PCSX2/pcsx2 pcsx2/VMManager.cpp (v2.6.3),
+          # `CheckSettingsVersion` reads this key and, on a mismatch or
+          # absence, PCSX2/pcsx2 pcsx2-qt/QtHost.cpp asks whether to reset
+          # the settings to defaults - a modal question sitting between
+          # choosing a game and playing it, on a box whose only input
+          # device is a controller. The configuration editor creates
+          # `PCSX2.ini` before PCSX2 first runs, so without this key every
+          # first launch would hit that question. `"1"` is the version
+          # PCSX2's own writer stamps on a fresh settings file at v2.6.3. A
+          # future PCSX2 bump could change that version; if its writer ever
+          # stamps another, this value needs rechecking before the bump
+          # lands.
+          UI.SettingsVersion = "1";
           # UI.SetupWizardIncomplete: PCSX2/pcsx2 pcsx2-qt/QtHost.cpp
           # (v2.6.3) sets this true whenever the base settings layer is
           # (re)created from nothing, and OR's it into `s_run_setup_wizard`

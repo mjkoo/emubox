@@ -12,7 +12,7 @@ flake.nix          inputs, nixosConfigurations.emubox, packages, checks, devShel
 hosts/emubox/      the physical box: hardware facts, disko layout
 modules/           the software stack, one directory per concern
 overlays/, pkgs/   the packages the flake builds: vendored, and its own
-tests/             VM tests (disko install, kiosk session), test values and key
+tests/             VM tests (disko install, kiosk session, controllers), test values and key
 secrets/           sops files (encrypted); recipients in .sops.yaml
 ```
 
@@ -23,9 +23,10 @@ secrets/           sops files (encrypted); recipients in .sops.yaml
 on this machine: the formatting, flake check and evaluation steps CI runs,
 plus the workflow lint. Evaluating the host and the Linux checks works
 from macOS; building the host (`just build`, `just closure-check`) needs
-an `x86_64-linux` builder, and the two VM tests (`just vm-test` for the
-disko install test, `just kiosk-test` for the kiosk session) need one that
-exposes KVM. CI builds all of it on every push.
+an `x86_64-linux` builder, and the three VM tests (`just vm-test` for the
+disko install test, `just kiosk-test` for the kiosk session, and `just
+controllers-test` for the controllers node) need one that exposes KVM. CI
+builds all of it on every push.
 
 One local gap is worth knowing about: the kiosk session script is a
 `writeShellApplication`, so shellcheck runs when it is *built*, and nothing
@@ -59,7 +60,7 @@ cache to its own `nix.settings`.
 built against the flake's own nixpkgs and exposed both through the overlay
 and as `packages.x86_64-linux.*`. Each `package.nix` opens with where it
 came from and why it is here. Three are vendored, because the pinned
-nixpkgs no longer carries them; the fourth is the project's own.
+nixpkgs no longer carries them; the rest are the project's own.
 
 - `es-de`, the frontend, is built from source at release 3.4.1 with the
   in-app updater compiled out, from the derivation nixpkgs removed in PR
@@ -88,6 +89,10 @@ nixpkgs no longer carries them; the fourth is the project's own.
   for the DuckStation token transform, the standard library for the
   settings files it edits - whose unit tests, lint and type check run in
   its build.
+- `emubox-check-bios`, `emubox-save-migrate`, `emubox-restic-backup`,
+  `emubox-status` and `emubox-controllers-status` are the project's own
+  too, each a small Python program whose unit tests, lint and type check
+  run in its build the same way.
 
 The repository itself is MIT licensed (`LICENSE`), which is what the
 programs it writes carry onto the public cache. The vendored packages keep
@@ -134,15 +139,32 @@ seeded setting returns to the flake's default.
 
 The same two tiers govern the emulators' own configuration files.
 Fullscreen, the BIOS and core directories, the first-run wizards and the
-two controller button combos that open the menu and quit a game - the only
-controller-only routes out of a running game - are enforced. RetroArch's
-menu skin and its keyboard hotkeys, and the per-emulator performance
-choices (Wii dual core off in Dolphin, native internal resolution in PCSX2,
-geometry correction and upscaling in DuckStation), are seeded: tuning a
-player may change in an emulator's own menus and keep. RetroArch's eight
-static enforced settings reach it through a read-only file the flake's
-wrapper passes at every launch rather than through `retroarch.cfg`, so a
-stale copy there loses without being edited.
+two controller button combos that open the menu and quit a game - the
+core-based frontend's only controller-only routes out of a running game -
+are enforced. RetroArch's menu skin and its keyboard hotkeys, and the
+per-emulator performance choices (Wii dual core off in Dolphin, native
+internal resolution in PCSX2, geometry correction and upscaling in
+DuckStation), are seeded: tuning a player may change in an emulator's own
+menus and keep. RetroArch's eight static enforced settings reach it
+through a read-only file the flake's wrapper passes at every launch rather
+than through `retroarch.cfg`, so a stale copy there loses without being
+edited. RetroArch's `udev` joypad driver does not read the recorded port
+order, so that order is not promised to reach it.
+
+Every standalone emulator but Azahar gains its own controller-only route
+back to the frontend, and none of them asks for confirmation first.
+Dolphin, PCSX2 and DuckStation stop on Back and Start pressed together. On
+PPSSPP, Back and Start together open its pause menu, whose last entry,
+Exit, ends it (that entry exists because the frontend launches PPSSPP with
+`--pause-menu-exit`). ScummVM stops on Guide; in the handful of engines
+whose own keymaps take Guide for something else, press Start to open
+ScummVM's main menu instead, then move the pointer to Quit with the left
+stick and press A. Dolphin's route back arrives only once bring-up records the
+pad's SDL device name, since its `Device` lines must name the pad itself;
+until then it has neither its gameplay bindings nor its route back. Azahar
+has no pad-bindable route back at the pinned version, since it persists
+hotkeys as keyboard key sequences rather than controller input; that gap
+is deferred to a later change.
 
 `emubox.kiosk.customSystems` takes the complete contents of an ES-DE
 custom `es_systems.xml`, `<systemList>` wrapper included, written verbatim
@@ -375,9 +397,22 @@ snapshots beneath `/data/.snapshots`, retaining all real points from the latest
 14 days. It neither fabricates downtime points nor captures the separate cache
 or snapshot subvolumes.
 
-Use `sudo emubox-status` first. It reports the authoritative outcome of the
-latest local snapshot, backup, and maintenance invocation, with a journal
-query when one needs attention. `sudo restic-emubox` is restic itself with the
+Use `sudo emubox-status` first; it is installed on every box, whether or
+not off-site backup is enabled. It aggregates the reports registered with
+it - on this box, the backups and controllers reports, not the whole box's
+health; the BIOS check stays its own command, `emubox-check-bios` (see BIOS
+files, above). Each section opens with its name and `ok`, `warn`, `fail` or
+`did not run`, with the report's own lines indented beneath it, and the
+command exits with the worst of them: 0 when every section is ok, 1 for a
+warning, 2 for a failure or a report that could not run. A report still
+running after 60 seconds counts as one that could not run; under every
+section but an `ok` one, whatever the report wrote to its error stream is
+shown too; and when the command cannot read its own list of reports, it
+says so on one line and exits 2. Its backups section reports the
+authoritative outcome of the latest local snapshot, backup, and maintenance
+invocation, with a journal query when one needs attention; with off-site
+backup disabled, that section carries only the local snapshot layer,
+neither off-site layer. `sudo restic-emubox` is restic itself with the
 same repository and root-only credentials automation uses, so `snapshots`,
 `stats`, `ls` and `find` all work as documented upstream. It is restricted to
 root by the permissions on the credentials file it reads, not by a command
@@ -413,9 +448,10 @@ The install VM uses a local test repository and test-only credentials. It
 exercises migration and the declared routes including ScummVM, local retention
 windows, snapshot-consistent backup, exclusions and default home inclusion,
 native-lock failure behavior, cleanup, status, and verified fixture restore.
-It never contacts B2. `just vm-test` and `just kiosk-test` require a Linux KVM
-builder and are CI evidence; `just check-all`, `just session-check`, and
-`just closure-check` are the local gates described above.
+It never contacts B2. `just vm-test`, `just kiosk-test`, and `just
+controllers-test` require a Linux KVM builder and are CI evidence; `just
+check-all`, `just session-check`, and `just closure-check` are the local
+gates described above.
 
 ### Reinstall and disk swap
 
@@ -442,15 +478,62 @@ no user data. Fix the disk, or reinstall.
 
 Items that need the physical box, the real TV or a controller in hand, and
 so are settled at bring-up rather than in CI. The `TODO(bring-up)` comments
-in `hosts/emubox/facts.nix` mark the two facts; this list is where the rest
+in `hosts/emubox/facts.nix` mark those facts; this list is where the rest
 live, and there is no second list. Where an item exists because a test
 stopped short of covering something, the evidence for stopping lives beside
 that test and is linked from the item - the item itself is still here, so
 this list stays the one place to read what is unproven.
 
-- The four USB-A `ID_PATH` values in physical port order, and the connector
-  the TV is actually on (`hdmiOutput`): both `TODO(bring-up)` in
-  `hosts/emubox/facts.nix`.
+- The four USB-A `ID_PATH` values in physical port order, the connector the
+  TV is actually on (`hdmiOutput`), and the pad's SDL device name and SDL
+  joystick GUID into `emubox.facts.controllerIdentities`: all
+  `TODO(bring-up)` in `hosts/emubox/facts.nix`. Capture the identity values
+  from the real pad under Linux with `sudo env SDL_VIDEODRIVER=dummy
+  sdl2-jstest --list` (nixpkgs `sdl-jstest`) and copy them in the form it
+  prints; check that the GUID's second-to-last byte is not the HIDAPI
+  signature `0x68`, and that every emulator reports the same device name.
+  This is the gate for Dolphin's and Azahar's pad play and for Dolphin's
+  route back: their items below are checked only once it is recorded.
+- One connected pad enumerating as exactly one controller, and two
+  connected pads as exactly one controller each, with the recorded ports
+  active: checked through the system's game controller library in
+  recorded order, and through RetroArch, whose recorded order is not
+  promised, in whatever order it presents them.
+- A pad connected mid-game takes the lowest free player index whatever its
+  port, checked in PCSX2 or DuckStation, which the recorded order reaches
+  and whose bindings need no recorded pad identity; on RetroArch, record
+  the order observed instead of expecting this.
+- A pad disconnected and reconnected mid-game likewise takes the lowest
+  free player index, regaining its former one only when no lower index is
+  free - with players one and two both disconnected and player two's pad
+  reconnected first, that pad becomes player one - checked in PCSX2 or
+  DuckStation, which the recorded order reaches and whose bindings need no
+  recorded pad identity; on RetroArch, record the order observed instead.
+- A pad in the second port alone is player one, and a pad then connected
+  to the first port mid-game takes player two, the lowest free index,
+  until the next game launch applies the recorded order: checked in PCSX2
+  or DuckStation, which the recorded order reaches and whose bindings need
+  no recorded pad identity; on RetroArch, record the order observed
+  instead.
+- Each standalone's pad play and route back: on Dolphin, PCSX2,
+  DuckStation, PPSSPP and ScummVM the pad plays and its route back ends
+  the emulator and returns to the frontend with no prompt in between
+  (Dolphin checked in the kiosk session, since its hotkeys and gameplay
+  input need window focus; ScummVM's checked by navigating its main menu
+  to Quit with the pad - left stick to move the pointer, A to click - in
+  the engines where Start opens that menu instead of Guide quitting
+  directly); on Azahar the pad plays, but leaving it still needs the
+  route back deferred to a later change. A second pad unit whose USB
+  revision differs will not play in Azahar until its own GUID is recorded
+  too.
+- PCSX2's first start on a freshly prepared box raises no settings prompt.
+- With two pads connected, player two's pad plays in a two-player game on
+  Dolphin, PCSX2 and DuckStation.
+- With a pad in each recorded port, `emubox-status` reports every slot
+  resolved and raises no unaccepted-mode warning; if it does warn, the
+  vendor and product pair the pad reports is recorded and added to
+  `acceptedControllerModes` in `modules/controllers/default.nix`.
+- Whether the wired pad persists its mode across disconnects.
 - A stable `by-id` disk path replacing today's probe-order
   `by-diskseq` one, once the real disk is known (see "Reinstall and disk
   swap").

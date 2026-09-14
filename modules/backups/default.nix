@@ -145,6 +145,24 @@ in
           message = "emubox backups require B >= P + R + E to preserve restic's post-lock budget";
         }
       ];
+
+      # Registered outside the enable guard below: btrbk-local (modules/saves)
+      # takes local snapshots unconditionally, so every box has a local layer
+      # to report even where off-site backup is off. Named by store path, as
+      # modules/saves already names the local marker helper, so this does not
+      # depend on the guarded environment.systemPackages entry below; the
+      # status aggregator therefore runs this argv even when off-site backup
+      # is disabled and that block never applies.
+      emubox.status.reporters = [
+        {
+          name = "backups";
+          command = [
+            helper
+            "--status"
+          ]
+          ++ lib.optionals (!cfg.enable) [ "--local-only" ];
+        }
+      ];
     }
     (lib.mkIf cfg.enable {
       assertions = [

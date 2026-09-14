@@ -6,14 +6,20 @@
   python3,
   restic,
   ruff,
+  systemd,
   ty,
   util-linux,
 }:
 let
   python = python3.withPackages (ps: [ ps.pytest ]);
+  # systemd: the helper's own `systemctl` and `journalctl` calls, so they
+  # resolve whatever PATH the caller started with - the status aggregator
+  # passes its own on unchanged, so a narrow starting PATH would otherwise
+  # leave both unreachable.
   runtimePath = lib.makeBinPath [
     btrfs-progs
     restic
+    systemd
     util-linux
   ];
 in
@@ -46,11 +52,17 @@ stdenvNoCC.mkDerivation {
     ${lib.optionalString stdenvNoCC.hostPlatform.isLinux ''
       wrapProgram $out/bin/emubox-restic-backup --prefix PATH : ${runtimePath}
     ''}
-    # The operator's restic entry point is `restic-emubox`, which
-    # `services.restic`'s `createWrapper` installs with this repository's
-    # environment already set.
-    makeWrapper $out/bin/emubox-restic-backup $out/bin/emubox-status \
-      --add-flags --status
+  '';
+  # The status aggregator owns `emubox-status` on the system path. NixOS
+  # builds that path with collisions ignored, so a second binary of that
+  # name here would silently shadow the aggregator or be shadowed by it
+  # rather than fail the build; this check is the only thing that refuses
+  # one.
+  doInstallCheck = true;
+  installCheckPhase = ''
+    runHook preInstallCheck
+    test ! -e $out/bin/emubox-status
+    runHook postInstallCheck
   '';
   meta = {
     description = "Snapshot-consistent restic backup helper for EmuBox";

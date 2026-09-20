@@ -6,8 +6,14 @@
   ...
 }:
 let
+  # Runs as root on behalf of `player`, through the one sudo rule below. sudo
+  # keeps the caller's PATH (NixOS sets no secure_path), so the script closes
+  # its own: with an inherited PATH, `rm` would be whatever the caller put
+  # first on it, run as root.
   clearMode = pkgs.writeShellApplication {
     name = "emubox-clear-mode";
+    runtimeInputs = [ pkgs.coreutils ];
+    inheritPath = false;
     text = ''
       rm -f /run/emubox/mode
     '';
@@ -15,7 +21,12 @@ let
 
   emuboxMode = pkgs.writeShellApplication {
     name = "emubox-mode";
-    runtimeInputs = [ pkgs.systemd ];
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.systemd
+    ];
+    inheritPath = false;
     text = ''
       selected_mode() {
         mode=$(cat /run/emubox/mode 2>/dev/null || echo kiosk)
@@ -27,7 +38,7 @@ let
       }
 
       fail() {
-        printf 'emubox-mode: %s; the flag selects %s as read by this command; the player session may read it differently\n' "$1" "$(selected_mode)" >&2
+        printf 'emubox-mode: %s; next automatic session: %s\n' "$1" "$(selected_mode)" >&2
         exit 1
       }
 
@@ -78,7 +89,7 @@ let
   };
 in
 {
-  options.emubox.modeClearCommand = lib.mkOption {
+  options.emubox.recovery.clearModeCommand = lib.mkOption {
     type = lib.types.str;
     readOnly = true;
     internal = true;
@@ -117,7 +128,7 @@ in
           users = [ "player" ];
           commands = [
             {
-              command = config.emubox.modeClearCommand;
+              command = config.emubox.recovery.clearModeCommand;
               options = [ "NOPASSWD" ];
             }
           ];

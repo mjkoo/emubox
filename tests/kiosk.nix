@@ -523,7 +523,7 @@ assert lib.assertMsg
       # opposing constraints: the relaunch subtest needs one run longer than
       # the window before its kill, and the greeter subtest needs three runs
       # each shorter than it. 30 s rather than the 10 s first written here,
-      # because `started=$SECONDS` is set before `cage -- es-de`, so a run's
+      # because `started=$SECONDS` is set before `cage -s -- es-de`, so a run's
       # measured length includes cage's wlroots and DRM initialisation and
       # ES-DE's start under llvmpipe; at 10 s a slow runner could push a
       # killed run past the window and stop it counting as a crash. Both

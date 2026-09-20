@@ -36,8 +36,10 @@ let
   customSystemsPath =
     if cfg.customSystems == "" then "" else pkgs.writeText "emubox-es_systems.xml" cfg.customSystems;
 
-  # The session loop. Runs as `player`; relaunches ES-DE if it exits, and
-  # gives up at the greeter if it cannot keep it up.
+  # The session script. Runs as `player`. Normally it is the frontend's loop:
+  # it relaunches ES-DE if it exits, and gives up at the greeter if it cannot
+  # keep it up. When the mode flag selects the desktop it runs Plasma once
+  # instead and never enters the loop.
   #
   # ESDE_APPDATA_DIR is exported once, above the loop, rather than prefixed
   # onto any single command: prepare and the frontend must read the same
@@ -46,11 +48,10 @@ let
   #
   # cage and systemd are runtimeInputs, so the compositor and journal client
   # are pinned to the exact store paths this module was built against.
-  # emubox-prepare and es-de are
-  # deliberately not: they resolve from the system path (they are in
-  # environment.systemPackages below), so that the session and any outside
-  # caller - the test driver, an admin who reached the greeter - reach one
-  # binary rather than two that happen to agree.
+  # emubox-prepare and es-de are deliberately not: they resolve from the
+  # system path (they are in environment.systemPackages below), so that the
+  # session and any outside caller - the test driver, an admin who reached
+  # the greeter - reach one binary rather than two that happen to agree.
   emubox-session = pkgs.writeShellApplication {
     name = "emubox-session";
     runtimeInputs = [
@@ -68,7 +69,9 @@ let
       # the non-zero `emubox-prepare` whose broken-call-site policy is to stop
       # at a greeter the admin can log into, would otherwise leave the box on a
       # black screen with no way in - the opposite of what it promises. The
-      # real status is logged before it is swallowed, so the journal keeps it.
+      # real status is written to stderr before it is swallowed. That is
+      # SDDM's session log under the user's home, which the next session
+      # truncates, and not the journal.
       # A named function rather than the assignment inline in the trap
       # string, which shellcheck rejects as SC2154 (it cannot see a variable
       # assigned inside single quotes).
@@ -147,9 +150,11 @@ let
           fi
 
           # `wait` returns above 128 both when a trapped signal interrupted
-          # it and when the desktop itself died of a signal. Only the first
-          # leaves a child still to be waited for, so the loop repeats only
-          # while the desktop is still there.
+          # it and when the desktop itself died of a signal, and the status
+          # alone cannot tell them apart. The trap's flag can: after an
+          # interrupted wait the loop waits again, and because bash keeps a
+          # reaped child's status that second wait returns the desktop's real
+          # one even if the desktop has already gone.
           desktop_rc=0
           while true; do
             desktop_wait_interrupted=false
@@ -158,10 +163,7 @@ let
             else
               desktop_rc=$?
             fi
-            if [ "$desktop_wait_interrupted" = true ] && kill -0 "$desktop_pid" 2>/dev/null; then
-              continue
-            fi
-            break
+            [ "$desktop_wait_interrupted" = true ] || break
           done
           # Through systemd-cat, not stderr: SDDM points a session's stderr
           # at a log file in the user's home that the next session truncates,
@@ -193,9 +195,18 @@ let
         # The loop needs the run's length, not its status, but the status is
         # captured rather than discarded with `|| true` so that `set -e` does
         # not end the session and the recovery epics still have it.
+        #
+        # `-s` lets cage act on Ctrl-Alt-Fn, which it otherwise swallows, and
+        # under a Wayland compositor nothing else switches consoles. That key
+        # is the only way from a running frontend, or a running game, to a
+        # login prompt, and so to anywhere `emubox-mode` can be run. The
+        # prompt admits only an account with a password, and `player` has
+        # none: what the key gives the family is a prompt they cannot pass,
+        # and the same switch naming this session's console brings the
+        # frontend back.
         started=$SECONDS
         rc=0
-        cage -- es-de || rc=$?
+        cage -s -- es-de || rc=$?
         ran=$(( SECONDS - started ))
         # TODO: emubox-leakcheck after each session.
 

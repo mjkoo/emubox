@@ -7,9 +7,11 @@
 }:
 let
   # Runs as root on behalf of `player`, through the one sudo rule below. sudo
-  # keeps the caller's PATH (NixOS sets no secure_path), so the script closes
-  # its own: with an inherited PATH, `rm` would be whatever the caller put
-  # first on it, run as root.
+  # keeps the caller's PATH (NixOS sets no secure_path), so nothing here may
+  # resolve from it. `rm` is listed in runtimeInputs, which come first on the
+  # script's PATH; `inheritPath = false` then drops the caller's PATH
+  # altogether, so a tool added later and left out of runtimeInputs fails to
+  # resolve instead of running whatever the caller put there, as root.
   clearMode = pkgs.writeShellApplication {
     name = "emubox-clear-mode";
     runtimeInputs = [ pkgs.coreutils ];
@@ -82,7 +84,7 @@ let
       printf 'emubox-mode: switching to %s; the current session is about to end\n' "$requested_mode"
       systemctl reset-failed display-manager.service || true
       if ! systemctl restart --no-block display-manager.service; then
-        fail "the mode was recorded but the session was not restarted"
+        fail "the mode was recorded, and stays recorded until a reboot, but the session was not restarted"
       fi
       printf 'emubox-mode: mode %s was recorded and the restart was accepted\n' "$requested_mode"
     '';
@@ -126,9 +128,14 @@ in
       extraRules = [
         {
           users = [ "player" ];
+          # As root and as nobody else: the rule's default is any user and
+          # group.
+          runAs = "root";
           commands = [
             {
-              command = config.emubox.recovery.clearModeCommand;
+              # The trailing `""` is sudoers for "with no arguments"; a bare
+              # path admits any.
+              command = ''${config.emubox.recovery.clearModeCommand} ""'';
               options = [ "NOPASSWD" ];
             }
           ];

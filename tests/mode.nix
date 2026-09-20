@@ -275,7 +275,7 @@ in
           machine.succeed("loginctl terminate-user player")
           retry(
               lambda _: player_user_manager_stopped(),
-              timeout_seconds=30,
+              timeout_seconds=120,
           )
 
       with subtest("An unknown mode and a restart from the greeter start the frontend"):

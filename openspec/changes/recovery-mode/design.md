@@ -137,12 +137,17 @@ capability use them and nothing else names a mode.
 
 The last two rows collapse to the same behaviour deliberately: the session
 script's existing `cat ... || echo kiosk` and its `if [ "$mode" = desktop ]`
-test already produce it, and both are kept as they are. The flag is all the
-command can read, so what it reports is the mode *selected for the next
-automatic session*, by the session's own rule - `desktop` only when the flag
-holds exactly `desktop`, and `kiosk` in every other case - and never the mode
-on the TV: once a desktop has consumed the flag (D6), the
-selection is `kiosk` while the desktop is still up.
+test already produce it, and both are kept as they are. Failure diagnostics
+apply that same value rule to the command's own read: `desktop` only when it
+reads exactly `desktop`, and `kiosk` otherwise. They explicitly say this is
+the command's view of the flag and that the player session may read it
+differently. A root-owned `0600` flag containing `desktop`, for example, is
+readable by a root caller but unreadable by `player`. Guaranteeing another
+account's view for every unprivileged caller would require another privileged
+read surface; that is not added. The clear-only privilege boundary stays as
+specified, and the diagnostic limit is documented. Neither the reported flag
+view nor the session's selection describes the TV: once a desktop consumes
+the flag (D6), the selection is `kiosk` while the desktop is still up.
 
 ## Decisions
 
@@ -265,8 +270,10 @@ SDDM sends SIGTERM to when it stops a session (Context) is now the bash script,
 and bash running a foreground child defers a trap until the child exits, or
 with no TERM trap simply exits 143 and leaves the child running. So the
 required shape, tested locally under `set -euo pipefail` with the existing
-`EXIT` trap, is: start the desktop in the background and record its pid;
-install a trap on TERM and HUP that forwards TERM to that pid; wait for the pid
+`EXIT` trap, is: install a trap on TERM and HUP before launching the desktop,
+recording a pending termination request while no child pid is available; start
+the desktop in the background and record its pid; immediately forward any
+pending TERM to that pid; wait for the pid
 in a loop that waits again when `wait` was interrupted by the trap rather than
 by the child exiting; capture the child's real exit status without `set -e`
 ending the script; log that status; and exit through the existing `EXIT` trap,

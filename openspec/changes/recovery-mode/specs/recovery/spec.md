@@ -211,7 +211,7 @@ or from a running game can put a desktop on the family's TV.
   any other purpose lets it succeed, the removal of the flag it is allowed
   included
 
-### Requirement: Every failure names the state it leaves behind
+### Requirement: Every failure reports its outcome and qualifies its view of the flag
 
 The command SHALL exit zero only when the requested mode has been recorded and
 the restart that applies it has been accepted by the service manager. It SHALL
@@ -219,16 +219,27 @@ NOT claim that the box is in the requested mode, which it cannot know: the
 session that reads the flag outlives the command, and commonly the command's
 own session is the one being ended.
 
-On any failure it SHALL exit non-zero with a message that names what failed and
-which mode is selected for the next automatic session as a result, so that an
-administrator is never left guessing whether a half-applied switch is pending.
-The selected mode SHALL be reckoned as the automatic session reckons it:
-`desktop` only where the flag holds exactly `desktop`, and `kiosk` in every
-other case - absent, empty, unreadable or unrecognised. It is what the command
-can know, and it is not a claim about what is on the TV. Where the flag was written but no restart was accepted, the message
+On any failure it SHALL exit non-zero with a message that names what failed
+and the mode inferred from the command's own read of the flag: `desktop` only
+when that read yields exactly `desktop`, and `kiosk` in every other case -
+absent, empty, unreadable by the caller or unrecognised. The message SHALL
+explicitly qualify that this is the command's view and that the player session
+may read the flag differently. It SHALL NOT claim that the command has checked
+the flag with the session account's privileges. No additional privileged
+reporting action SHALL be granted to satisfy diagnostics; the clear-only
+privilege boundary remains unchanged. This diagnostic is not a claim about
+what is on the TV. Where the flag was written but no restart was accepted, the message
 SHALL say so, since the requested mode is what the next start of an automatic
 session would otherwise unexpectedly produce - except that a boot clears the
 flag, which the message SHALL NOT contradict.
+
+#### Scenario: Failure reporting qualifies the caller's view
+
+- **WHEN** a failing invocation can read a flag which the session account
+  cannot, or cannot read a flag which the session account can
+- **THEN** its diagnostic reports the mode inferred from its own read and
+  explicitly warns that the player session may read the flag differently,
+  without gaining another privileged reporting action
 
 #### Scenario: The flag cannot be written
 

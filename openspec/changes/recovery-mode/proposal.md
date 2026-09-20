@@ -60,6 +60,11 @@ entry. What the command adds is narrower:
   the service manager so the job outlives the caller's session. It reports
   that the mode was recorded and the restart accepted, never that the box is
   in the requested mode.
+- Failure diagnostics name the mode inferred from the command's own read of
+  the flag and explicitly qualify that view. Unusual permissions can make it
+  differ from what `player` reads; the command gains no privileged reporting
+  helper to eliminate that limit. The session's only extra privilege remains
+  clearing the flag.
 - The capability also documents what is already built and owned by no spec:
   the `admin` account and its privileges, the Plasma desktop, and the boot-menu
   recovery specialisation. Their behaviour does not change; writing them down

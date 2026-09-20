@@ -2011,7 +2011,22 @@ assert lib.assertMsg
             )
           }):
               cmd = (
-                  "retroarch "
+                  # No DISPLAY: the driver's shell exports `DISPLAY=:0.0`,
+                  # and `su` hands this launch no session bus. RetroArch
+                  # asks GameMode for its status over D-Bus when it starts
+                  # and again on its way out, whatever `gamemode_enable`
+                  # says, so with a DISPLAY libdbus autolaunches a bus
+                  # through `dbus-launch`, which binds that bus's life to
+                  # the X display - here the kiosk compositor's Xwayland,
+                  # seconds after a reboot. That bus went away under a
+                  # launch once in CI and left RetroArch blocked in its exit
+                  # path until the cap below killed it. Without a DISPLAY
+                  # the autolaunch fails at once, GameMode is reported
+                  # unavailable, and the launch depends on nothing the
+                  # session is doing - which is what "headless" is meant to
+                  # say. On the box RetroArch is started inside the session
+                  # and talks to the session's own bus.
+                  "env -u DISPLAY retroarch "
                   f"-L /run/current-system/sw/lib/retroarch/cores/{fixture['core']} "
                   f"{shlex.quote(fixture['rom'])} "
                   # The joined path list carries a `|`, a shell pipe

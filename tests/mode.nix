@@ -122,7 +122,7 @@ in
           assert machine.succeed("cat /run/emubox/mode").strip() == word
 
       def assert_refused(command, fragments, sid, flag="kiosk"):
-          rc, output = machine.execute(command)
+          rc, output = machine.execute(command + " 2>&1")
           assert rc != 0, output
           for fragment in fragments:
               assert fragment in output, output
@@ -240,7 +240,7 @@ in
           machine.fail("grep -q '^\\[Autologin\\]$' /etc/sddm.conf.d/00-nixos.conf")
           recovery_sid = session_id()
           old_invocation = invocation_id()
-          rc, output = machine.execute(f"{MODE} desktop")
+          rc, output = machine.execute(f"{MODE} desktop 2>&1")
           assert rc != 0, output
           assert "nothing here would read the mode" in output, output
           assert_exact_flag("kiosk")

@@ -105,9 +105,26 @@ let
       esac
       crashes=0
 
+      # The mode is decided once, here, and not inside the relaunch loop: a
+      # session that started as the frontend stays the frontend however often
+      # ES-DE exits, and a flag written under it selects the next session.
       mode=$(cat /run/emubox/mode 2>/dev/null || echo kiosk)
       if [ "$mode" = desktop ]; then
-        if /run/wrappers/bin/sudo -n ${config.emubox.modeClearCommand}; then
+        # The flag is one-shot: it is cleared before the desktop starts, so
+        # that ending the desktop does not send the next login back into it.
+        # `player` cannot remove a root-owned flag, hence the one sudo rule
+        # modules/recovery grants. The wrapper is named by path because a
+        # store sudo is not setuid, and `-n` because this session owns the VT
+        # as its terminal: without it a refused sudo would sit at a password
+        # prompt instead of failing.
+        if /run/wrappers/bin/sudo -n ${config.emubox.recovery.clearModeCommand}; then
+          # The desktop is a child, not an `exec`, so that the EXIT trap above
+          # still runs when it ends: a Plasma that exited 1 would otherwise
+          # reach SDDM as HELPER_AUTH_ERROR and leave no greeter. That costs
+          # what `exec` gave for free - SDDM stops a session by signalling
+          # this one process and nothing else - so TERM and HUP are passed on
+          # by hand. startplasma-wayland treats TERM as a logout and stops
+          # Plasma's user units itself.
           desktop_pid=
           desktop_term_pending=false
           desktop_wait_interrupted=false
@@ -125,10 +142,14 @@ let
           startplasma-wayland &
           desktop_pid=$!
           # A signal can arrive after launch but before the PID is recorded.
-          if "$desktop_term_pending"; then
+          if [ "$desktop_term_pending" = true ]; then
             kill -TERM "$desktop_pid" 2>/dev/null || true
           fi
 
+          # `wait` returns above 128 both when a trapped signal interrupted
+          # it and when the desktop itself died of a signal. Only the first
+          # leaves a child still to be waited for, and a second `wait` on a
+          # child already reaped would report 127 in place of its status.
           desktop_rc=0
           while true; do
             desktop_wait_interrupted=false
@@ -137,14 +158,18 @@ let
             else
               desktop_rc=$?
             fi
-            if "$desktop_wait_interrupted"; then
+            if [ "$desktop_wait_interrupted" = true ] && kill -0 "$desktop_pid" 2>/dev/null; then
               continue
             fi
             break
           done
+          # Through systemd-cat, not stderr: SDDM points a session's stderr
+          # at a log file in the user's home that the next session truncates,
+          # so this is the only copy of the status that can be read back.
           printf 'desktop exited with status %s\n' "$desktop_rc" | systemd-cat -t emubox-session
           exit "$desktop_rc"
         fi
+        printf 'could not clear the desktop selection; starting the frontend instead\n' | systemd-cat -t emubox-session || true
       fi
 
       while true; do

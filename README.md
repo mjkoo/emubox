@@ -205,8 +205,9 @@ failure names the mode selected for the next automatic session.
 
 The desktop consumes its selection when it starts. Ending it leaves a login
 prompt, without starting the frontend or arranging a later session to return
-to the desktop. `emubox-mode kiosk`, a display-manager restart, or a reboot
-into the normal boot entry brings the game library back.
+to the desktop. On a system using the normal boot entry, `emubox-mode kiosk`
+or a display-manager restart brings the game library back. Rebooting into
+the normal boot entry also brings it back.
 
 If the session cannot be trusted, use the greeter or the recovery entry in
 the boot menu. That entry disables automatic login and pre-selects Plasma:

@@ -39,7 +39,8 @@ entry. What the command adds is narrower:
   is a return to the frontend with nothing having to be set first.
 - The flag is one-shot on the way into the desktop. The session that hands over
   to the desktop first clears the flag, through a privileged helper whose only
-  action is removing that file. A flag selecting the frontend is left alone,
+  action is removing that file and which resolves no program from its caller's
+  environment. A flag selecting the frontend is left alone,
   because it selects what its absence selects. The session's account gains the
   ability to clear the flag and never the ability to write one.
 - Desktop mode runs Plasma inside the existing `player` session, not as
@@ -55,15 +56,17 @@ entry. What the command adds is narrower:
   deliberately does not - so that nothing there would read the mode. A refusal
   leaves the running session and the selection unchanged. Otherwise it prints
   the mode it is switching to and that the current session will end, clears the
-  display manager's start rate limit accounting so that switches made in quick
-  succession are not counted as crashes and refused, and hands the restart to
-  the service manager so the job outlives the caller's session. It reports
-  that the mode was recorded and the restart accepted, never that the box is
-  in the requested mode.
-- Failure diagnostics name the mode inferred from the command's own read of
-  the flag and explicitly qualify that view. Unusual permissions can make it
-  differ from what `player` reads; the command gains no privileged reporting
-  helper to eliminate that limit. The session's only extra privilege remains
+  display manager's start rate limit accounting so that repeated switches, each
+  made once the previous switch's session is running, are not counted as
+  crashes and refused, and hands the restart to the service manager so the job
+  outlives the caller's session. It reports that the mode was recorded and the
+  restart accepted, never that the box is in the requested mode. A switch made
+  while the display manager is still logging in the previous switch's session
+  can leave the TV with no session until a reboot; that limit is documented,
+  not guarded against.
+- Failure diagnostics name what failed and the mode the next automatic session
+  will start, inferred from the command's read of the flag. The command gains
+  no privileged reporting helper; the session's only extra privilege remains
   clearing the flag.
 - The capability also documents what is already built and owned by no spec:
   the `admin` account and its privileges, the Plasma desktop, and the boot-menu
@@ -89,8 +92,10 @@ entry. What the command adds is narrower:
 - A new CI-only VM test proves the round trip: the switch to desktop producing
   a genuinely new session running Plasma with the flag gone and no indexer
   running; the switch back from the live desktop returning the frontend with
-  nothing of the desktop left and the flag readable by `player`; switches made
-  faster than the display manager's start rate limit all being applied; ending a
+  nothing of the desktop left and the flag readable by `player`; repeated
+  switches, each from a running session, not being refused by the display
+  manager's start rate limit; the clear-only helper running nothing from a
+  poisoned search path; ending a
   desktop leaving a greeter rather than a stopped display; a flag holding a
   word that is neither mode starting the frontend on a plain restart from that
   greeter; and the three refusals - non-root, malformed, and a node put into
@@ -123,8 +128,10 @@ entry. What the command adds is narrower:
 - `vm-test`: gains the requirement that the mode switch is proven in a VM -
   that switching produces a new session rather than reactivating the old one,
   that each mode starts its own program, that a switch back from a live
-  desktop leaves nothing of it running, that switches made in quick succession
-  are not refused by the start rate limit, that the flag is readable by the
+  desktop leaves nothing of it running, that repeated switches, each made from
+  a running session, are not refused by the start rate limit, that the
+  privileged removal of the flag runs nothing from its caller's search path,
+  that the flag is readable by the
   session's account and does not outlive the session that hands over to the
   desktop, that a word which is neither mode starts the frontend, that ending
   the desktop leaves a greeter on the seat, that no file indexer runs beside
@@ -140,9 +147,9 @@ entry. What the command adds is narrower:
 
 - `modules/recovery/default.nix`: gains `emubox-mode` and the clear-only
   helper as `writeShellApplication`s on `environment.systemPackages`; an
-  internal, read-only option under `config.emubox` carrying the helper's store
-  path, from which both the sudo rule and the session script's invocation are
-  built - the idiom of `emubox.emulators.configDirs`; the passwordless sudo
+  internal, read-only option, `emubox.recovery.clearModeCommand`, carrying the
+  helper's store path, from which both the sudo rule and the session script's
+  invocation are built - the idiom of `emubox.emulators.configDirs`; the passwordless sudo
   rule letting `player` run that helper and nothing else; the tmpfiles rule;
   the mask on the file indexer's user unit; and loses the TODO on line 26. A
   module that declares an option cannot hold bare top-level attributes, so the
@@ -164,7 +171,8 @@ entry. What the command adds is narrower:
 - `justfile`: a recipe for the new VM test, and its evaluation gate gains the
   new check, which is what evaluates it on a machine with no Linux builder.
 - `README.md`: `emubox-mode` documented as an operator command, including the
-  route to privilege from the desktop; the two passages describing the
+  route to privilege from the desktop and the instruction to wait for the
+  screen between switches; the two passages describing the
   recovery desktop as reachable only after a crash or from the boot menu
   corrected; and the count of VM tests, with the two lists of tests and
   recipes beside it.

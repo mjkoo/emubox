@@ -31,6 +31,12 @@ proven with such a word actually written into the flag, since nothing else
 distinguishes a session that starts the desktop on the word for the desktop
 from one that starts it on anything but the word for the frontend.
 
+The test SHALL prove that the privileged removal of the flag resolves no
+program from its caller's environment: it SHALL run that removal as the account
+the automatic session runs as, with a program search path whose first entry
+holds a substitute for a program the removal uses, and assert that nothing from
+that path ran and that the flag was removed.
+
 The test SHALL prove the switch back with the desktop still running, not only
 from a login prompt: after it, and once the desktop's shutdown has been given
 a bounded time to finish, a new session SHALL be running the frontend, no
@@ -75,11 +81,15 @@ state - and SHALL NOT be asserted merely as holding what it held before, since
 a command that wrote the flag before making its checks would rewrite the same
 word and satisfy a relative assertion.
 
-The test SHALL prove that switches made faster than the display manager's
-start rate limit allows are all applied: it SHALL run the command several
-times in quick succession, more often than that limit permits, and assert that
-each invocation succeeds, that the display manager is running rather than
+The test SHALL prove that repeated switches are not refused by the display
+manager's start rate limit: it SHALL run the command several times, more often
+than that limit permits in its window, each from a running session, and assert
+that each invocation succeeds, that the display manager is running rather than
 failed on its start limit, and that a session of the requested mode comes up.
+The test MAY widen the unit's start-limit window on its node, so that the proof
+does not depend on how fast the runner starts sessions. A switch made while the
+display manager is still logging in the previous switch's session is outside
+what this requirement proves.
 
 The test's outcome SHALL NOT depend on how quickly its steps follow one
 another: before any restart of the display manager that the test makes itself,
@@ -118,10 +128,10 @@ greeter cannot share. Which VM tests `nix flake check` runs is stated by the
   node, and no unit of the desktop's workspace is active in that account's user
   service manager
 
-#### Scenario: Switches in quick succession are all applied on the node
+#### Scenario: Repeated switches are not refused by the start rate limit on the node
 
-- **WHEN** the test runs the mode command as root more times in quick
-  succession than the display manager's start rate limit allows
+- **WHEN** the test runs the mode command as root more times than the display
+  manager's start rate limit allows in its window, each from a running session
 - **THEN** each invocation exits zero, the display manager is active and has
   not failed on its start limit, and a new session is running the requested
   mode's program
@@ -138,6 +148,14 @@ greeter cannot share. Which VM tests `nix flake check` runs is stated by the
 - **WHEN** the node has switched into the desktop mode and the new session is
   running the desktop
 - **THEN** the mode flag is no longer present on the node
+
+#### Scenario: The privileged removal ignores a poisoned search path on the node
+
+- **WHEN** the flag is present and the test runs the privileged removal as the
+  account the automatic session runs as, with a program search path whose first
+  entry holds a substitute for a program the removal uses
+- **THEN** the removal exits zero, nothing from that search path ran, and the
+  flag is gone
 
 #### Scenario: A flag naming neither mode starts the frontend on the node
 

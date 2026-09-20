@@ -138,16 +138,13 @@ capability use them and nothing else names a mode.
 The last two rows collapse to the same behaviour deliberately: the session
 script's existing `cat ... || echo kiosk` and its `if [ "$mode" = desktop ]`
 test already produce it, and both are kept as they are. Failure diagnostics
-apply that same value rule to the command's own read: `desktop` only when it
-reads exactly `desktop`, and `kiosk` otherwise. They explicitly say this is
-the command's view of the flag and that the player session may read it
-differently. A root-owned `0600` flag containing `desktop`, for example, is
-readable by a root caller but unreadable by `player`. Guaranteeing another
-account's view for every unprivileged caller would require another privileged
-read surface; that is not added. The clear-only privilege boundary stays as
-specified, and the diagnostic limit is documented. Neither the reported flag
-view nor the session's selection describes the TV: once a desktop consumes
-the flag (D6), the selection is `kiosk` while the desktop is still up.
+apply that same value rule to the command's read of the flag and end with
+`next automatic session: <kiosk|desktop>`: `desktop` only when it reads
+exactly `desktop`, and `kiosk` otherwise. No privileged read surface is added
+for diagnostics; the clear-only privilege boundary stays as specified. Neither
+the reported value nor the session's selection describes the TV: once a
+desktop consumes the flag (D6), the selection is `kiosk` while the desktop is
+still up.
 
 ## Decisions
 
@@ -231,7 +228,13 @@ the top.
   not a crash and must not be counted against the crash limiter, so the command
   runs `systemctl reset-failed display-manager.service` immediately before the
   hand-off. It is best-effort: its failure is not allowed to end the command
-  under `set -e`, and the hand-off proceeds.
+  under `set -e`, and the hand-off proceeds. The guarantee covers switches each
+  made once the previous switch's session is running, however many fall in the
+  limit's window. Observed in CI: running the command again while SDDM is still
+  setting up the previous login, during PAM session setup, leaves SDDM looping
+  on `HELPER_TTY_ERROR` with no session and no greeter. That is not guarded
+  against: the promise is narrowed to exclude it, and the README tells the
+  operator to wait for the screen between switches.
 - *It hands the restart to the service manager rather than performing it.* The
   restart is enqueued without waiting, so the job belongs to PID 1 and survives
   the caller's session ending. The hand-off is guarded rather than left to
@@ -285,7 +288,10 @@ units when it receives it. The status line is written to the journal
 explicitly, through `systemd-cat -t emubox-session` with `pkgs.systemd` added
 to the script's `runtimeInputs`, because the session's stderr goes to a
 truncated file (Context); it is the one line that must not rely on stderr, and
-the frontend path's existing logging is left as it is. Never entering the loop is what keeps "ending the desktop leaves a
+the frontend path's existing logging is left as it is. The branch writes one
+more line the same way when the clear (D6) fails, before falling through to the
+frontend, so that an administrator who asked for a desktop and got the frontend
+can see why. Never entering the loop is what keeps "ending the desktop leaves a
 login prompt" true. The loop's body, the crash counter and the give-up path
 are untouched; the desktop is not a frontend run and is not counted as one.
 
@@ -306,11 +312,18 @@ setuid helper were rejected because both hand the session the ability to set a
 mode. What it buys: `emubox-mode desktop` means "give me a desktop now", and
 ending the desktop does not arm every later login to land back in Plasma.
 
+The helper takes nothing from its caller's environment either. sudo preserves
+the caller's `PATH` under `env_reset`, and the pinned NixOS sudo module sets no
+`secure_path`, so a helper that resolved `rm` from an inherited `PATH` would
+run the caller's `rm` as root. It is therefore built with `inheritPath = false`
+and `coreutils` in `runtimeInputs`, and `emubox-mode` is closed the same way.
+
 The helper is defined in `modules/recovery` and invoked from the session script
 in `modules/kiosk`, across a boundary a `let` binding does not cross, and a
 sudo rule naming a store path does not match an invocation that `PATH` resolves
 to `/run/current-system/sw/bin/...`. So `modules/recovery` declares an
-internal, read-only option under `config.emubox` holding the helper's
+internal, read-only option, `emubox.recovery.clearModeCommand` in the
+repository's `emubox.<module>.*` namespace, holding the helper's
 `${pkg}/bin/<name>` path, and both the rule and the invocation are built from
 it - the idiom of `emubox.emulators.configDirs`. Declaring an option is what
 forces the module's bare attributes under a `config` block. The script invokes
@@ -356,7 +369,10 @@ relaunch counting and the crash-loop greeter - exactly what a restart
 disturbs. The cost is a fourth VM test and its CI minutes. The test runs
 `systemctl reset-failed display-manager.service` before any display-manager
 restart it makes itself, so it does not depend on its legs being more than the
-rate-limit interval apart.
+rate-limit interval apart. The node also forces the unit's
+`startLimitIntervalSec` to 3600, far above the test's run time, so that every
+start in the test counts against the burst of 3 and the rate-limit leg's proof
+does not depend on how fast the runner starts four sessions.
 
 **D11. The mode test asserts session identity, not the presence of a
 desktop.** SDDM's `Users.ReuseSession` defaults to true
@@ -390,11 +406,13 @@ unit rather than killing anything.
   back leaves nothing on the TV.** → The command refuses where there is no
   automatic login, and clears the start rate limit so that repeated switches
   are not refused as a crash loop (D3), which the VM test proves with four
-  switches inside the interval, waiting for each frontend before the next
-  switch. Restarting the pinned SDDM during PAM setup can strand a process
-  holding the VT, so the rate-limit test starts each switch from a running
-  session and still requires all four starts within 30 seconds. It does not
-  claim to cover restarts during SDDM login setup. For a start that fails anyway the
+  switches, each made from a running frontend session, on a node whose
+  start-limit window is widened past the test's run time so that every start
+  counts against the burst on any runner (D10). Restarting the pinned SDDM
+  during PAM session setup leaves it looping on `HELPER_TTY_ERROR` with no
+  session and no greeter until a reboot; the guarantee and the test exclude
+  that case, and the README says to wait for the screen between switches. For
+  a start that fails anyway the
   guarantee is honesty: the report is that the mode was recorded and the
   restart accepted.
 - **The session script, not Plasma, is now what the display manager signals.**
@@ -402,10 +420,11 @@ unit rather than killing anything.
   switches back from a live desktop and asserts that no desktop process or
   workspace unit of `player`'s is left.
 - **The clear-only helper is a privileged program the session's account can
-  run.** → Its whole body removes one path and takes no argument, the sudo rule
-  names that one command, and its only effect is to move the box towards the
-  frontend (D5, D6). It is built, and so shellchecked, with the host toplevel
-  (D8).
+  run.** → Its whole body removes one path and takes no argument, it resolves
+  its one tool from a closed `PATH`, which the VM test proves under a poisoned
+  one, the sudo rule names that one command, and its only effect is to move
+  the box towards the frontend (D5, D6). It is built, and so shellchecked,
+  with the host toplevel (D8).
 - **The tmpfiles rule changes a directory another component creates.** → The
   restic helper's `mkdir(..., exist_ok=True)` neither fails on an existing
   directory nor chmods it, so the rule wins and the helper is unaffected. At

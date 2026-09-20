@@ -64,7 +64,8 @@ exactly what its absence selects.
 
 Removing the flag SHALL be available to the account the automatic session runs
 as, through a privileged action whose only effect is that removal and which
-takes no direction from its caller. Writing the flag SHALL NOT be available to
+takes no direction from its caller: it resolves no program from its caller's
+environment. Writing the flag SHALL NOT be available to
 that account by that action or any other, so that the session can give the TV
 back to the family but can never take it away from them.
 
@@ -85,6 +86,12 @@ the state this requirement exists to prevent.
   available to it
 - **THEN** the flag is removed, and no use of that action or of any other
   privilege granted to that account writes a mode into the flag
+
+#### Scenario: The privileged removal runs nothing its caller supplies
+
+- **WHEN** that account invokes the privileged action with a program search
+  path of its own choosing
+- **THEN** the flag is removed and no program found on that search path is run
 
 #### Scenario: A flag selecting the frontend is left alone
 
@@ -135,10 +142,14 @@ that the current session is about to end, before it acts, since the caller is
 commonly sitting in the session that is about to end. It SHALL then hand the
 restart of the display manager to the service manager in a way that outlives
 the caller's own session, rather than waiting on an outcome it will not be
-alive to observe. A switch requested several times in quick succession SHALL
-NOT be refused by the display manager's start rate limit and leave nothing on
-the TV: a restart an administrator asked for is not a crash and SHALL NOT be
-counted as one.
+alive to observe. Repeated switches, each made once the previous switch's
+session is running, SHALL NOT be refused by the display manager's start rate
+limit and leave nothing on the TV, however many are made in that limit's
+window: a restart an administrator asked for is not a crash and SHALL NOT be
+counted as one. A switch made while the display manager is still logging in
+the previous switch's session is outside this guarantee and can leave the TV
+with no session until a reboot; the operator documentation says to wait for
+the screen before switching again.
 
 #### Scenario: Into the desktop
 
@@ -155,10 +166,11 @@ counted as one.
 - **THEN** the frontend replaces the desktop on the TV, prepared as it is at
   every launch, without a reboot, and nothing of the desktop is left running
 
-#### Scenario: Switches in quick succession are all applied
+#### Scenario: Repeated switches are not refused by the start rate limit
 
-- **WHEN** the command is run several times in quick succession, more often
-  than the display manager's start rate limit allows
+- **WHEN** the command is run several times, each once the previous switch's
+  session is running, more often than the display manager's start rate limit
+  allows in its window
 - **THEN** each restart is accepted, and the display manager is running with
   the requested mode's session afterwards
 
@@ -211,7 +223,7 @@ or from a running game can put a desktop on the family's TV.
   any other purpose lets it succeed, the removal of the flag it is allowed
   included
 
-### Requirement: Every failure reports its outcome and qualifies its view of the flag
+### Requirement: Every failure reports its outcome and the next automatic session
 
 The command SHALL exit zero only when the requested mode has been recorded and
 the restart that applies it has been accepted by the service manager. It SHALL
@@ -220,26 +232,24 @@ session that reads the flag outlives the command, and commonly the command's
 own session is the one being ended.
 
 On any failure it SHALL exit non-zero with a message that names what failed
-and the mode inferred from the command's own read of the flag: `desktop` only
-when that read yields exactly `desktop`, and `kiosk` in every other case -
-absent, empty, unreadable by the caller or unrecognised. The message SHALL
-explicitly qualify that this is the command's view and that the player session
-may read the flag differently. It SHALL NOT claim that the command has checked
-the flag with the session account's privileges. No additional privileged
-reporting action SHALL be granted to satisfy diagnostics; the clear-only
-privilege boundary remains unchanged. This diagnostic is not a claim about
-what is on the TV. Where the flag was written but no restart was accepted, the message
+and the mode the next automatic session will start: `desktop` only when the
+command's read of the flag yields exactly `desktop`, and `kiosk` in every
+other case - absent, empty, unreadable or unrecognised. No additional
+privileged reporting action SHALL be granted to satisfy diagnostics; the
+clear-only privilege boundary remains unchanged. This diagnostic is not a
+claim about what is on the TV. Where the flag was written but no restart was
+accepted, the message
 SHALL say so, since the requested mode is what the next start of an automatic
 session would otherwise unexpectedly produce - except that a boot clears the
 flag, which the message SHALL NOT contradict.
 
-#### Scenario: Failure reporting qualifies the caller's view
+#### Scenario: A failure names the next automatic session
 
-- **WHEN** a failing invocation can read a flag which the session account
-  cannot, or cannot read a flag which the session account can
-- **THEN** its diagnostic reports the mode inferred from its own read and
-  explicitly warns that the player session may read the flag differently,
-  without gaining another privileged reporting action
+- **WHEN** an invocation fails
+- **THEN** its message names what failed and the mode the next automatic
+  session will start - `desktop` where the flag holds exactly `desktop`, and
+  `kiosk` in every other case - without gaining another privileged reporting
+  action
 
 #### Scenario: The flag cannot be written
 

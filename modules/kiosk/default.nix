@@ -148,8 +148,8 @@ let
 
           # `wait` returns above 128 both when a trapped signal interrupted
           # it and when the desktop itself died of a signal. Only the first
-          # leaves a child still to be waited for, and a second `wait` on a
-          # child already reaped would report 127 in place of its status.
+          # leaves a child still to be waited for, so the loop repeats only
+          # while the desktop is still there.
           desktop_rc=0
           while true; do
             desktop_wait_interrupted=false

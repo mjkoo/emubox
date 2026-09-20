@@ -415,10 +415,16 @@ because the test driver's key injection reaches cage through the same input
 path a keyboard does and the node already carries the test `admin` password.
 What the key exposes is a login prompt, not a shell: `player` has no password
 and `admin`'s is the `secrets` capability's, so a family member who presses it
-meets a prompt they cannot pass and the same key takes them back. cage acts on
-the key before its client sees it, so the route works from inside a game as
-well. The mode test makes its first switch this way - key, console login,
-typed command, report read off the console - and the seat's active session
+meets a prompt they cannot pass, and the same switch naming the frontend's
+console - the first or second, since the display manager takes the first free
+one - takes them back. The documented console is the sixth: logind reserves
+it, so it always carries a login prompt, where a lower one may already be the
+display manager's. cage acts on the key before its client sees it, so the
+route works from inside a game as well; whether an emulator reading input
+devices directly also sees what is typed at the console is a bring-up
+question, not one the VM can answer. The mode test makes its first switch this way - key, console login,
+typed command, report read off the console, with a trip back to the frontend's
+console and out again before the login - and the seat's active session
 being the new one is the proof that SDDM took the TV back from the console.
 The VM proves cage's handling of the key, not that the box's keyboard produces
 it, which joins the bring-up checklist.
@@ -432,10 +438,11 @@ it, which joins the bring-up checklist.
   tree, read from the session record, contains the desktop's startup process,
   made again after a bounded wait or held over a window so that a desktop which
   starts and dies immediately fails it. The vm-test requirement bounds this.
-- **A command with no on-box invoker could be built wrong and nobody would
-  notice.** → The VM test is the only thing that exercises it end to end until
-  a shell exists, which is why it is a round trip, a refusal matrix and a
-  readability assertion, and why it asserts session identity (D11).
+- **A command whose only invoker is a console at the box could be built wrong
+  and go unnoticed for a long time.** → The VM test exercises it end to end,
+  the first time by the console route itself (D12), which is why it is a round
+  trip, a refusal matrix and a readability assertion, and why it asserts
+  session identity (D11).
 - **The box is left at a login prompt if the administrator closes Plasma and
   walks away.** → The same thing three frontend crashes already produce, and
   not sticky: the flag was consumed on the way in (D6), so any restart of the
@@ -458,8 +465,8 @@ it, which joins the bring-up checklist.
   switches back from a live desktop and asserts that no desktop process or
   workspace unit of `player`'s is left.
 - **A keyboard now reaches a login prompt from the frontend.** → The prompt
-  admits only an account with a password, `player` has none, and the same key
-  returns to the frontend (D12). The VM proves the compositor's side; the
+  admits only an account with a password, `player` has none, and the same
+  switch naming the frontend's console returns to it (D12). The VM proves the compositor's side; the
   box's own keyboard is a bring-up item.
 - **The clear-only helper is a privileged program the session's account can
   run.** → Its whole body removes one path, it resolves its one tool from a

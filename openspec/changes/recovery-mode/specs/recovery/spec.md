@@ -206,8 +206,8 @@ not - and a non-zero exit, before it writes the flag or touches the TV, since
 the desktop runs as the session's own account, which holds no such privilege
 directly. The `player` account the automatic session runs as SHALL NOT be able
 to switch modes, either by running the command or through any privilege
-granted to it for another purpose, so that nothing reachable from the frontend
-or from a running game can put a desktop on the family's TV.
+granted to it for another purpose, so that nothing the frontend or a running
+game can do with that account's privilege puts a desktop on the family's TV.
 
 #### Scenario: An unprivileged invocation is refused
 
@@ -336,7 +336,8 @@ the mode command at all, since nothing else on it offers a shell.
 That prompt is not a surface that offers the switch. It SHALL admit only an
 account that has a password, and the configuration SHALL give the account the
 automatic session runs as none, so what the family can reach with that key is
-a prompt they cannot pass, and the same key returns them to the frontend.
+a prompt they cannot pass, and the same switch naming the frontend's own
+console SHALL return them to the frontend as they left it.
 
 A mode switch made from that console SHALL put the new session on the TV
 rather than leave the TV on the console, and the command's report SHALL remain
@@ -349,6 +350,13 @@ the session being ended.
   the frontend
 - **THEN** that console becomes the one on the TV and shows a login prompt, at
   which `admin` logs in with its password
+
+#### Scenario: The frontend is a key away again
+
+- **WHEN** the virtual-console switch naming the frontend's console is pressed
+  at that login prompt
+- **THEN** the frontend's session is the active one on the seat again, the
+  same session as before
 
 #### Scenario: The session account cannot pass the prompt
 

@@ -20,7 +20,9 @@ The test SHALL make its first switch the way an administrator at the box makes
 it, so that the route the operator documentation names is proven and not only
 the command. From the running frontend it SHALL press the keyboard's
 virtual-console switch, assert that the console it names became the active one
-and shows a login prompt, log in there as `admin` with the test password, run
+and shows a login prompt, press the switch naming the frontend's console and
+assert that the frontend's session, the same one, is the seat's active session
+again, return to the prompt, log in there as `admin` with the test password, run
 the mode command with administrative privilege by typing it, and read the
 command's report off that console. Because the new-session assertions are made
 on the seat's active session, they are then also the proof that the display
@@ -150,7 +152,8 @@ greeter cannot share. Which VM tests `nix flake check` runs is stated by the
   frontend is on the seat, logs in on that console as `admin` with the test
   password and types the mode command with administrative privilege
 - **THEN** that console was the active one and showed a login prompt, the
-  command's report is read off it, a new session running the desktop becomes
+  switch back made the frontend's own session the active one again, the
+  command's report is read off the console, a new session running the desktop becomes
   the seat's active session, and the account database shows the session
   account with no password
 

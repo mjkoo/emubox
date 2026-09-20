@@ -201,7 +201,10 @@ a fresh desktop session.
 The command warns that the current graphical session will end. A successful
 exit reports only that the mode was recorded and the display-manager restart
 was accepted; it does not confirm what has appeared on the TV. A refusal or
-failure names the mode selected for the next automatic session.
+failure reports the flag's selection as read with the caller's permissions.
+The `player` session may read it differently: for example, a manually written
+root-only `desktop` flag reads as `desktop` to root but selects the frontend
+for `player`, which cannot read it.
 
 The desktop consumes its selection when it starts. Ending it leaves a login
 prompt, without starting the frontend or arranging a later session to return

@@ -27,7 +27,7 @@ let
       }
 
       fail() {
-        printf 'emubox-mode: %s; the mode selected for the next automatic session is %s\n' "$1" "$(selected_mode)" >&2
+        printf 'emubox-mode: %s; the flag selects %s as read by this command; the player session may read it differently\n' "$1" "$(selected_mode)" >&2
         exit 1
       }
 

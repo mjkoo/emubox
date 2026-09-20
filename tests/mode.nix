@@ -227,7 +227,7 @@ in
           for command in commands:
               assert_refused(
                   command,
-                  ["kiosk|desktop", "exactly one argument", "selected for the next automatic session is kiosk"],
+                  ["kiosk|desktop", "exactly one argument", "the flag selects kiosk as read by this command", "the player session may read it differently"],
                   kiosk_sid,
               )
 

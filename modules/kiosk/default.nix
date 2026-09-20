@@ -108,16 +108,26 @@ let
       mode=$(cat /run/emubox/mode 2>/dev/null || echo kiosk)
       if [ "$mode" = desktop ]; then
         if /run/wrappers/bin/sudo -n ${config.emubox.modeClearCommand}; then
-          startplasma-wayland &
-          desktop_pid=$!
+          desktop_pid=
+          desktop_term_pending=false
           desktop_wait_interrupted=false
           # Invoked indirectly by the signal trap below.
           # shellcheck disable=SC2329
           forward_desktop_term() {
             desktop_wait_interrupted=true
-            kill -TERM "$desktop_pid" 2>/dev/null || true
+            desktop_term_pending=true
+            if [ -n "$desktop_pid" ]; then
+              kill -TERM "$desktop_pid" 2>/dev/null || true
+            fi
           }
           trap forward_desktop_term TERM HUP
+
+          startplasma-wayland &
+          desktop_pid=$!
+          # A signal can arrive after launch but before the PID is recorded.
+          if "$desktop_term_pending"; then
+            kill -TERM "$desktop_pid" 2>/dev/null || true
+          fi
 
           desktop_rc=0
           while true; do

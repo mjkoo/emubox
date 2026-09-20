@@ -44,15 +44,19 @@ let
   # value, and a per-command prefix is exactly the shape in which prepare
   # would assert settings into a directory the frontend never reads.
   #
-  # cage is the one runtimeInput, so the compositor is pinned to the exact
-  # store path this module was built against. emubox-prepare and es-de are
+  # cage and systemd are runtimeInputs, so the compositor and journal client
+  # are pinned to the exact store paths this module was built against.
+  # emubox-prepare and es-de are
   # deliberately not: they resolve from the system path (they are in
   # environment.systemPackages below), so that the session and any outside
   # caller - the test driver, an admin who reached the greeter - reach one
   # binary rather than two that happen to agree.
   emubox-session = pkgs.writeShellApplication {
     name = "emubox-session";
-    runtimeInputs = [ pkgs.cage ];
+    runtimeInputs = [
+      pkgs.cage
+      pkgs.systemd
+    ];
     text = ''
       export ESDE_APPDATA_DIR=${cfg.appdataDir}
 
@@ -101,13 +105,39 @@ let
       esac
       crashes=0
 
-      while true; do
-        mode=$(cat /run/emubox/mode 2>/dev/null || echo kiosk)
-        # TODO: desktop mode hands over to Plasma.
-        if [ "$mode" = desktop ]; then
-          exec startplasma-wayland
-        fi
+      mode=$(cat /run/emubox/mode 2>/dev/null || echo kiosk)
+      if [ "$mode" = desktop ]; then
+        if /run/wrappers/bin/sudo -n ${config.emubox.modeClearCommand}; then
+          startplasma-wayland &
+          desktop_pid=$!
+          desktop_wait_interrupted=false
+          # Invoked indirectly by the signal trap below.
+          # shellcheck disable=SC2329
+          forward_desktop_term() {
+            desktop_wait_interrupted=true
+            kill -TERM "$desktop_pid" 2>/dev/null || true
+          }
+          trap forward_desktop_term TERM HUP
 
+          desktop_rc=0
+          while true; do
+            desktop_wait_interrupted=false
+            if wait "$desktop_pid"; then
+              desktop_rc=0
+            else
+              desktop_rc=$?
+            fi
+            if "$desktop_wait_interrupted"; then
+              continue
+            fi
+            break
+          done
+          printf 'desktop exited with status %s\n' "$desktop_rc" | systemd-cat -t emubox-session
+          exit "$desktop_rc"
+        fi
+      fi
+
+      while true; do
         # Not guarded, and what that does and does not cover is worth
         # stating exactly. prepare's recreate policy absorbs the runtime
         # failures a box actually produces - a missing, unreadable or

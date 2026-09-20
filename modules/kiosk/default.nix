@@ -99,7 +99,7 @@ let
       # because that is an `if` condition `set -e` does not fire: every run
       # would silently count as long and the counter would never reach three.
       # Falling back loudly is the safe reading - the box stays up and the
-      # journal says why the hook was ignored.
+      # session log says why the hook was ignored.
       case "$window" in
         "" | *[!0-9]*)
           echo "emubox-session: EMUBOX_CRASH_WINDOW=$window is not a number; using 60" >&2
@@ -185,13 +185,15 @@ let
         # while the run carries on (`emubox_prepare.py`'s error policy, and
         # the `OSError` guards around its editor loop and the custom-systems
         # install). An unwritable /data therefore does NOT end up here; it
-        # ends up in the journal with the frontend still launching, which is
-        # deliberate (the alternative is a family staring at a greeter). What is left to reach this line is the broken-call-site
-        # class prepare refuses to paper over - an owned-values document
-        # that is unreadable or the wrong shape, an unset ESDE_APPDATA_DIR,
-        # an unreadable custom-systems store path - and for those the
-        # greeter an admin can log into is the right destination, because no
-        # relaunch of the same call would do any better.
+        # ends up as a line on stderr - SDDM's session log, not the journal -
+        # with the frontend still launching, which is deliberate (the
+        # alternative is a family staring at a greeter). What is left to
+        # reach this line is the broken-call-site class prepare refuses to
+        # paper over - an owned-values document that is unreadable or the
+        # wrong shape, an unset ESDE_APPDATA_DIR, an unreadable
+        # custom-systems store path - and for those the greeter an admin can
+        # log into is the right destination, because no relaunch of the same
+        # call would do any better.
         emubox-prepare ${cfg.ownedValuesFile} "${customSystemsPath}"
 
         # The loop needs the run's length, not its status, but the status is

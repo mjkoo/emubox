@@ -5,6 +5,9 @@
 let
   pkgs = self.nixosConfigurations.emubox.pkgs;
   py = builtins.toJSON;
+  # The console leg logs in as `admin` with the test password, whose hash the
+  # node decrypts from secrets/test.yaml (tests/boot-adaptations.nix).
+  values = import ./values.nix;
 in
 {
   name = "emubox-mode";
@@ -20,9 +23,9 @@ in
 
       system.stateVersion = "26.05";
 
-      # This starts at the kiosk node's budget and requires a fully ready
-      # desktop. CI is the first environment with KVM where that budget can
-      # be measured; do not narrow the assertions without failure evidence.
+      # The kiosk node's budget, which also carries a fully ready Plasma
+      # desktop under llvmpipe: the desktop assertions below are the full
+      # ones, not the narrowed process-tree fallback.
       virtualisation.memorySize = 3072;
       virtualisation.qemu.options = [ "-vga none -device virtio-gpu-pci" ];
 
@@ -71,6 +74,7 @@ in
 
       MODE = ${py modeCommand}
       CLEAR = ${py clearCommand}
+      ADMIN_PASSWORD = ${py values.password}
 
       def session_id():
           return active_session_on_seat(machine.execute)
@@ -101,7 +105,28 @@ in
           return session_id()
 
       def frontend_in_session(sid):
-          return "es-de" in session_processes(sid)
+          """Is ES-DE itself among the session's processes?
+
+          Matched on the program each process runs, not on a substring of the
+          listing: cage's own arguments name `es-de` before ES-DE has started.
+          """
+          for line in session_processes(sid).splitlines():
+              fields = line.split(None, 2)
+              if len(fields) < 3:
+                  continue
+              program = fields[2].split()[0].rsplit("/", 1)[-1]
+              if program in ("es-de", ".es-de-wrapped"):
+                  return True
+          return False
+
+      def no_player_frontend():
+          """No ES-DE owned by `player` anywhere on the node, by name and by
+          command line, so that neither spelling can pass vacuously."""
+          by_name = machine.execute("pgrep -u player -x es-de")[0]
+          by_args = machine.execute(
+              "pgrep -u player -f '(^|/|[.])es-de([.]?-wrapped)?([[:space:]]|$)'"
+          )[0]
+          return by_name != 0 and by_args != 0
 
       def desktop_ready_in_session(sid):
           processes = session_processes(sid)
@@ -173,13 +198,66 @@ in
           kiosk_sid = session_id()
           retry(lambda _: frontend_in_session(kiosk_sid), timeout_seconds=120)
 
-      with subtest("Switching to desktop creates a fully ready new session"):
-          desktop_sid = switch("desktop", kiosk_sid)
+      with subtest("An administrator at a console switches to a fully ready desktop"):
+          # The first switch is made the way an operator makes it: the
+          # keyboard's console switch from the running frontend, a console
+          # login, the typed command. tty6 is the console logind reserves, so
+          # it always carries a login prompt and the display manager is never
+          # handed it. The key is sent until it takes, since cage only acts on
+          # it once its keyboard is up.
+          def active_console():
+              rc, active = machine.execute("cat /sys/class/tty/tty0/active")
+              return active.strip() if rc == 0 else None
+
+          def on_console(_):
+              machine.send_key("ctrl-alt-f6")
+              return active_console() == "tty6"
+
+          retry(on_console, timeout_seconds=60)
+          machine.wait_until_tty_matches("6", "login: ", timeout=120)
+
+          # The way back for someone who cannot pass that prompt: the switch
+          # naming the frontend's own console returns the same session.
+          frontend_vt = session_property(kiosk_sid, "VTNr")
+          machine.send_key(f"ctrl-alt-f{frontend_vt}")
+          retry(lambda _: active_console() == f"tty{frontend_vt}", timeout_seconds=30)
+          retry(
+              lambda _: session_id() == kiosk_sid
+              and session_on_seat(machine.execute, "player"),
+              timeout_seconds=30,
+          )
+          assert frontend_in_session(kiosk_sid)
+          retry(on_console, timeout_seconds=60)
+          machine.send_chars("admin\n")
+          machine.wait_until_tty_matches("6", "Password: ", timeout=60)
+          machine.send_chars(ADMIN_PASSWORD + "\n")
+          machine.wait_until_tty_matches("6", r"admin@.*\$", timeout=120)
+          machine.send_chars("sudo emubox-mode desktop\n")
+          # The console's login is not part of the session being ended, so the
+          # whole report stays readable there.
+          machine.wait_until_tty_matches("6", "restart was accepted", timeout=60)
+          report = machine.get_tty_text("6")
+          assert "switching to desktop" in report, report
+          assert "current session is about to end" in report, report
+
+          # The seat's active session being a new one of `player`'s is also
+          # the proof that the display manager took the TV back from tty6.
+          desktop_sid = wait_new_player_session(kiosk_sid)
           assert desktop_sid != kiosk_sid
+          assert active_console() != "tty6"
+
+          # What the key offers the family is a prompt they cannot pass.
+          shadow = machine.succeed("getent shadow player").split(":")[1]
+          assert shadow[:1] in ("!", "*"), shadow
+
+          # No later subtest runs beside an `admin` session.
+          machine.succeed("loginctl terminate-user admin")
           retry(lambda _: desktop_ready_in_session(desktop_sid), timeout_seconds=120)
           time.sleep(5)
           assert desktop_ready_in_session(desktop_sid)
           machine.fail("test -e /run/emubox/mode")
+          # The switch replaced the frontend rather than starting beside it.
+          retry(lambda _: no_player_frontend(), timeout_seconds=30)
 
           for _ in range(5):
               machine.fail("pgrep -u player -f '(^|/|[.])baloo_file([.]?-wrapped)?([[:space:]]|$)'")
@@ -232,6 +310,17 @@ in
               ["su - admin", "sudo"],
               kiosk_sid,
           )
+          # Nor through the one privilege `player` does hold: the rule admits
+          # the helper alone, as root, with no argument.
+          for command in (f"{CLEAR} x", f"{MODE} desktop"):
+              rc, output = machine.execute(
+                  "su player -s /bin/sh -c "
+                  + shlex.quote(f"/run/wrappers/bin/sudo -n {command}")
+                  + " 2>&1"
+              )
+              assert rc != 0, output
+              assert_exact_flag("kiosk")
+              assert session_id() == kiosk_sid
 
       with subtest("Malformed invocations leave kiosk selected"):
           commands = [MODE, f"{MODE} arcade", f"{MODE} kiosk extra", f"{MODE} desktop extra"]
@@ -274,7 +363,7 @@ in
           machine.succeed(f"kill -KILL {startup[0]}")
           retry(lambda _: session_on_seat(machine.execute, "sddm"), timeout_seconds=120)
           machine.wait_for_unit("display-manager.service")
-          machine.fail("pgrep -u player -f '(^|/|[.])es-de([[:space:]]|$)'")
+          assert no_player_frontend()
           retry(
               lambda _: "desktop exited with status 137" in machine.succeed(
                   "journalctl -t emubox-session --no-pager"
@@ -310,5 +399,9 @@ in
           )
           machine.fail("ls /tmp/poison | grep -q '^ran-as-'")
           machine.fail("test -e /run/emubox/mode")
+          # The helper's listed tools come first on its PATH either way, so the
+          # poisoned `rm` alone would not notice the caller's PATH being let
+          # back in behind them. The built script shows it.
+          machine.fail(f"grep -F '$PATH' {CLEAR}")
     '';
 }

@@ -390,7 +390,11 @@ unit rather than killing anything.
   back leaves nothing on the TV.** → The command refuses where there is no
   automatic login, and clears the start rate limit so that repeated switches
   are not refused as a crash loop (D3), which the VM test proves with four
-  switches inside the interval. For a start that fails anyway the
+  switches inside the interval, waiting for each frontend before the next
+  switch. Restarting the pinned SDDM during PAM setup can strand a process
+  holding the VT, so the rate-limit test starts each switch from a running
+  session and still requires all four starts within 30 seconds. It does not
+  claim to cover restarts during SDDM login setup. For a start that fails anyway the
   guarantee is honesty: the report is that the mode was recorded and the
   restart accepted.
 - **The session script, not Plasma, is now what the display manager signals.**

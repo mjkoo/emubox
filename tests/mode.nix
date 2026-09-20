@@ -200,21 +200,23 @@ in
           ).strip() == "kiosk"
 
       with subtest("Four rapid switches stay within the display manager start limit"):
-          first_sid = kiosk_sid
           started = time.monotonic()
           for _ in range(4):
               old_invocation = invocation_id()
               output = machine.succeed(f"{MODE} kiosk")
               assert "restart was accepted" in output, output
               wait_invocation_change(old_invocation)
+              # Restarting SDDM during PAM setup can strand its VT owner.
+              # Exercise rapid switches from running sessions, still within
+              # the same start-limit interval.
+              kiosk_sid = wait_new_player_session(kiosk_sid)
+              retry(lambda _: frontend_in_session(kiosk_sid), timeout_seconds=120)
           assert time.monotonic() - started < 30
           machine.wait_for_unit("display-manager.service")
           result = machine.succeed(
               "systemctl show display-manager.service -p ActiveState -p Result --value"
           ).split()
           assert "active" in result and "start-limit-hit" not in result, result
-          kiosk_sid = wait_new_player_session(first_sid)
-          retry(lambda _: frontend_in_session(kiosk_sid), timeout_seconds=120)
           assert_exact_flag("kiosk")
 
       with subtest("The player cannot switch modes"):

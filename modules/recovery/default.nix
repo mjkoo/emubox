@@ -1,4 +1,4 @@
-# Design section 11: Plasma 6 for the admin, mode switch, recovery specialisation.
+# Plasma 6 for the admin, the mode switch, the recovery specialisation.
 {
   config,
   lib,

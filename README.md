@@ -187,10 +187,16 @@ refuses to suspend.
 
 `emubox-mode` switches the running box without a reboot. It takes exactly
 one argument: `desktop` for Plasma or `kiosk` for the game library. The
-command needs root; `admin` reaches root through passwordless sudo. From
-a virtual console on a healthy box, log in as `admin` and run
-`sudo emubox-mode desktop`. There is no switch in the frontend and no
-network shell provided by this feature.
+command needs root; `admin` reaches root through passwordless sudo. On a
+healthy box the route is a keyboard and a virtual console: attach a keyboard
+(the box is otherwise driven by controllers), press Ctrl-Alt-F6 from the
+game library or from inside a game, log in as `admin` and run
+`sudo emubox-mode desktop`. The sixth console is the one to use: it is
+reserved for a login prompt, where a lower one may be the display manager's.
+Only an account with a password gets past that prompt, and `player` has none;
+Ctrl-Alt-F1, or Ctrl-Alt-F2 if the first shows nothing, returns to the game
+library as it was left. There is no switch in the frontend and no network
+shell provided by this feature.
 
 The desktop on the TV runs as `player`. From a terminal there, first run
 `su - admin` and enter the administrator password, then run
@@ -382,8 +388,13 @@ rest, slow but correct.
 - Ephemeral root: `sudo touch /root/marker`, reboot, the file is gone
   while `/etc/machine-id` is unchanged.
 - `admin` logs in on a console with the password whose hash is in the
-  secrets file: Ctrl-Alt-F3 switches to a free virtual console (the kiosk
-  session holds one of the first two; a getty appears on any free one).
+  secrets file: with a keyboard attached, Ctrl-Alt-F6 from the game library
+  switches to the console reserved for a login prompt (the kiosk session
+  holds one of the first two), and Ctrl-Alt-F1 or F2 switches back. The VM
+  test proves the compositor acts on that key; that the box's own keyboard
+  produces it is checked here.
+- The same switch works from inside a running game, and nothing typed at the
+  console reaches the emulator left running behind it.
 - No failed units: `systemctl --failed` is empty.
 
 ### Pushing configuration changes
@@ -392,7 +403,8 @@ Not provided by this layer: nothing on the box listens on the LAN, so
 there is no address to push to. The tunnel and the `deploy` recipe arrive
 with the remote-administration change. Until then a changed configuration
 reaches the box by reinstalling (below, restoring protected data), or by hand at
-the desktop. On a healthy box, log in as `admin` on a virtual console and run
+the desktop. On a healthy box, press Ctrl-Alt-F6 on an attached keyboard, log
+in as `admin` on that console and run
 `sudo emubox-mode desktop`; in the desktop's terminal, run `su - admin`
 because the desktop runs as `player`. If the session cannot be trusted, use
 the greeter or recovery boot entry and log in as `admin` instead. The mode

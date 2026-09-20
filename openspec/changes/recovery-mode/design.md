@@ -40,6 +40,15 @@ sshd to `127.0.0.1`, and `admin`'s `authorizedKeys.keys` is empty. Until the
 remote-administration capability lands, the only route to a prompt is a
 console at the box or the boot-menu recovery entry.
 
+**The frontend's compositor swallows the console switch.** The session runs
+`cage -- es-de`, and the pinned cage 0.3.0 acts on Ctrl-Alt-Fn only when
+started with `-s` ("Allow VT switching" in its manual); under a Wayland
+compositor the kernel does not switch consoles itself. As the tree stands, a
+box showing the frontend therefore has no route to a console at all, and the
+README's existing bring-up line saying Ctrl-Alt-F3 reaches one is wrong. The
+greeter's compositor and Plasma's both honour the key. `player` is given no
+password, so its account is locked at a console prompt (D12).
+
 **`sddm.autoLogin.relogin = false` is deliberate.**
 `modules/kiosk/default.nix:596-618` sets it so that the session script's
 three-short-runs give-up lands at a greeter instead of looping.
@@ -115,8 +124,9 @@ unreadable flag into the frontend without a word.
   invoker on the box other than a console or, later, a shell.
 - Any change to what the session script does on the frontend path, to its
   crash counter, or to the display-manager configuration. The edits to
-  `modules/kiosk` are the desktop branch, the stale comment above it, and
-  moving the mode read and that branch above the relaunch loop (D4).
+  `modules/kiosk` are the desktop branch, the stale comment above it, moving
+  the mode read and that branch above the relaunch loop (D4), and the one
+  compositor flag that lets a keyboard reach a console (D12).
 - Any change to what the recovery boot entry, the `admin` account or the
   Plasma enablement do. Their declarations move under a `config` block with
   unchanged effect and the module gains the indexer mask (D1); beyond that they
@@ -314,9 +324,19 @@ ending the desktop does not arm every later login to land back in Plasma.
 
 The helper takes nothing from its caller's environment either. sudo preserves
 the caller's `PATH` under `env_reset`, and the pinned NixOS sudo module sets no
-`secure_path`, so a helper that resolved `rm` from an inherited `PATH` would
-run the caller's `rm` as root. It is therefore built with `inheritPath = false`
-and `coreutils` in `runtimeInputs`, and `emubox-mode` is closed the same way.
+`secure_path`, so a helper that resolved `rm` from the `PATH` it was handed
+would run the caller's `rm` as root. Two things close that. `coreutils` is in
+`runtimeInputs`, and the pinned `writeShellApplication` puts `runtimeInputs`
+ahead of any inherited `PATH`, so the `rm` that runs is the pinned one either
+way. And the helper is built with `inheritPath = false`, which drops the
+caller's `PATH` altogether, so that a tool added to the script later and
+forgotten in `runtimeInputs` fails to resolve instead of resolving from the
+caller. `emubox-mode` is closed the same way. Because the listed tools win
+either way, a poisoned `PATH` alone cannot show `inheritPath` being dropped;
+the VM test therefore also asserts that the built helper carries no reference
+to an inherited `PATH`. The sudo rule is as narrow as the helper: it runs the
+command as root only (the NixOS rule default is any user and group) and admits
+no argument.
 
 The helper is defined in `modules/recovery` and invoked from the session script
 in `modules/kiosk`, across a boundary a `let` binding does not cross, and a
@@ -385,6 +405,24 @@ afterwards catches that class. A graceful `systemctl restart` closes the
 session through PAM first (Context), which is why the command restarts the
 unit rather than killing anything.
 
+**D12. The frontend's compositor allows the console switch.** The session
+starts cage with `-s`. Without it this change ships a command that a healthy
+box offers no place to run (Context), and the capability's own text - the
+command is run from "a console on the box itself" - describes a console nobody
+can reach. Correcting the documentation instead was considered and rejected:
+the flag is one character, and the route it opens can be proven in the VM,
+because the test driver's key injection reaches cage through the same input
+path a keyboard does and the node already carries the test `admin` password.
+What the key exposes is a login prompt, not a shell: `player` has no password
+and `admin`'s is the `secrets` capability's, so a family member who presses it
+meets a prompt they cannot pass and the same key takes them back. cage acts on
+the key before its client sees it, so the route works from inside a game as
+well. The mode test makes its first switch this way - key, console login,
+typed command, report read off the console - and the seat's active session
+being the new one is the proof that SDDM took the TV back from the console.
+The VM proves cage's handling of the key, not that the box's keyboard produces
+it, which joins the bring-up checklist.
+
 ## Risks / Trade-offs
 
 - **Plasma 6 under the test's software renderer may not come up in the
@@ -419,11 +457,16 @@ unit rather than killing anything.
   → The script forwards termination to the desktop (D4), and the VM test
   switches back from a live desktop and asserts that no desktop process or
   workspace unit of `player`'s is left.
+- **A keyboard now reaches a login prompt from the frontend.** → The prompt
+  admits only an account with a password, `player` has none, and the same key
+  returns to the frontend (D12). The VM proves the compositor's side; the
+  box's own keyboard is a bring-up item.
 - **The clear-only helper is a privileged program the session's account can
-  run.** → Its whole body removes one path and takes no argument, it resolves
-  its one tool from a closed `PATH`, which the VM test proves under a poisoned
-  one, the sudo rule names that one command, and its only effect is to move
-  the box towards the frontend (D5, D6). It is built, and so shellchecked,
+  run.** → Its whole body removes one path, it resolves its one tool from a
+  closed `PATH` with that tool listed first, which the VM test proves under a
+  poisoned `PATH` and by reading the built script, the sudo rule names that
+  one command, as root only and with no argument, and its only effect is to
+  move the box towards the frontend (D5, D6). It is built, and so shellchecked,
   with the host toplevel (D8).
 - **The tmpfiles rule changes a directory another component creates.** → The
   restic helper's `mkdir(..., exist_ok=True)` neither fails on an existing

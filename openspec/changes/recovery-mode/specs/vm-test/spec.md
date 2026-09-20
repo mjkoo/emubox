@@ -11,7 +11,24 @@ prompt on the seat, that a restart of the display manager from that prompt
 returns the frontend, and that an invocation the command must refuse - one
 without administrative privilege, one whose arguments are not a single
 accepted word, and one made where nothing on the running system would read the
-mode - is refused and leaves the selection unchanged.
+mode - is refused and leaves the selection unchanged. The unprivileged refusal
+SHALL cover the privilege the session account does hold: as that account, the
+privileged removal given an argument and the mode command run through the same
+privilege route SHALL both be refused, with the flag asserted by exact value.
+
+The test SHALL make its first switch the way an administrator at the box makes
+it, so that the route the operator documentation names is proven and not only
+the command. From the running frontend it SHALL press the keyboard's
+virtual-console switch, assert that the console it names became the active one
+and shows a login prompt, log in there as `admin` with the test password, run
+the mode command with administrative privilege by typing it, and read the
+command's report off that console. Because the new-session assertions are made
+on the seat's active session, they are then also the proof that the display
+manager put the new session on the TV rather than leaving the console there.
+The test SHALL also assert that the account the automatic session runs as has
+no password to pass that prompt with, read from the account database rather
+than by attempting a login. What this proves is the compositor's handling of
+the key; that the box's own keyboard produces it is a bring-up item.
 
 The assertion that a switch took effect SHALL be made on session identity
 rather than on the presence of a desktop alone: the test SHALL record the
@@ -35,7 +52,10 @@ The test SHALL prove that the privileged removal of the flag resolves no
 program from its caller's environment: it SHALL run that removal as the account
 the automatic session runs as, with a program search path whose first entry
 holds a substitute for a program the removal uses, and assert that nothing from
-that path ran and that the flag was removed.
+that path ran and that the flag was removed. It SHALL also assert that the
+built removal carries no reference to an inherited search path, since the
+tools it lists are found ahead of the caller's path either way and only that
+assertion notices the caller's path being let back in.
 
 The test SHALL prove the switch back with the desktop still running, not only
 from a login prompt: after it, and once the desktop's shutdown has been given
@@ -45,7 +65,12 @@ session runs as SHALL exist anywhere on the node, and no unit of the desktop's
 workspace SHALL be active in that account's user service manager. The display
 manager ends a session by signalling one process, so a desktop that runs as
 part of the session survives the switch unless the session passes that signal
-on.
+on. The same SHALL be asserted in the other direction: once the desktop is up
+after a switch from the frontend, no frontend process owned by that account
+exists anywhere on the node. Wherever the test asserts that the frontend is
+running, it SHALL match the frontend's own process and not a command line that
+merely names it, since the compositor's arguments name the frontend before the
+frontend has started.
 
 The test SHALL prove that ending the desktop leaves a login prompt rather than
 a dead display: it SHALL end the desktop session with a failing status and
@@ -118,6 +143,16 @@ greeter cannot share. Which VM tests `nix flake check` runs is stated by the
   differs from the one recorded before the switch, with the desktop started in
   it, and switching back yields a further new session with the frontend
   running again
+
+#### Scenario: The operator's route is proven on the node
+
+- **WHEN** the test presses the virtual-console switch on the node while the
+  frontend is on the seat, logs in on that console as `admin` with the test
+  password and types the mode command with administrative privilege
+- **THEN** that console was the active one and showed a login prompt, the
+  command's report is read off it, a new session running the desktop becomes
+  the seat's active session, and the account database shows the session
+  account with no password
 
 #### Scenario: Switching back from a live desktop leaves no desktop behind
 

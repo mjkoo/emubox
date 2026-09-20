@@ -64,8 +64,9 @@ exactly what its absence selects.
 
 Removing the flag SHALL be available to the account the automatic session runs
 as, through a privileged action whose only effect is that removal and which
-takes no direction from its caller: it resolves no program from its caller's
-environment. Writing the flag SHALL NOT be available to
+takes no direction from its caller: it runs as root and as nothing else,
+admits no argument, and resolves no program from its caller's environment.
+Writing the flag SHALL NOT be available to
 that account by that action or any other, so that the session can give the TV
 back to the family but can never take it away from them.
 
@@ -314,13 +315,53 @@ SHALL NOT carry an entry, a system or a menu item that puts the box into
 desktop mode, in its restricted mode or its full one. Until the
 remote-administration capability provides a shell, the only place the command
 can be run is a console on the box itself, and that is a deliberate limit
-rather than an omission.
+rather than an omission. The requirement below is what makes that console
+reachable.
 
 #### Scenario: Nothing in the frontend switches modes
 
 - **WHEN** the frontend is browsed, in its restricted mode or after the full
   menu is unlocked
 - **THEN** no entry, system or menu item switches the box to desktop mode
+
+### Requirement: A console on the box is reachable from the frontend
+
+A box showing the frontend SHALL offer an administrator with a keyboard a
+login prompt without a reboot and without waiting for the frontend to fail:
+the compositor the frontend runs under SHALL honour the keyboard's
+virtual-console switch, from the frontend and from a running game alike. A
+compositor that swallows that key leaves a healthy box with no place to run
+the mode command at all, since nothing else on it offers a shell.
+
+That prompt is not a surface that offers the switch. It SHALL admit only an
+account that has a password, and the configuration SHALL give the account the
+automatic session runs as none, so what the family can reach with that key is
+a prompt they cannot pass, and the same key returns them to the frontend.
+
+A mode switch made from that console SHALL put the new session on the TV
+rather than leave the TV on the console, and the command's report SHALL remain
+readable on the console afterwards, since that console's login is not part of
+the session being ended.
+
+#### Scenario: A console is reachable from the running frontend
+
+- **WHEN** the keyboard's virtual-console switch is pressed on a box showing
+  the frontend
+- **THEN** that console becomes the one on the TV and shows a login prompt, at
+  which `admin` logs in with its password
+
+#### Scenario: The session account cannot pass the prompt
+
+- **WHEN** the box's configuration is evaluated
+- **THEN** the account the automatic session runs as is given no password, so
+  no login as that account succeeds at the prompt
+
+#### Scenario: A switch made from the console reaches the TV
+
+- **WHEN** `admin`, logged in on that console, runs `emubox-mode desktop` with
+  administrative privilege
+- **THEN** the desktop's session becomes the active session on the seat, and
+  the command's report is still readable on the console
 
 ### Requirement: The box carries an administrator account with a desktop
 

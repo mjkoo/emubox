@@ -75,9 +75,14 @@ entry. What the command adds is narrower:
 - No ES-DE entry. Upstream ES-DE decides a system's visibility purely by
   whether its ROM directory holds a matching file, and every documented way to
   hide one applies to every UI mode alike, so an entry hidden in kiosk mode is
-  not buildable, and one visible to the whole household is not wanted. The
-  switch has no on-box invoker until the remote-administration capability
-  lands a shell, and that is accepted.
+  not buildable, and one visible to the whole household is not wanted. Until
+  the remote-administration capability lands a shell, the switch is run from a
+  console on the box.
+- That console becomes reachable. The frontend's compositor swallows the
+  keyboard's console switch as the tree stands, so a healthy box has no place
+  to run the command; the session now starts the compositor with console
+  switching allowed. What the key reaches is a login prompt `player`, having
+  no password, cannot pass.
 - Quitting Plasma lands at a login prompt rather than the frontend, because
   the display manager's automatic login is not repeated within one daemon's
   life - and it lands there whatever status Plasma exited with: the desktop
@@ -95,7 +100,8 @@ entry. What the command adds is narrower:
   nothing of the desktop left and the flag readable by `player`; repeated
   switches, each from a running session, not being refused by the display
   manager's start rate limit; the clear-only helper running nothing from a
-  poisoned search path; ending a
+  poisoned search path; the first switch made the way an operator makes it,
+  by the console key, a console login and the typed command; ending a
   desktop leaving a greeter rather than a stopped display; a flag holding a
   word that is neither mode starting the frontend on a plain restart from that
   greeter; and the three refusals - non-root, malformed, and a node put into
@@ -131,7 +137,8 @@ entry. What the command adds is narrower:
   desktop leaves nothing of it running, that repeated switches, each made from
   a running session, are not refused by the start rate limit, that the
   privileged removal of the flag runs nothing from its caller's search path,
-  that the flag is readable by the
+  that the operator's own route - console key, console login, typed command -
+  works from the running frontend, that the flag is readable by the
   session's account and does not outlive the session that hands over to the
   desktop, that a word which is neither mode starts the frontend, that ending
   the desktop leaves a greeter on the seat, that no file indexer runs beside
@@ -159,8 +166,9 @@ entry. What the command adds is narrower:
   comment is deleted; the mode read and the desktop branch move above the
   relaunch loop; and the branch clears the flag before handing over, runs the
   desktop as a child rather than replacing the shell, forwards a termination
-  signal to it, and ends through the script's exit trap. The frontend path -
-  the loop's body, its crash counter and its give-up path - is untouched.
+  signal to it, and ends through the script's exit trap. The compositor is
+  started with console switching allowed. The rest of the frontend path - the
+  loop's body, its crash counter and its give-up path - is untouched.
 - `flake.nix`: the new VM test joins the `hostOnly` check set. The two new
   shell programs need no check of their own: the host toplevel check already
   builds them.
@@ -171,8 +179,10 @@ entry. What the command adds is narrower:
 - `justfile`: a recipe for the new VM test, and its evaluation gate gains the
   new check, which is what evaluates it on a machine with no Linux builder.
 - `README.md`: `emubox-mode` documented as an operator command, including the
-  route to privilege from the desktop and the instruction to wait for the
-  screen between switches; the two passages describing the
+  route to privilege from the desktop, the console key that reaches a login
+  prompt from the frontend, and the instruction to wait for the
+  screen between switches; the bring-up checklist gains the real keyboard's
+  console switch; the two passages describing the
   recovery desktop as reachable only after a crash or from the boot menu
   corrected; and the count of VM tests, with the two lists of tests and
   recipes beside it.

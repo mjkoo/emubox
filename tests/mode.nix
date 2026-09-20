@@ -36,6 +36,12 @@ in
       # command that stopped clearing it fails here on any runner.
       systemd.services.display-manager.startLimitIntervalSec = lib.mkForce 3600;
 
+      # No snapshot timer on this node. It has no btrfs layer, so the hourly
+      # timer fails the moment it elapses, and a test that happens to cross
+      # the top of an hour then carries a failed unit into
+      # `switch-to-configuration test`, which exits non-zero because of it.
+      services.btrbk.instances.local.onCalendar = lib.mkForce null;
+
       emubox.facts.controllerPorts = lib.mkForce [ ];
       emubox.facts.controllerIdentities.sdlGamepadName = lib.mkForce null;
       emubox.facts.controllerIdentities.sdlJoystickGuid = lib.mkForce null;

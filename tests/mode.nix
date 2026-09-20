@@ -26,6 +26,13 @@ in
       virtualisation.memorySize = 3072;
       virtualisation.qemu.options = [ "-vga none -device virtio-gpu-pci" ];
 
+      # The rapid-switch subtest proves the command clears the display
+      # manager's start accounting. The unit's own 30-second window would
+      # make that proof depend on how fast the runner starts four sessions;
+      # a window longer than the whole test makes every start count, so a
+      # command that stopped clearing it fails here on any runner.
+      systemd.services.display-manager.startLimitIntervalSec = lib.mkForce 3600;
+
       emubox.facts.controllerPorts = lib.mkForce [ ];
       emubox.facts.controllerIdentities.sdlGamepadName = lib.mkForce null;
       emubox.facts.controllerIdentities.sdlJoystickGuid = lib.mkForce null;
@@ -54,6 +61,7 @@ in
     { nodes }:
     let
       modeCommand = "${nodes.machine.system.path}/bin/emubox-mode";
+      clearCommand = nodes.machine.emubox.recovery.clearModeCommand;
     in
     ''
       import shlex
@@ -62,6 +70,7 @@ in
       ${builtins.readFile ./lib/test_helpers.py}
 
       MODE = ${py modeCommand}
+      CLEAR = ${py clearCommand}
 
       def session_id():
           return active_session_on_seat(machine.execute)
@@ -199,19 +208,17 @@ in
               "su player -s /bin/sh -c 'cat /run/emubox/mode'"
           ).strip() == "kiosk"
 
-      with subtest("Four rapid switches stay within the display manager start limit"):
-          started = time.monotonic()
+      with subtest("Four further switches are not refused by the display manager start limit"):
           for _ in range(4):
               old_invocation = invocation_id()
               output = machine.succeed(f"{MODE} kiosk")
               assert "restart was accepted" in output, output
               wait_invocation_change(old_invocation)
               # Restarting SDDM during PAM setup can strand its VT owner.
-              # Exercise rapid switches from running sessions, still within
-              # the same start-limit interval.
+              # Each switch is made from a running session; the node's
+              # start-limit window spans the whole test.
               kiosk_sid = wait_new_player_session(kiosk_sid)
               retry(lambda _: frontend_in_session(kiosk_sid), timeout_seconds=120)
-          assert time.monotonic() - started < 30
           machine.wait_for_unit("display-manager.service")
           result = machine.succeed(
               "systemctl show display-manager.service -p ActiveState -p Result --value"
@@ -231,7 +238,7 @@ in
           for command in commands:
               assert_refused(
                   command,
-                  ["kiosk|desktop", "exactly one argument", "the flag selects kiosk as read by this command", "the player session may read it differently"],
+                  ["kiosk|desktop", "exactly one argument", "next automatic session: kiosk"],
                   kiosk_sid,
               )
 
@@ -287,5 +294,21 @@ in
           kiosk_sid = wait_new_player_session(old_sid)
           retry(lambda _: frontend_in_session(kiosk_sid), timeout_seconds=120)
           assert "startplasma-wayland" not in session_processes(kiosk_sid)
+
+      # Last, because the helper legitimately removes the flag and no later
+      # subtest may depend on its value.
+      with subtest("The clear helper runs nothing from its caller's PATH"):
+          machine.succeed(
+              "install -d -o player /tmp/poison && "
+              "printf '#!/bin/sh\\ntouch /tmp/poison/ran-as-$(id -u)\\n' > /tmp/poison/rm && "
+              "chmod 0755 /tmp/poison/rm"
+          )
+          machine.succeed("test -e /run/emubox/mode")
+          machine.succeed(
+              "su player -s /bin/sh -c "
+              + shlex.quote(f"PATH=/tmp/poison:$PATH /run/wrappers/bin/sudo -n {CLEAR}")
+          )
+          machine.fail("ls /tmp/poison | grep -q '^ran-as-'")
+          machine.fail("test -e /run/emubox/mode")
     '';
 }

@@ -183,11 +183,13 @@ in
       with subtest("Switching back from a live desktop removes Plasma"):
           kiosk_sid = switch("kiosk", desktop_sid, restrictive_umask=True)
           retry(lambda _: frontend_in_session(kiosk_sid), timeout_seconds=120)
+          # Plasma's pinned shell service has a 40-second stop timeout;
+          # the compositor stops after it. Allow the ordered teardown to finish.
           retry(
               lambda _: machine.execute(
                   "! pgrep -u player -f 'startplasma-wayland|kwin_wayland'"
               )[0] == 0,
-              timeout_seconds=30,
+              timeout_seconds=120,
           )
           retry(
               lambda _: no_active_plasma_units(),

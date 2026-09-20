@@ -165,6 +165,8 @@ let
             fi
             [ "$desktop_wait_interrupted" = true ] || break
           done
+          # The desktop is gone, and its pid may be handed to something else.
+          trap - TERM HUP
           # Through systemd-cat, not stderr: SDDM points a session's stderr
           # at a log file in the user's home that the next session truncates,
           # so this is the only copy of the status that can be read back.
@@ -194,7 +196,7 @@ let
 
         # The loop needs the run's length, not its status, but the status is
         # captured rather than discarded with `|| true` so that `set -e` does
-        # not end the session and the recovery epics still have it.
+        # not end the session and the line logged below still has it.
         #
         # `-s` lets cage act on Ctrl-Alt-Fn, which it otherwise swallows, and
         # under a Wayland compositor nothing else switches consoles. That key

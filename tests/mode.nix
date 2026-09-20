@@ -114,8 +114,7 @@ in
               fields = line.split(None, 2)
               if len(fields) < 3:
                   continue
-              program = fields[2].split()[0].rsplit("/", 1)[-1]
-              if program in ("es-de", ".es-de-wrapped"):
+              if fields[2].split()[0].rsplit("/", 1)[-1] == "es-de":
                   return True
           return False
 
@@ -126,7 +125,8 @@ in
           by_args = machine.execute(
               "pgrep -u player -f '(^|/|[.])es-de([.]?-wrapped)?([[:space:]]|$)'"
           )[0]
-          return by_name != 0 and by_args != 0
+          # 1 is pgrep's "nothing matched"; an error is not an absence.
+          return by_name == 1 and by_args == 1
 
       def desktop_ready_in_session(sid):
           processes = session_processes(sid)
@@ -213,12 +213,16 @@ in
               machine.send_key("ctrl-alt-f6")
               return active_console() == "tty6"
 
+          frontend_pids = machine.succeed("pgrep -u player -x es-de").split()
+          assert len(frontend_pids) == 1, frontend_pids
           retry(on_console, timeout_seconds=60)
           machine.wait_until_tty_matches("6", "login: ", timeout=120)
 
           # The way back for someone who cannot pass that prompt: the switch
-          # naming the frontend's own console returns the same session.
+          # naming the frontend's own console returns the same session, with
+          # the same frontend process still running in it.
           frontend_vt = session_property(kiosk_sid, "VTNr")
+          assert frontend_vt in ("1", "2", "3", "4", "5"), frontend_vt
           machine.send_key(f"ctrl-alt-f{frontend_vt}")
           retry(lambda _: active_console() == f"tty{frontend_vt}", timeout_seconds=30)
           retry(
@@ -226,7 +230,7 @@ in
               and session_on_seat(machine.execute, "player"),
               timeout_seconds=30,
           )
-          assert frontend_in_session(kiosk_sid)
+          assert machine.succeed("pgrep -u player -x es-de").split() == frontend_pids
           retry(on_console, timeout_seconds=60)
           machine.send_chars("admin\n")
           machine.wait_until_tty_matches("6", "Password: ", timeout=60)
@@ -236,15 +240,20 @@ in
           # The console's login is not part of the session being ended, so the
           # whole report stays readable there.
           machine.wait_until_tty_matches("6", "restart was accepted", timeout=60)
-          report = machine.get_tty_text("6")
-          assert "switching to desktop" in report, report
-          assert "current session is about to end" in report, report
 
           # The seat's active session being a new one of `player`'s is also
           # the proof that the display manager took the TV back from tty6.
           desktop_sid = wait_new_player_session(kiosk_sid)
           assert desktop_sid != kiosk_sid
           assert active_console() != "tty6"
+          # Read only now, with the old session ended and the new one up.
+          report = machine.get_tty_text("6")
+          for statement in (
+              "switching to desktop",
+              "current session is about to end",
+              "restart was accepted",
+          ):
+              assert statement in report, report
 
           # What the key offers the family is a prompt they cannot pass.
           shadow = machine.succeed("getent shadow player").split(":")[1]
@@ -311,14 +320,16 @@ in
               kiosk_sid,
           )
           # Nor through the one privilege `player` does hold: the rule admits
-          # the helper alone, as root, with no argument.
-          for command in (f"{CLEAR} x", f"{MODE} desktop"):
+          # the helper alone, as root, with no argument. The refusal asserted
+          # is sudo's own, so a broken `su` or wrapper cannot stand in for it.
+          for command in (f"{CLEAR} x", f"-u admin {CLEAR}", f"{MODE} desktop"):
               rc, output = machine.execute(
                   "su player -s /bin/sh -c "
                   + shlex.quote(f"/run/wrappers/bin/sudo -n {command}")
                   + " 2>&1"
               )
               assert rc != 0, output
+              assert "a password is required" in output, output
               assert_exact_flag("kiosk")
               assert session_id() == kiosk_sid
 
@@ -402,6 +413,7 @@ in
           # The helper's listed tools come first on its PATH either way, so the
           # poisoned `rm` alone would not notice the caller's PATH being let
           # back in behind them. The built script shows it.
-          machine.fail(f"grep -F '$PATH' {CLEAR}")
+          # 1 is grep's "no match"; an unreadable script is not an absence.
+          assert machine.execute(f"grep -F '$PATH' {CLEAR}")[0] == 1
     '';
 }

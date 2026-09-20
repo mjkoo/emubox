@@ -368,7 +368,7 @@ let
       core = "snes9x_libretro.so";
       kind = "unresolved";
       reason = "the 240pSuite.sfc launch hangs rather than exiting and was killed at the launch subtest's 60 s per-launch cap with exit 124 in CI (an earlier run, before that per-launch timeout existed, saw the same hang consume the driver's entire one-hour global timeout instead); it is not known whether the Snes9x core or this particular fixture/port is at fault - Mesen passes on the same 240p Test Suite, which rules out the suite itself but not which of the other two it is";
-      recheck = "trying a second, licence-clean 240p-style fixture against Snes9x - a second hang would implicate the core; a clean run would implicate the first fixture or its port instead";
+      recheck = "first, relaunching 240pSuite.sfc under Snes9x the way the launch subtest now runs every fixture, on Qt's offscreen platform with no DISPLAY: the hang was observed while these launches still took the kiosk session's Xwayland as their display and autolaunched a D-Bus session against it, the arrangement under which a Stella launch also hung on its way out in CI and was killed at the same cap, so the hang may never have been the core's or the fixture's. A build sandbox on the x86_64-linux builder now runs every fixture above to a clean exit that way, which makes it the cheap first check; a clean run there and then in CI returns the family. If the hang survives that, trying a second, licence-clean 240p-style fixture against Snes9x - a second hang would implicate the core; a clean run would implicate the first fixture or its port instead";
     }
     {
       # A builder sweep (x86_64-linux remote builder, not CI) found vecx
@@ -400,7 +400,7 @@ let
       core = "vecx_libretro.so";
       kind = "mechanism";
       reason = "observed on the x86_64-linux remote builder, not in CI, during a sweep that is otherwise unusable - but the failure fires before the audio-init stage that invalidates the rest of that sweep, and its own controls (Stella, Mesen - both known headless-clean from homebrewFixtures above) got past video and only aborted at that later audio stage, which is what shows the sweep's video stage was still healthy when vecx hit it; it also carries the same forced-HW-render signature (\"[Video] Using HW render, OpenGL driver forced.\") already CI-confirmed for N64 and Dreamcast above";
-      recheck = "confirming this in CI once a KVM runner exists for this project - the builder sweep is credible but was never a CI run, unlike N64 and Dreamcast's confirmations above";
+      recheck = "rerunning the builder sweep on Qt's offscreen platform with no DISPLAY, then confirming in CI, which runs these VM tests under KVM now: what cut the sweep short after the audio stage was RetroArch's Qt companion UI aborting for want of a display, not the audio stage, and with the offscreen platform a build sandbox runs every fixture above to a clean exit, so the builder can give a whole result for vecx instead of one early signature - the forced-HW-render exit stands if it appears again there and in CI, as N64's and Dreamcast's did";
     }
   ];
 

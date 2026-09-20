@@ -92,6 +92,11 @@ in
   config = {
     services.desktopManager.plasma6.enable = true;
 
+    # Plasma also ships an XDG autostart entry for this binary. It carries
+    # X-systemd-skip=true, so it stays inert while Plasma delegates autostart
+    # to the user manager; the VM test also watches for the process itself.
+    systemd.user.services.kde-baloo.enable = false;
+
     users.users.admin = {
       isNormalUser = true;
       extraGroups = [

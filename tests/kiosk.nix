@@ -654,23 +654,6 @@ assert lib.assertMsg
           rc, out = machine.execute("pgrep -x es-de")
           return [int(p) for p in out.split()] if rc == 0 else []
 
-      def session_on_seat(user):
-          """Is `user` holding an active session on seat0?
-
-          `loginctl show-seat`/`show-session` rather than column indices into
-          `list-sessions`, so a future column does not silently change what
-          this reads.
-          """
-          rc, sid = machine.execute("loginctl show-seat seat0 -p ActiveSession --value")
-          sid = sid.strip()
-          if rc != 0 or not sid:
-              return False
-          rc, out = machine.execute(f"loginctl show-session {sid} -p Name -p Active --value")
-          if rc != 0:
-              return False
-          fields = out.split()
-          return fields[:2] == [user, "yes"] or fields[:2] == ["yes", user]
-
       def ancestry(pid):
           """The comm of every ancestor of `pid`, read in one guest command.
 
@@ -867,7 +850,7 @@ assert lib.assertMsg
           # Autologin proved by the session itself, not by the greeter's
           # absence: an active `player` session on seat0 is what "autologin
           # happened" actually means.
-          retry(lambda _: session_on_seat("player"), timeout_seconds=120)
+          retry(lambda _: session_on_seat(machine.execute, "player"), timeout_seconds=120)
 
       with subtest("All declared save routes, including ScummVM, activate before kiosk play"):
           # The route data comes from the module under test, while the minimum
@@ -1452,7 +1435,7 @@ assert lib.assertMsg
               )
 
           try:
-              retry(lambda _: session_on_seat("sddm"), timeout_seconds=120)
+              retry(lambda _: session_on_seat(machine.execute, "sddm"), timeout_seconds=120)
           except Exception:
               # Only on failure, so a green run stays quiet. This dump is what
               # identified the exit-code bug: it showed no sessions, no seat,
@@ -1462,7 +1445,7 @@ assert lib.assertMsg
           # The seat being the greeter's is also the other half of "no
           # automatic login while this display manager keeps running": it
           # cannot be player's at the same time.
-          assert not session_on_seat("player")
+          assert not session_on_seat(machine.execute, "player")
 
       with subtest("A seeded setting edited while the frontend is stopped survives the next boot"):
           # Run here, not inside the reboot subtest below: the session is at
@@ -1514,7 +1497,7 @@ assert lib.assertMsg
           machine.shutdown()
           machine.start()
           machine.wait_for_unit("display-manager.service")
-          retry(lambda _: session_on_seat("player"), timeout_seconds=120)
+          retry(lambda _: session_on_seat(machine.execute, "player"), timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)
 
           # The subtest above changed ApplicationLanguage while the frontend

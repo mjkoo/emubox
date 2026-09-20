@@ -2011,22 +2011,24 @@ assert lib.assertMsg
             )
           }):
               cmd = (
-                  # No DISPLAY: the driver's shell exports `DISPLAY=:0.0`,
-                  # and `su` hands this launch no session bus. RetroArch
-                  # asks GameMode for its status over D-Bus when it starts
-                  # and again on its way out, whatever `gamemode_enable`
-                  # says, so with a DISPLAY libdbus autolaunches a bus
-                  # through `dbus-launch`, which binds that bus's life to
-                  # the X display - here the kiosk compositor's Xwayland,
-                  # seconds after a reboot. That bus went away under a
-                  # launch once in CI and left RetroArch blocked in its exit
-                  # path until the cap below killed it. Without a DISPLAY
-                  # the autolaunch fails at once, GameMode is reported
-                  # unavailable, and the launch depends on nothing the
-                  # session is doing - which is what "headless" is meant to
-                  # say. On the box RetroArch is started inside the session
-                  # and talks to the session's own bus.
-                  "env -u DISPLAY retroarch "
+                  # Headless in fact, not only in its drivers. This RetroArch
+                  # is a Qt build: it brings up a Qt application for its
+                  # companion UI at every start, shown or not, and Qt's
+                  # default platform needs an X display - without one it
+                  # aborts, which is what a launch in a build sandbox does.
+                  # The driver's shell exports `DISPLAY=:0.0`, so a launch
+                  # from it used to get that display from the kiosk
+                  # compositor's Xwayland, and libdbus, finding no session
+                  # bus under `su`, autolaunched one bound to the same
+                  # display for RetroArch's GameMode query. A launch that
+                  # leans on the session that way can hang with it: one did
+                  # in CI, on its way out, until the cap below killed it.
+                  # Qt's offscreen platform needs no display, and with no
+                  # DISPLAY the bus autolaunch fails at once, so the launch
+                  # depends on nothing the session is doing. On the box
+                  # RetroArch starts inside the session, with its display
+                  # and its bus.
+                  "env -u DISPLAY QT_QPA_PLATFORM=offscreen retroarch "
                   f"-L /run/current-system/sw/lib/retroarch/cores/{fixture['core']} "
                   f"{shlex.quote(fixture['rom'])} "
                   # The joined path list carries a `|`, a shell pipe

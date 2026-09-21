@@ -39,7 +39,7 @@ systemd `EnvironmentFile`, which unquotes like a shell: a value containing
 and the box never joins. Every other printable character is fine. If the
 family's passphrase has one of those, change the passphrase on the router.
 
-Later changes add their own keys here: Cloudflare tunnel credentials,
+Later changes add their own keys here: the Tailscale auth key,
 ScreenScraper credentials, and a GitHub deploy key.
 
 **Placeholders.** The committed file holds `REPLACE-BEFORE-INSTALL-*`

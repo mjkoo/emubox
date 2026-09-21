@@ -3,7 +3,7 @@
 A NixOS retro-emulation appliance for a Beelink EQ14 (Intel N150): boots
 straight into a controller-driven ES-DE game library, ephemeral OS root
 with persistent family data on `/data`, RetroAchievements, versioned
-off-site save backups, and remote administration over a Cloudflare Tunnel.
+off-site save backups, and remote administration over Tailscale.
 
 ## Layout
 
@@ -400,7 +400,7 @@ rest, slow but correct.
 ### Pushing configuration changes
 
 Not provided by this layer: nothing on the box listens on the LAN, so
-there is no address to push to. The tunnel and the `deploy` recipe arrive
+there is no address to push to. The Tailscale node and the `deploy` recipe arrive
 with the remote-administration change. Until then a changed configuration
 reaches the box by reinstalling (below, restoring protected data), or by hand at
 the desktop. On a healthy box, press Ctrl-Alt-F6 on an attached keyboard, log

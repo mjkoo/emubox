@@ -1,5 +1,5 @@
-# Design section 12: Cloudflare Tunnel, loopback-only sshd, pull deploys,
-# gated auto-update with boot assessment.
+# Remote administration: loopback-only sshd today; the Tailscale node, pull
+# deploys and gated auto-update with boot assessment are still to come.
 {
   services.openssh = {
     enable = true;
@@ -28,8 +28,8 @@
     };
   };
 
-  # TODO: services.cloudflared.tunnels.emubox with the
-  # credentials file from secrets and ingress "emubox-ssh.<domain>".
+  # TODO: services.tailscale as a tagged node, its auth key from secrets,
+  # with sshd reachable over the tailnet interface only.
   # TODO: emubox-update, system.autoUpgrade tracking `release`
   # (operation = "boot"), emubox-boot-ok / emubox-boot-assess, kill switch.
 }

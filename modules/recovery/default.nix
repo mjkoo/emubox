@@ -120,7 +120,7 @@ in
       # The hash lives in the secrets file and is decrypted before users are
       # created (modules/secrets), so a fresh root gets the password at boot.
       hashedPasswordFile = config.sops.secrets.admin_password_hash.path;
-      # TODO: the admin's SSH public key for the tunnel.
+      # TODO: the admin's SSH public key for remote administration.
       openssh.authorizedKeys.keys = [ ];
     };
     security.sudo = {

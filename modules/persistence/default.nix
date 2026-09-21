@@ -159,7 +159,7 @@ in
     '';
   };
 
-  # The persisted list. Later changes append here (cloudflared state, restic
+  # The persisted list. Later changes append here (tailscaled state, restic
   # cache) rather than declare their own.
   environment.persistence."/persist" = {
     hideMounts = true;
@@ -170,7 +170,7 @@ in
       "/var/lib/NetworkManager"
       "/var/log"
       "/var/lib/emubox"
-      # TODO: cloudflared state, restic cache.
+      # TODO: tailscaled state, restic cache.
     ];
     files = [
       # Kept in the list so it is declared with the rest; the initrd unit

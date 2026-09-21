@@ -368,7 +368,7 @@ let
       core = "snes9x_libretro.so";
       kind = "unresolved";
       reason = "the 240pSuite.sfc launch hangs rather than exiting and was killed at the launch subtest's 60 s per-launch cap with exit 124 in CI (an earlier run, before that per-launch timeout existed, saw the same hang consume the driver's entire one-hour global timeout instead); it is not known whether the Snes9x core or this particular fixture/port is at fault - Mesen passes on the same 240p Test Suite, which rules out the suite itself but not which of the other two it is";
-      recheck = "trying a second, licence-clean 240p-style fixture against Snes9x - a second hang would implicate the core; a clean run would implicate the first fixture or its port instead";
+      recheck = "first, relaunching 240pSuite.sfc under Snes9x the way the launch subtest now runs every fixture, on Qt's offscreen platform with no DISPLAY: the hang was observed while these launches still took the kiosk session's Xwayland as their display and autolaunched a D-Bus session against it, the arrangement under which a Stella launch also hung on its way out in CI and was killed at the same cap, so the hang may never have been the core's or the fixture's. A build sandbox on the x86_64-linux builder now runs every fixture above to a clean exit that way, which makes it the cheap first check; a clean run there and then in CI returns the family. If the hang survives that, trying a second, licence-clean 240p-style fixture against Snes9x - a second hang would implicate the core; a clean run would implicate the first fixture or its port instead";
     }
     {
       # A builder sweep (x86_64-linux remote builder, not CI) found vecx
@@ -400,7 +400,7 @@ let
       core = "vecx_libretro.so";
       kind = "mechanism";
       reason = "observed on the x86_64-linux remote builder, not in CI, during a sweep that is otherwise unusable - but the failure fires before the audio-init stage that invalidates the rest of that sweep, and its own controls (Stella, Mesen - both known headless-clean from homebrewFixtures above) got past video and only aborted at that later audio stage, which is what shows the sweep's video stage was still healthy when vecx hit it; it also carries the same forced-HW-render signature (\"[Video] Using HW render, OpenGL driver forced.\") already CI-confirmed for N64 and Dreamcast above";
-      recheck = "confirming this in CI once a KVM runner exists for this project - the builder sweep is credible but was never a CI run, unlike N64 and Dreamcast's confirmations above";
+      recheck = "rerunning the builder sweep on Qt's offscreen platform with no DISPLAY, then confirming in CI, which runs these VM tests under KVM now: what cut the sweep short after the audio stage was RetroArch's Qt companion UI aborting for want of a display, not the audio stage, and with the offscreen platform a build sandbox runs every fixture above to a clean exit, so the builder can give a whole result for vecx instead of one early signature - the forced-HW-render exit stands if it appears again there and in CI, as N64's and Dreamcast's did";
     }
   ];
 
@@ -523,7 +523,7 @@ assert lib.assertMsg
       # opposing constraints: the relaunch subtest needs one run longer than
       # the window before its kill, and the greeter subtest needs three runs
       # each shorter than it. 30 s rather than the 10 s first written here,
-      # because `started=$SECONDS` is set before `cage -- es-de`, so a run's
+      # because `started=$SECONDS` is set before `cage -s -- es-de`, so a run's
       # measured length includes cage's wlroots and DRM initialisation and
       # ES-DE's start under llvmpipe; at 10 s a slow runner could push a
       # killed run past the window and stop it counting as a crash. Both
@@ -653,23 +653,6 @@ assert lib.assertMsg
       def esde_pids():
           rc, out = machine.execute("pgrep -x es-de")
           return [int(p) for p in out.split()] if rc == 0 else []
-
-      def session_on_seat(user):
-          """Is `user` holding an active session on seat0?
-
-          `loginctl show-seat`/`show-session` rather than column indices into
-          `list-sessions`, so a future column does not silently change what
-          this reads.
-          """
-          rc, sid = machine.execute("loginctl show-seat seat0 -p ActiveSession --value")
-          sid = sid.strip()
-          if rc != 0 or not sid:
-              return False
-          rc, out = machine.execute(f"loginctl show-session {sid} -p Name -p Active --value")
-          if rc != 0:
-              return False
-          fields = out.split()
-          return fields[:2] == [user, "yes"] or fields[:2] == ["yes", user]
 
       def ancestry(pid):
           """The comm of every ancestor of `pid`, read in one guest command.
@@ -867,7 +850,7 @@ assert lib.assertMsg
           # Autologin proved by the session itself, not by the greeter's
           # absence: an active `player` session on seat0 is what "autologin
           # happened" actually means.
-          retry(lambda _: session_on_seat("player"), timeout_seconds=120)
+          retry(lambda _: session_on_seat(machine.execute, "player"), timeout_seconds=120)
 
       with subtest("All declared save routes, including ScummVM, activate before kiosk play"):
           # The route data comes from the module under test, while the minimum
@@ -1452,7 +1435,7 @@ assert lib.assertMsg
               )
 
           try:
-              retry(lambda _: session_on_seat("sddm"), timeout_seconds=120)
+              retry(lambda _: session_on_seat(machine.execute, "sddm"), timeout_seconds=120)
           except Exception:
               # Only on failure, so a green run stays quiet. This dump is what
               # identified the exit-code bug: it showed no sessions, no seat,
@@ -1462,7 +1445,7 @@ assert lib.assertMsg
           # The seat being the greeter's is also the other half of "no
           # automatic login while this display manager keeps running": it
           # cannot be player's at the same time.
-          assert not session_on_seat("player")
+          assert not session_on_seat(machine.execute, "player")
 
       with subtest("A seeded setting edited while the frontend is stopped survives the next boot"):
           # Run here, not inside the reboot subtest below: the session is at
@@ -1514,7 +1497,7 @@ assert lib.assertMsg
           machine.shutdown()
           machine.start()
           machine.wait_for_unit("display-manager.service")
-          retry(lambda _: session_on_seat("player"), timeout_seconds=120)
+          retry(lambda _: session_on_seat(machine.execute, "player"), timeout_seconds=120)
           machine.wait_until_succeeds("pgrep -x es-de", timeout=120)
 
           # The subtest above changed ApplicationLanguage while the frontend
@@ -2028,7 +2011,24 @@ assert lib.assertMsg
             )
           }):
               cmd = (
-                  "retroarch "
+                  # Headless in fact, not only in its drivers. This RetroArch
+                  # is a Qt build: it brings up a Qt application for its
+                  # companion UI at every start, shown or not, and Qt's
+                  # default platform needs an X display - without one it
+                  # aborts, which is what a launch in a build sandbox does.
+                  # The driver's shell exports `DISPLAY=:0.0`, so a launch
+                  # from it used to get that display from the kiosk
+                  # compositor's Xwayland, and libdbus, finding no session
+                  # bus under `su`, autolaunched one bound to the same
+                  # display for RetroArch's GameMode query. A launch that
+                  # leans on the session that way can hang with it: one did
+                  # in CI, on its way out, until the cap below killed it.
+                  # Qt's offscreen platform needs no display, and with no
+                  # DISPLAY the bus autolaunch fails at once, so the launch
+                  # depends on nothing the session is doing. On the box
+                  # RetroArch starts inside the session, with its display
+                  # and its bus.
+                  "env -u DISPLAY QT_QPA_PLATFORM=offscreen retroarch "
                   f"-L /run/current-system/sw/lib/retroarch/cores/{fixture['core']} "
                   f"{shlex.quote(fixture['rom'])} "
                   # The joined path list carries a `|`, a shell pipe

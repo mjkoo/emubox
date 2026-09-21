@@ -30,6 +30,7 @@ eval:
     nix eval --raw .#nixosConfigurations.{{host}}.config.system.build.toplevel.drvPath
     nix eval --raw .#checks.x86_64-linux.vm.drvPath
     nix eval --raw .#checks.x86_64-linux.kiosk.drvPath
+    nix eval --raw .#checks.x86_64-linux.mode.drvPath
     nix eval --raw .#checks.x86_64-linux.controllers.drvPath
     nix eval --raw .#checks.x86_64-linux.session.drvPath
     nix eval --raw .#checks.x86_64-linux.retroarch-settings.drvPath
@@ -46,6 +47,10 @@ vm-test:
 # Build and run the kiosk VM test (x86_64-linux builder with KVM)
 kiosk-test:
     nix build .#checks.x86_64-linux.kiosk --no-link
+
+# Build and run the mode-switch VM test (x86_64-linux builder with KVM)
+mode-test:
+    nix build .#checks.x86_64-linux.mode --no-link
 
 # Build and run the controllers VM test (x86_64-linux builder with KVM)
 controllers-test:

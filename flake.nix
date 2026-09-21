@@ -220,6 +220,9 @@
             # The host's software modules as a plain node with a graphical
             # stack: the session, its crash counter and the greeter.
             kiosk = hostPkgs.testers.runNixOSTest (import ./tests/kiosk.nix { inherit self; });
+            # The live round trip between the frontend and Plasma, including
+            # refusal paths and teardown of the old graphical session.
+            mode = hostPkgs.testers.runNixOSTest (import ./tests/mode.nix { inherit self; });
             # The host's software modules as a plain node with fixture
             # controller ports and fixture pad identities: the port-to-player
             # mapping, the session hint, the owned controller keys and the

@@ -12,7 +12,7 @@ flake.nix          inputs, nixosConfigurations.emubox, packages, checks, devShel
 hosts/emubox/      the physical box: hardware facts, disko layout
 modules/           the software stack, one directory per concern
 overlays/, pkgs/   the packages the flake builds: vendored, and its own
-tests/             VM tests (disko install, kiosk session, controllers), test values and key
+tests/             VM tests (disko install, kiosk session, controllers, mode switching), test values and key
 secrets/           sops files (encrypted); recipients in .sops.yaml
 ```
 
@@ -23,10 +23,10 @@ secrets/           sops files (encrypted); recipients in .sops.yaml
 on this machine: the formatting, flake check and evaluation steps CI runs,
 plus the workflow lint. Evaluating the host and the Linux checks works
 from macOS; building the host (`just build`, `just closure-check`) needs
-an `x86_64-linux` builder, and the three VM tests (`just vm-test` for the
-disko install test, `just kiosk-test` for the kiosk session, and `just
-controllers-test` for the controllers node) need one that exposes KVM. CI
-builds all of it on every push.
+an `x86_64-linux` builder, and the four VM tests (`just vm-test` for the
+disko install test, `just kiosk-test` for the kiosk session, `just
+controllers-test` for the controllers node, and `just mode-test` for mode
+switching) need one that exposes KVM. CI builds all of it on every push.
 
 One local gap is worth knowing about: the kiosk session script is a
 `writeShellApplication`, so shellcheck runs when it is *built*, and nothing
@@ -100,8 +100,9 @@ their upstream licences, recorded in each `package.nix`.
 
 ## Kiosk session
 
-Power-on reaches the game library with nobody touching a keyboard. SDDM
-logs `player` in automatically and starts the `emubox` Wayland session,
+Power-on into the normal boot entry reaches the game library with nobody
+touching a keyboard. SDDM logs `player` in automatically and starts the
+`emubox` Wayland session,
 whose script loops: assert the settings the flake owns, then run the
 frontend full screen under the `cage` compositor. When ES-DE exits the
 loop relaunches it after two seconds, so quitting a game or a crash
@@ -113,8 +114,12 @@ script exits. Because SDDM's autologin is configured for the first start
 only (`relogin = false`), what appears then is its login greeter, not
 another doomed relaunch. `admin` can log in there and read the journal,
 choosing the recovery desktop from the greeter's session list rather than
-the pre-selected `emubox` session, which is `player`'s. A reboot restores
-automatic login and starts over.
+the pre-selected `emubox` session, which is `player`'s. On a healthy box,
+`emubox-mode desktop` provides the switch without waiting for a crash; see
+[Desktop and recovery](#desktop-and-recovery) for the administrator route.
+The greeter and recovery boot entry remain the routes when the session
+cannot be trusted. A reboot into the normal entry restores automatic login
+and starts over.
 
 The frontend runs in ES-DE's kiosk UI mode: no metadata editor, no
 scraper, no collection editing, every game still launchable. The full menu
@@ -177,6 +182,47 @@ ES-DE hides that menu entirely in kiosk mode, so `pkgs/es-de` carries a
 patch that shows it and, in kiosk mode, offers only those two entries:
 quitting the frontend would just be relaunched by the loop, and the box
 refuses to suspend.
+
+## Desktop and recovery
+
+`emubox-mode` switches the running box without a reboot. It takes exactly
+one argument: `desktop` for Plasma or `kiosk` for the game library. The
+command needs root; `admin` reaches root through passwordless sudo. On a
+healthy box the route is a keyboard and a virtual console: attach a keyboard
+(the box is otherwise driven by controllers), press Ctrl-Alt-F6 from the
+game library or from inside a game, log in as `admin` and run
+`sudo emubox-mode desktop`. The sixth console is the one to use: it is
+reserved for a login prompt, where a lower one may be the display manager's.
+Only an account with a password gets past that prompt, and `player` has none;
+Ctrl-Alt-F1, or Ctrl-Alt-F2 if the first shows nothing, returns to the game
+library as it was left. There is no switch in the frontend and no network
+shell provided by this feature.
+
+The desktop on the TV runs as `player`. From a terminal there, first run
+`su - admin` and enter the administrator password, then run
+`sudo emubox-mode kiosk` to return to the game library. Sudo at that point
+needs no password. `sudo emubox-mode desktop` uses the same route to request
+a fresh desktop session.
+
+The command warns that the current graphical session will end. A successful
+exit reports only that the mode was recorded and the display-manager restart
+was accepted; it does not confirm what has appeared on the TV. A refusal or
+failure names what went wrong and which mode the next automatic session will
+start. Wait for the new screen before running `emubox-mode` again: a second
+switch while the display manager is still logging `player` in can leave the
+TV with no session and no login prompt until the box is rebooted.
+
+The desktop consumes its selection when it starts. Ending it leaves a login
+prompt, without starting the frontend or arranging a later session to return
+to the desktop. On a system using the normal boot entry, `emubox-mode kiosk`
+or a display-manager restart brings the game library back. Rebooting into
+the normal boot entry also brings it back.
+
+If the session cannot be trusted, use the greeter or the recovery entry in
+the boot menu. That entry disables automatic login and pre-selects Plasma:
+it reaches a login prompt and starts no frontend. Log in there to reach the
+desktop; `emubox-mode` refuses in that configuration because nothing would
+read its selection. No mode selection survives a reboot through either entry.
 
 ## BIOS files
 
@@ -342,8 +388,13 @@ rest, slow but correct.
 - Ephemeral root: `sudo touch /root/marker`, reboot, the file is gone
   while `/etc/machine-id` is unchanged.
 - `admin` logs in on a console with the password whose hash is in the
-  secrets file: Ctrl-Alt-F3 switches to a free virtual console (the kiosk
-  session holds one of the first two; a getty appears on any free one).
+  secrets file: with a keyboard attached, Ctrl-Alt-F6 from the game library
+  switches to the console reserved for a login prompt (the kiosk session
+  holds one of the first two), and Ctrl-Alt-F1 or F2 switches back. The VM
+  test proves the compositor acts on that key; that the box's own keyboard
+  produces it is checked here.
+- The same switch works from inside a running game, and nothing typed at the
+  console reaches the emulator left running behind it.
 - No failed units: `systemctl --failed` is empty.
 
 ### Pushing configuration changes
@@ -352,7 +403,14 @@ Not provided by this layer: nothing on the box listens on the LAN, so
 there is no address to push to. The tunnel and the `deploy` recipe arrive
 with the remote-administration change. Until then a changed configuration
 reaches the box by reinstalling (below, restoring protected data), or by hand at
-the recovery desktop: as `admin`, clone the repository somewhere that
+the desktop. On a healthy box, press Ctrl-Alt-F6 on an attached keyboard, log
+in as `admin` on that console and run
+`sudo emubox-mode desktop`; in the desktop's terminal, run `su - admin`
+because the desktop runs as `player`. If the session cannot be trusted, use
+the greeter or recovery boot entry and log in as `admin` instead. The mode
+command does not work in the recovery boot configuration.
+
+As `admin`, clone the repository somewhere that
 survives a reboot (`/home/admin` is on the ephemeral root; `sudo mkdir
 /data/admin && sudo chown admin /data/admin` makes a place that lasts),
 copy in your edited `secrets/secrets.yaml` (a fresh clone has the

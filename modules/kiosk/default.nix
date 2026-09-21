@@ -36,23 +36,28 @@ let
   customSystemsPath =
     if cfg.customSystems == "" then "" else pkgs.writeText "emubox-es_systems.xml" cfg.customSystems;
 
-  # The session loop. Runs as `player`; relaunches ES-DE if it exits, and
-  # gives up at the greeter if it cannot keep it up.
+  # The session script. Runs as `player`. Normally it is the frontend's loop:
+  # it relaunches ES-DE if it exits, and gives up at the greeter if it cannot
+  # keep it up. When the mode flag selects the desktop it runs Plasma once
+  # instead and never enters the loop.
   #
   # ESDE_APPDATA_DIR is exported once, above the loop, rather than prefixed
   # onto any single command: prepare and the frontend must read the same
   # value, and a per-command prefix is exactly the shape in which prepare
   # would assert settings into a directory the frontend never reads.
   #
-  # cage is the one runtimeInput, so the compositor is pinned to the exact
-  # store path this module was built against. emubox-prepare and es-de are
-  # deliberately not: they resolve from the system path (they are in
-  # environment.systemPackages below), so that the session and any outside
-  # caller - the test driver, an admin who reached the greeter - reach one
-  # binary rather than two that happen to agree.
+  # cage and systemd are runtimeInputs, so the compositor and journal client
+  # are pinned to the exact store paths this module was built against.
+  # emubox-prepare and es-de are deliberately not: they resolve from the
+  # system path (they are in environment.systemPackages below), so that the
+  # session and any outside caller - the test driver, an admin who reached
+  # the greeter - reach one binary rather than two that happen to agree.
   emubox-session = pkgs.writeShellApplication {
     name = "emubox-session";
-    runtimeInputs = [ pkgs.cage ];
+    runtimeInputs = [
+      pkgs.cage
+      pkgs.systemd
+    ];
     text = ''
       export ESDE_APPDATA_DIR=${cfg.appdataDir}
 
@@ -64,7 +69,9 @@ let
       # the non-zero `emubox-prepare` whose broken-call-site policy is to stop
       # at a greeter the admin can log into, would otherwise leave the box on a
       # black screen with no way in - the opposite of what it promises. The
-      # real status is logged before it is swallowed, so the journal keeps it.
+      # real status is written to stderr before it is swallowed. That is
+      # SDDM's session log under the user's home, which the next session
+      # truncates, and not the journal.
       # A named function rather than the assignment inline in the trap
       # string, which shellcheck rejects as SC2154 (it cannot see a variable
       # assigned inside single quotes).
@@ -92,7 +99,7 @@ let
       # because that is an `if` condition `set -e` does not fire: every run
       # would silently count as long and the counter would never reach three.
       # Falling back loudly is the safe reading - the box stays up and the
-      # journal says why the hook was ignored.
+      # session log says why the hook was ignored.
       case "$window" in
         "" | *[!0-9]*)
           echo "emubox-session: EMUBOX_CRASH_WINDOW=$window is not a number; using 60" >&2
@@ -101,13 +108,75 @@ let
       esac
       crashes=0
 
-      while true; do
-        mode=$(cat /run/emubox/mode 2>/dev/null || echo kiosk)
-        # TODO: desktop mode hands over to Plasma.
-        if [ "$mode" = desktop ]; then
-          exec startplasma-wayland
-        fi
+      # The mode is decided once, here, and not inside the relaunch loop: a
+      # session that started as the frontend stays the frontend however often
+      # ES-DE exits, and a flag written under it selects the next session.
+      mode=$(cat /run/emubox/mode 2>/dev/null || echo kiosk)
+      if [ "$mode" = desktop ]; then
+        # The flag is one-shot: it is cleared before the desktop starts, so
+        # that ending the desktop does not send the next login back into it.
+        # `player` cannot remove a root-owned flag, hence the one sudo rule
+        # modules/recovery grants. The wrapper is named by path because a
+        # store sudo is not setuid, and `-n` because this session owns the VT
+        # as its terminal: without it a refused sudo would sit at a password
+        # prompt instead of failing.
+        if /run/wrappers/bin/sudo -n ${config.emubox.recovery.clearModeCommand}; then
+          # The desktop is a child, not an `exec`, so that the EXIT trap above
+          # still runs when it ends: a Plasma that exited 1 would otherwise
+          # reach SDDM as HELPER_AUTH_ERROR and leave no greeter. That costs
+          # what `exec` gave for free - SDDM stops a session by signalling
+          # this one process and nothing else - so TERM and HUP are passed on
+          # by hand. startplasma-wayland treats TERM as a logout and stops
+          # Plasma's user units itself.
+          desktop_pid=
+          desktop_term_pending=false
+          desktop_wait_interrupted=false
+          # Invoked indirectly by the signal trap below.
+          # shellcheck disable=SC2329
+          forward_desktop_term() {
+            desktop_wait_interrupted=true
+            desktop_term_pending=true
+            if [ -n "$desktop_pid" ]; then
+              kill -TERM "$desktop_pid" 2>/dev/null || true
+            fi
+          }
+          trap forward_desktop_term TERM HUP
 
+          startplasma-wayland &
+          desktop_pid=$!
+          # A signal can arrive after launch but before the PID is recorded.
+          if [ "$desktop_term_pending" = true ]; then
+            kill -TERM "$desktop_pid" 2>/dev/null || true
+          fi
+
+          # `wait` returns above 128 both when a trapped signal interrupted
+          # it and when the desktop itself died of a signal, and the status
+          # alone cannot tell them apart. The trap's flag can: after an
+          # interrupted wait the loop waits again, and because bash keeps a
+          # reaped child's status that second wait returns the desktop's real
+          # one even if the desktop has already gone.
+          desktop_rc=0
+          while true; do
+            desktop_wait_interrupted=false
+            if wait "$desktop_pid"; then
+              desktop_rc=0
+            else
+              desktop_rc=$?
+            fi
+            [ "$desktop_wait_interrupted" = true ] || break
+          done
+          # The desktop is gone, and its pid may be handed to something else.
+          trap - TERM HUP
+          # Through systemd-cat, not stderr: SDDM points a session's stderr
+          # at a log file in the user's home that the next session truncates,
+          # so this is the only copy of the status that can be read back.
+          printf 'desktop exited with status %s\n' "$desktop_rc" | systemd-cat -t emubox-session
+          exit "$desktop_rc"
+        fi
+        printf 'could not clear the desktop selection; starting the frontend instead\n' | systemd-cat -t emubox-session || true
+      fi
+
+      while true; do
         # Not guarded, and what that does and does not cover is worth
         # stating exactly. prepare's recreate policy absorbs the runtime
         # failures a box actually produces - a missing, unreadable or
@@ -116,21 +185,32 @@ let
         # while the run carries on (`emubox_prepare.py`'s error policy, and
         # the `OSError` guards around its editor loop and the custom-systems
         # install). An unwritable /data therefore does NOT end up here; it
-        # ends up in the journal with the frontend still launching, which is
-        # deliberate (the alternative is a family staring at a greeter). What is left to reach this line is the broken-call-site
-        # class prepare refuses to paper over - an owned-values document
-        # that is unreadable or the wrong shape, an unset ESDE_APPDATA_DIR,
-        # an unreadable custom-systems store path - and for those the
-        # greeter an admin can log into is the right destination, because no
-        # relaunch of the same call would do any better.
+        # ends up as a line on stderr - SDDM's session log, not the journal -
+        # with the frontend still launching, which is deliberate (the
+        # alternative is a family staring at a greeter). What is left to
+        # reach this line is the broken-call-site class prepare refuses to
+        # paper over - an owned-values document that is unreadable or the
+        # wrong shape, an unset ESDE_APPDATA_DIR, an unreadable
+        # custom-systems store path - and for those the greeter an admin can
+        # log into is the right destination, because no relaunch of the same
+        # call would do any better.
         emubox-prepare ${cfg.ownedValuesFile} "${customSystemsPath}"
 
         # The loop needs the run's length, not its status, but the status is
         # captured rather than discarded with `|| true` so that `set -e` does
-        # not end the session and the recovery epics still have it.
+        # not end the session and the line logged below still has it.
+        #
+        # `-s` lets cage act on Ctrl-Alt-Fn, which it otherwise swallows, and
+        # under a Wayland compositor nothing else switches consoles. That key
+        # is the only way from a running frontend, or a running game, to a
+        # login prompt, and so to anywhere `emubox-mode` can be run. The
+        # prompt admits only an account with a password, and `player` has
+        # none: what the key gives the family is a prompt they cannot pass,
+        # and the same switch naming this session's console brings the
+        # frontend back.
         started=$SECONDS
         rc=0
-        cage -- es-de || rc=$?
+        cage -s -- es-de || rc=$?
         ran=$(( SECONDS - started ))
         # TODO: emubox-leakcheck after each session.
 

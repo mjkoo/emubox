@@ -1,7 +1,7 @@
-# Pure helpers the VM test scripts share, spliced into each script as text.
-# Every function here takes and returns plain strings and containers, never
-# the test driver's `machine`, so each script keeps its own machine-bound
-# wrappers and this file needs nothing from them.
+# Helpers the VM test scripts share, spliced into each script as text. Value
+# helpers take and return plain strings and containers; helpers that query a
+# guest take the command runner explicitly, so this file never depends on a
+# hidden test-driver `machine` global.
 
 
 def _is_header(stripped):
@@ -126,3 +126,22 @@ def status_sections(output):
         elif current is not None:
             sections[current].append(line)
     return {name: "\n".join(lines) for name, lines in sections.items()}
+
+
+def active_session_on_seat(execute):
+    """Return seat0's active session id, or None when the seat has none."""
+    rc, sid = execute("loginctl show-seat seat0 -p ActiveSession --value")
+    sid = sid.strip()
+    return sid if rc == 0 and sid else None
+
+
+def session_on_seat(execute, user):
+    """Whether `user` holds the active session on seat0."""
+    sid = active_session_on_seat(execute)
+    if sid is None:
+        return False
+    rc, out = execute(f"loginctl show-session {sid} -p Name -p Active --value")
+    if rc != 0:
+        return False
+    fields = out.split()
+    return fields[:2] == [user, "yes"] or fields[:2] == ["yes", user]

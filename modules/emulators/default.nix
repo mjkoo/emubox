@@ -589,27 +589,22 @@ let
       <theme>c64</theme>
     </system>'';
 
-  customSystems = ''
-    <?xml version="1.0"?>
-    <systemList>
-    ${lib.concatStringsSep "\n" [
-      psxOverride
-      pcengineOverride
-      pcenginecdOverride
-      tg16Override
-      tgCdOverride
-      arcadeOverride
-      ndsOverride
-      pspOverride
-      gcOverride
-      wiiOverride
-      ps2Override
-      n3dsOverride
-      scummvmOverride
-      c64Override
-    ]}
-    </systemList>
-  '';
+  customSystems = [
+    psxOverride
+    pcengineOverride
+    pcenginecdOverride
+    tg16Override
+    tgCdOverride
+    arcadeOverride
+    ndsOverride
+    pspOverride
+    gcOverride
+    wiiOverride
+    ps2Override
+    n3dsOverride
+    scummvmOverride
+    c64Override
+  ];
 
   # ---------------------------------------------------------------------
   # BIOS inventory: path under /data/bios, a digest with the

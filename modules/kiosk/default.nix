@@ -24,17 +24,26 @@ let
     inherit value;
   };
 
-  # The empty string, not a store path to an empty file: the empty value
-  # itself is what selects prepare's removal branch, so writing an empty
-  # document to the store and passing its path would leave that branch
-  # unreachable for every configuration, whatever `customSystems` held.
-  # Not "unreachable on the box as shipped" - the shipped box
-  # takes the other branch, since `modules/emulators` sets `customSystems`
-  # to a real document. The removal branch is what a box whose
-  # configuration drops back to the empty default relies on, and it is the
-  # kiosk spec's own "Definition empty" scenario.
+  # An empty list selects prepare's removal branch. A path to an empty
+  # document would leave that branch unreachable when a configuration drops
+  # all custom systems.
   customSystemsPath =
-    if cfg.customSystems == "" then "" else pkgs.writeText "emubox-es_systems.xml" cfg.customSystems;
+    if cfg.customSystems == [ ] then
+      ""
+    else
+      "${pkgs.writeText "emubox-es_systems.xml" ''
+        <?xml version="1.0"?>
+        <systemList>
+        ${lib.concatStringsSep "\n" cfg.customSystems}
+        </systemList>
+      ''}";
+  forbiddenCustomSystemsFragments = lib.filter (
+    fragment:
+    lib.any (pattern: builtins.length (builtins.split pattern fragment) > 1) [
+      "<[[:space:]]*/?[[:space:]]*systemList([[:space:]>])"
+      "<\\?[[:space:]]*xml([[:space:]?])"
+    ]
+  ) cfg.customSystems;
 
   # The session script. Runs as `player`. Normally it is the frontend's loop:
   # it relaunches ES-DE if it exits, and gives up at the greeter if it cannot
@@ -355,15 +364,26 @@ in
     };
 
     customSystems = lib.mkOption {
-      type = lib.types.str;
-      default = "";
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
       description = ''
-        The complete contents of an ES-DE custom `es_systems.xml`, the
-        `<systemList>` wrapper included: it is written verbatim and no
-        wrapper is added. Empty means no custom systems file exists, and a
-        stale one left by an earlier configuration is removed before the
-        frontend launches.
+        ES-DE `<system>` fragments contributed by modules. The kiosk wraps
+        them in one `<systemList>` document, preserving each fragment's text.
+        An empty list removes a stale custom systems file before launch.
       '';
+    };
+
+    customSystemsFile = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      internal = true;
+      description = "The rendered custom systems document's store path, or an empty string when no systems are contributed.";
+    };
+
+    preFrontendStep = lib.mkOption {
+      type = lib.types.nullOr lib.types.lines;
+      default = null;
+      description = "An optional shell step to run before each frontend launch.";
     };
 
     appdataDir = lib.mkOption {
@@ -610,7 +630,13 @@ in
   };
 
   config = {
+    emubox.kiosk.customSystemsFile = customSystemsPath;
+
     assertions = [
+      {
+        assertion = forbiddenCustomSystemsFragments == [ ];
+        message = "emubox.kiosk.customSystems accepts only <system> fragments, without a <systemList> wrapper or XML declaration";
+      }
       {
         assertion = ownedFileTierOverlaps == [ ];
         message = ''

@@ -38,7 +38,12 @@ let
   # contributes to a real box went unparsed by any check in this
   # repository. `shippedCustomSystems` exists so the standalone check near
   # the top of `testScript` below can do that, with no VM node needed.
-  shippedCustomSystems = self.nixosConfigurations.emubox.config.emubox.kiosk.customSystems;
+  shippedCustomSystems = ''
+    <?xml version="1.0"?>
+    <systemList>
+    ${lib.concatStringsSep "\n" self.nixosConfigurations.emubox.config.emubox.kiosk.customSystems}
+    </systemList>
+  '';
 
   # The single source for every plaintext test value (tests/values.nix's own
   # header); `raUsername`/`raPassword` are the mock RetroAchievements
@@ -545,17 +550,13 @@ assert lib.assertMsg
       # default would pass whether or not the option is wired to anything.
       emubox.kiosk.passkey = "ablrablrud";
 
-      # A complete es_systems.xml document, <systemList> wrapper included,
-      # because the module writes the option verbatim and adds no wrapper.
-      #
       # mkForce, load-bearing: `modules/emulators` contributes its own
       # (non-empty) definition of this same option, so two plain definitions would conflict and the kiosk
       # check would stop evaluating. This node deliberately proves the
-      # custom-systems mechanism against a document it controls, not against
+      # custom-systems mechanism against a fragment it controls, not against
       # the shipped override list.
-      emubox.kiosk.customSystems = lib.mkForce ''
-        <?xml version="1.0"?>
-        <systemList>
+      emubox.kiosk.customSystems = lib.mkForce [
+        ''
           <system>
             <name>emuboxtest</name>
             <fullname>emubox test system</fullname>
@@ -565,8 +566,8 @@ assert lib.assertMsg
             <platform>test</platform>
             <theme>emuboxtest</theme>
           </system>
-        </systemList>
-      '';
+        ''
+      ];
 
       # Prepare's login2 call is pointed at the mock server
       # above instead of the real service, with no patching. The service
@@ -599,6 +600,7 @@ assert lib.assertMsg
         ownedValuesFile
         passkey
         customSystems
+        customSystemsFile
         ;
       inherit (nodes.machine.emubox.retroachievements) apiUrl;
       inherit (nodes.machine.users.users.player) home;
@@ -608,16 +610,12 @@ assert lib.assertMsg
       saveBindMappingsJson = builtins.toJSON saveBindMappings;
       py = builtins.toJSON;
 
-      # The store path `modules/kiosk`'s own `customSystemsPath` computes
-      # internally for this exact node (same `writeText` name, same
-      # content) - recomputed here rather than exposed as a new option,
-      # since this is the only place outside that module that ever needs a
-      # custom-systems argument for a manual `emubox-prepare` invocation,
-      # and it has to be the real one: passing "" here instead would repeat
-      # the existing "empty definition removes the file" subtest by
-      # accident, which is not what any of the group 5 subtests below are
-      # about.
-      customSystemsPath = pkgs.writeText "emubox-es_systems.xml" customSystems;
+      customSystemsDocument = ''
+        <?xml version="1.0"?>
+        <systemList>
+        ${lib.concatStringsSep "\n" customSystems}
+        </systemList>
+      '';
       bindings = import ./lib/controller-bindings.nix;
     in
     ''
@@ -636,7 +634,7 @@ assert lib.assertMsg
       OWNED_VALUES = ${py ownedValuesFile}
       SETTINGS = f"{APPDATA}/settings/es_settings.xml"
       CUSTOM_SYSTEMS = f"{APPDATA}/custom_systems/es_systems.xml"
-      CUSTOM_SYSTEMS_PATH = ${py customSystemsPath}
+      CUSTOM_SYSTEMS_PATH = ${py customSystemsFile}
       PLAYER_HOME = ${py home}
 
       RA_API_URL = ${py apiUrl}
@@ -1345,7 +1343,7 @@ assert lib.assertMsg
       # --- kiosk: custom systems, both branches -----------------------------
 
       with subtest("The custom systems file holds exactly the definition"):
-          assert machine.succeed(f"cat {CUSTOM_SYSTEMS}") == ${py customSystems}
+          assert machine.succeed(f"cat {CUSTOM_SYSTEMS}") == ${py customSystemsDocument}
 
       with subtest("An empty definition removes the file"):
           # Before any kill: a later loop iteration re-runs prepare with the

@@ -195,7 +195,7 @@ let
   ) azaharBindingNames;
 
   pspStandaloneCommand = "%EMULATOR_PPSSPP% --pause-menu-exit %ROM%";
-  customSystems = host.config.emubox.kiosk.customSystems;
+  customSystems = lib.concatStringsSep "\n" host.config.emubox.kiosk.customSystems;
 in
 assert lib.assertMsg (outsideConfigDirs == [ ]) ''
   tests/controllers-config.nix: a standalone emulator's owned file does not

@@ -171,10 +171,27 @@ has no pad-bindable route back at the pinned version, since it persists
 hotkeys as keyboard key sequences rather than controller input; that gap
 is deferred to a later change.
 
-`emubox.kiosk.customSystems` takes the complete contents of an ES-DE
-custom `es_systems.xml`, `<systemList>` wrapper included, written verbatim
-to `/data/es-de/custom_systems/`. Empty, its default, means no such file
-exists and a stale one from an earlier configuration is removed.
+`emubox.kiosk.customSystems` takes a list of unwrapped ES-DE `<system>`
+fragments. Modules can each contribute definitions; the kiosk combines them
+under one `<systemList>` and writes the result to
+`/data/es-de/custom_systems/`. An empty list, the default, removes a stale
+file from an earlier configuration. For example:
+
+```nix
+emubox.kiosk.customSystems = [
+  ''
+    <system>
+      <name>example</name>
+      <fullname>Example</fullname>
+      <path>/data/roms/example</path>
+      <extension>.example</extension>
+      <command>/bin/true %ROM%</command>
+      <platform>example</platform>
+      <theme>example</theme>
+    </system>
+  ''
+];
+```
 
 Power off and reboot come from the frontend's own QUIT menu, each behind a
 confirmation, and reach logind as `player` through a polkit rule. Upstream

@@ -329,7 +329,16 @@ def main() -> None:
             )
 
     if args.platform_map:
-        check_platform_map(platforms, json.loads(args.platform_map.read_text()))
+        mapping = json.loads(args.platform_map.read_text())
+        check_platform_map(platforms, mapping)
+        try:
+            check_platform_map(
+                platforms, {**mapping, "negative-control": "not-a-platform"}
+            )
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("invalid platform added to exported map was accepted")
     if args.vectors:
         vectors = json.loads(args.vectors.read_text())
         require(
@@ -341,6 +350,14 @@ def main() -> None:
                 check_vector(options, flags, vector)
             except AssertionError as error:
                 raise AssertionError(f"{label}: {error}") from error
+            try:
+                check_vector(options, flags, [*vector, "--stderr", "yes"])
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(
+                    f"{label}: --stderr added to exported vector was accepted"
+                )
     print(
         f"Pinned source contracts passed: {len(platforms)} platforms, {len(options)} options, {len(flags)} flags"
     )

@@ -22,6 +22,8 @@
   hash = "$y$j9T$zr7MqokZ5LgjQCW77ICHl/$PEA2Wl7JW5Vhx.nxmbmmh6ZhEzrNKKMdrLWYlOodJsD";
   raUsername = "emubox-test-ra";
   raPassword = "emubox-test-ra-password";
+  screenscraperUsername = "REPLACE-BEFORE-INSTALL-SCREENSCRAPER-USERNAME";
+  screenscraperPassword = "REPLACE-BEFORE-INSTALL-SCREENSCRAPER-PASSWORD";
   b2KeyId = "emubox-test-b2-key-id";
   b2ApplicationKey = "emubox-test-b2-application-key";
   resticPassword = "emubox-test-restic-password";

@@ -32,6 +32,8 @@ Keys this layer consumes:
 | `b2_key_id`                     | `sops.templates."restic.env"` as `AWS_ACCESS_KEY_ID`, used only by enabled restic services |
 | `b2_application_key`            | same template as `AWS_SECRET_ACCESS_KEY`; restricted to the dedicated backup bucket |
 | `restic_password`               | root-only `RESTIC_PASSWORD_FILE` in the same template |
+| `screenscraper_username`        | player-only Skyscraper config rendered by `modules/library` |
+| `screenscraper_password`        | same config; never passed on the command line |
 
 **WiFi values.** `wifi_ssid` and `wifi_psk` reach NetworkManager through a
 systemd `EnvironmentFile`, which unquotes like a shell: a value containing
@@ -39,14 +41,14 @@ systemd `EnvironmentFile`, which unquotes like a shell: a value containing
 and the box never joins. Every other printable character is fine. If the
 family's passphrase has one of those, change the passphrase on the router.
 
-Later changes add their own keys here: the Tailscale auth key,
-ScreenScraper credentials, and a GitHub deploy key.
+Later changes add their own keys here: the Tailscale auth key and a GitHub
+deploy key.
 
 **Placeholders.** The committed file holds `REPLACE-BEFORE-INSTALL-*`
-values so the flake evaluates from a fresh clone. Replace all eight with
+values so the flake evaluates from a fresh clone. Replace all ten with
 `just secrets-edit` before the first install; the box would otherwise boot
 with an unusable admin password, a WiFi profile that cannot join anything,
-an unusable off-site backup configuration when enabled, and a
+an unusable off-site backup configuration when enabled, a refused scrape, and a
 RetroAchievements login that never succeeds (harmless on its own - see the
 RetroAchievements section of the top-level README - but worth setting
 alongside the other entries while the file is already open). Generate the

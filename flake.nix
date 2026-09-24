@@ -34,10 +34,10 @@
         allowUnfree = true;
         # FreeImage (pkgs/freeimage) is the derivation nixpkgs removed over
         # its unpatched CVEs; ES-DE has no other image backend. The risk is
-        # accepted because FreeImage only ever decodes images the admin put
-        # on the box (art scraped from ScreenScraper, bundled theme assets):
-        # no untrusted input reaches it. CI builds it whenever its inputs
-        # change, so a library bump that breaks it surfaces before the box.
+        # accepted even though external ScreenScraper artwork reaches the
+        # vulnerable decoder, including household-triggered downloads, as
+        # do local images and bundled theme assets. CI detects build
+        # regressions; it does not make downloaded images trusted.
         # If the source build becomes unmaintainable, the fallback is
         # wrapping ES-DE's own AppImage and dropping this permission. The
         # name is pname-version, as nixpkgs matches it. The overlay puts
@@ -157,6 +157,11 @@
           perSystem.emubox-restic-backup =
             (pkgsFor system).callPackage ./pkgs/emubox-restic-backup/package.nix
               { };
+          perSystem.emubox-library = (pkgsFor system).callPackage ./pkgs/emubox-library/package.nix { };
+          perSystem.library-config = import ./tests/library-config.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
           perSystem.emubox-status = (pkgsFor system).callPackage ./pkgs/emubox-status/package.nix { };
           perSystem.emubox-controllers-status =
             (pkgsFor system).callPackage ./pkgs/emubox-controllers-status/package.nix
@@ -211,7 +216,9 @@
                 python3 ${./tests/library-source-contracts.py} \
                   --skyscraper-source ${hostPkgs.skyscraper.src} \
                   --esde-source ${hostPkgs.es-de.src} \
-                  --nixpkgs-source ${nixpkgs}
+                  --nixpkgs-source ${nixpkgs} \
+                  --platform-map ${host.config.environment.etc."emubox/library-platforms.json".source} \
+                  --vectors ${perSystem.emubox-library}/share/emubox-library/vectors.json
                 touch "$out"
               '';
 
@@ -224,6 +231,10 @@
           # nixpkgsConfig and overlay included.
           hostOnly = {
             toplevel = self.nixosConfigurations.emubox.config.system.build.toplevel;
+            custom-systems = import ./tests/custom-systems.nix {
+              inherit self;
+              pkgs = hostPkgs;
+            };
             # disko's install test: format the real layout, install, boot
             # through the boot loader, then run tests/default.nix's checks.
             vm = testHost.config.system.build.installTest;
@@ -235,6 +246,10 @@
             mode = hostPkgs.testers.runNixOSTest (import ./tests/mode.nix { inherit self; });
             # Nonvisual scraper and library integration assertions.
             # Display and frontend interaction are checked on hardware.
+            library-resources = hostPkgs.runCommand "emubox-library-resources" { } ''
+              test -f ${hostPkgs.es-de}/share/es-de/resources/systems/linux/es_systems.xml
+              touch "$out"
+            '';
             library = hostPkgs.testers.runNixOSTest (import ./tests/library.nix { inherit self; });
             # The host's software modules as a plain node with fixture
             # controller ports and fixture pad identities: the port-to-player
@@ -250,6 +265,10 @@
             # CI, which is exactly what happened to the EXIT trap. Selected
             # by `providedSessions` rather than by position: the recovery
             # module puts Plasma's session package in the same list.
+            session-restarts = import ./tests/session-restarts.nix {
+              inherit self;
+              pkgs = hostPkgs;
+            };
             session =
               let
                 ours = lib.filter (

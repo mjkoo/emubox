@@ -185,6 +185,9 @@ let
         printf 'could not clear the desktop selection; starting the frontend instead\n' | systemd-cat -t emubox-session || true
       fi
 
+      restart_mark="''${XDG_RUNTIME_DIR:?}/emubox-frontend-restart"
+      rm -f "$restart_mark"
+
       while true; do
         # Not guarded, and what that does and does not cover is worth
         # stating exactly. prepare's recreate policy absorbs the runtime
@@ -204,6 +207,7 @@ let
         # log into is the right destination, because no relaunch of the same
         # call would do any better.
         emubox-prepare ${cfg.ownedValuesFile} "${customSystemsPath}"
+        ${lib.optionalString (cfg.preFrontendStep != null) cfg.preFrontendStep}
 
         # The loop needs the run's length, not its status, but the status is
         # captured rather than discarded with `|| true` so that `set -e` does
@@ -221,9 +225,10 @@ let
         rc=0
         cage -s -- es-de || rc=$?
         ran=$(( SECONDS - started ))
-        # TODO: emubox-leakcheck after each session.
-
-        if [ "$ran" -lt "$window" ]; then
+        if [ -e "$restart_mark" ]; then
+          rm -f "$restart_mark"
+          crashes=0
+        elif [ "$ran" -lt "$window" ]; then
           crashes=$(( crashes + 1 ))
           echo "emubox-session: es-de exited with $rc after ''${ran}s (crash $crashes of 3)" >&2
           if [ "$crashes" -ge 3 ]; then

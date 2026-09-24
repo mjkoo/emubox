@@ -400,7 +400,10 @@ ES-DE resolves the executable before it substitutes `%ROM%`, so a bare
 `%ROM%` command loads but fails at launch; manual hardware
 acceptance confirms the shape the frontend accepts. "Update game art" runs
 `foot -e emubox-scrape`, writes a restart mark under the session's runtime
-directory, and ends the frontend. The loop, on seeing the mark after a
+directory, and ends the frontend. The implementation starts with SIGTERM to
+ES-DE, while persistence and relaunch through that route remain pending
+manual hardware acceptance. Deferring the probe does not establish that
+SIGTERM saves state. The loop, on seeing the mark after a
 frontend exit, removes it, does not count that run as a crash whatever its
 length, and resets the consecutive-crash count to zero whatever the run's
 length, exactly as a run longer than 60 seconds does today; it then runs

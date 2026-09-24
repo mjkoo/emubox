@@ -9,13 +9,11 @@ if [ "$#" -ne 1 ] || { [ "$1" != true ] && [ "$1" != false ]; }; then
   exit 2
 fi
 
-if [ "$1" = false ]; then
-  if awk -F: '$1 != "b2_key_id" && $1 != "b2_application_key" && $1 != "restic_password"' \
-    | grep -q 'REPLACE-BEFORE-INSTALL'; then
-    exit 1
-  fi
-else
-  if grep -q 'REPLACE-BEFORE-INSTALL'; then
-    exit 1
-  fi
-fi
+awk -F: -v backups="$1" '
+  backups == "false" && ($1 == "b2_key_id" || $1 == "b2_application_key" || $1 == "restic_password") { next }
+  index($0, "REPLACE-BEFORE-INSTALL") {
+    print "unresolved secret: " $1 > "/dev/stderr"
+    unresolved = 1
+  }
+  END { exit unresolved ? 1 : 0 }
+'

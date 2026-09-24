@@ -27,6 +27,8 @@
       # on the box, same as the default would if `player` were root.
       retroachievements_username.owner = "player";
       retroachievements_password.owner = "player";
+      screenscraper_username = { };
+      screenscraper_password = { };
     };
 
     # Rendered on /run at boot; NetworkManager's ensure-profiles unit loads

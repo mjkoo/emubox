@@ -147,7 +147,7 @@ install target *args:
     # Refuse to install placeholder secrets. Decrypting into a variable
     # first makes a failed decrypt a loud failure, not a skipped check.
     plain="$(SOPS_AGE_KEY_FILE={{quote(age_key)}} sops decrypt secrets/secrets.yaml)"
-    backup_enabled="$(nix eval --raw .#nixosConfigurations.{{host}}.config.emubox.backups.enable)"
+    backup_enabled="$(nix eval --json .#nixosConfigurations.{{host}}.config.emubox.backups.enable)"
     if ! printf '%s' "$plain" | bash scripts/emubox-install-placeholder-guard "$backup_enabled"; then
         echo "secrets/secrets.yaml still holds placeholders; run: just secrets-edit" >&2
         exit 1

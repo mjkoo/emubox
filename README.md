@@ -11,7 +11,9 @@ off-site save backups, and remote administration over Tailscale.
 flake.nix          inputs, nixosConfigurations.emubox, packages, checks, devShell
 hosts/emubox/      the physical box: hardware facts, disko layout
 modules/           the software stack, one directory per concern
+modules/library/   scraping, generation, ingest permissions and status
 overlays/, pkgs/   the packages the flake builds: vendored, and its own
+pkgs/emubox-library/  unprivileged library commands and their tests
 tests/             VM tests (disko install, kiosk session, controllers, mode switching), test values and key
 secrets/           sops files (encrypted); recipients in .sops.yaml
 ```
@@ -23,10 +25,11 @@ secrets/           sops files (encrypted); recipients in .sops.yaml
 on this machine: the formatting, flake check and evaluation steps CI runs,
 plus the workflow lint. Evaluating the host and the Linux checks works
 from macOS; building the host (`just build`, `just closure-check`) needs
-an `x86_64-linux` builder, and the four VM tests (`just vm-test` for the
+an `x86_64-linux` builder, and the VM tests (`just vm-test` for the
 disko install test, `just kiosk-test` for the kiosk session, `just
 controllers-test` for the controllers node, and `just mode-test` for mode
-switching) need one that exposes KVM. CI builds all of it on every push.
+switching, plus `just library-test` for nonvisual library integration) need one
+that exposes KVM. CI builds all of it on every push.
 
 One local gap is worth knowing about: the kiosk session script is a
 `writeShellApplication`, so shellcheck runs when it is *built*, and nothing
@@ -70,10 +73,10 @@ nixpkgs no longer carries them; the rest are the project's own.
   both: it carries more than thirty unpatched CVEs, listed unchanged in
   its `knownVulnerabilities`, plus three small fixes forward against the
   newer libjpeg, OpenEXR and libtiff, recorded in its header. The flake
-  permits it by name in `permittedInsecurePackages`; the accepted risk (it
-  only ever decodes images the admin put on the box, and CI builds it
-  whenever its inputs change) is recorded beside that permission in
-  `flake.nix`.
+  permits it by name in `permittedInsecurePackages`. External ScreenScraper
+  artwork, including household-triggered downloads, reaches this vulnerable
+  decoder. That accepted risk is recorded in `flake.nix`; CI build checks
+  do not make those inputs trusted.
 - `duckstation` is the unmodified upstream `x86_64` AppImage of a pinned
   release, extracted and run inside an FHS wrapper, never built from
   patched source. nixpkgs dropped its derivation at upstream's request
@@ -241,6 +244,78 @@ it reaches a login prompt and starts no frontend. Log in there to reach the
 desktop; `emubox-mode` refuses in that configuration because nothing would
 read its selection. No mode selection survives a reboot through either entry.
 
+## Library
+
+`modules/library` configures ingest permissions, scraping and generation;
+`pkgs/emubox-library` provides `emubox-scrape`, `emubox-library-generate`
+and the `library` status reporter. Scraping is manual. There is no timer or
+ROM-directory watcher, and a failed fetch can be resumed with the same command.
+
+The route available on the box today uses removable media. From the admin's
+console, run `sudo emubox-mode desktop` as described under Desktop and recovery.
+In the session account's desktop, mount the media and create each destination
+system folder first, using the file manager's New Folder action or a terminal:
+
+```sh
+mkdir -p /data/roms/nes
+cp /run/media/player/MY_USB/nes/*.nes /data/roms/nes/
+```
+
+Replace the media path and system name with yours. Copy the game files into
+the created folder. Copying a whole folder reproduces its source permissions
+and can leave `admin` unable to write into it; the root's default ACL makes a
+folder created with plain `mkdir` writable by the admin. It does not repair
+existing directories or directories created with restrictive explicit modes.
+The destination's setgid bit gives new files the `player` group.
+
+Once remote administration is configured, the SSH route from another machine
+is:
+
+```sh
+ssh admin@emubox 'mkdir -p /data/roms/nes'
+rsync -rt --no-perms --no-owner --no-group --chmod=ugo+rX,Dg+w ./nes/ admin@emubox:/data/roms/nes/
+ssh -t admin@emubox 'sudo -u player emubox-scrape'
+```
+
+Use the box's configured address in place of `emubox`. Avoid `rsync -a`: archive
+mode preserves source permissions and attempts to preserve ownership, which
+can defeat the destination's shared access rules. The command above leaves
+ownership to the destination and makes new game files readable. This SSH route
+waits on remote administration, which is not provided by the library feature;
+sshd is currently loopback-only. The frontend route works without SSH.
+
+Create a ScreenScraper account and set `screenscraper_username` and
+`screenscraper_password` with `just secrets-edit` before installation.
+Both placeholders always block `just install`. The runtime config is owned
+by `player`, mode `0400`; credentials do not appear in process arguments.
+`emubox.library.threads` defaults to 1; use only the concurrency your account
+allows. From an admin console, start a fetch with:
+
+```sh
+sudo -u player emubox-scrape
+```
+
+Art appears at the next frontend start. Generation runs before the frontend
+with progress on the display, preserving favourites, play counts and emulator
+choices. A failed progress window does not trigger a hidden generation retry.
+The household can instead select **Tools > Update game art**: it shows scrape
+progress and restarts the frontend when the fetch ends. This holds the TV
+until the scrape finishes; the first run can be long, while later runs only
+fetch games missing from the cache and are usually short.
+
+Run `emubox-status` as `admin` without sudo to see each folder's game, gamelist
+and unscraped counts, unmapped systems, the last fetch result, failures and
+pending generation. A game with a gamelist entry but no description still
+counts as unscraped. An incomplete scan reports unavailable counts explicitly.
+
+After deployment, test a small folder of a few ROMs with real credentials:
+run `sudo -u player emubox-scrape`, inspect `emubox-status`, restart the frontend
+and confirm descriptions and art. Then exercise Tools with physical input.
+Record the software revision and results using
+[the hardware checklist](docs/library-hardware-tests.md). CI proves nonvisual
+contracts using local imports and fixtures; it does not prove service-account
+acceptance, display rendering or physical frontend interaction.
+
 ## BIOS files
 
 Emulators read firmware and BIOS images from `/data/bios`, a directory
@@ -400,6 +475,11 @@ rest, slow but correct.
   activation step, not a unit: `sudo journalctl -b | grep -i sops` shows
   its output, and a host key that does not match a recipient leaves the
   box at a console with the failing secret named there.
+- ScreenScraper credentials: `screenscraper_username` and
+  `screenscraper_password` are set, and
+  `sudo stat -c '%a %U' /run/secrets/rendered/skyscraper.ini` reports
+  `400 player`. Complete the small real-account scrape and manual hardware
+  checklist under Library.
 - WiFi profile present: `nmcli connection show family-wifi`, and the box
   joins the network when the SSID is in range.
 - Ephemeral root: `sudo touch /root/marker`, reboot, the file is gone

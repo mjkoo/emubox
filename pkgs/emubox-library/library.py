@@ -391,8 +391,7 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         unmapped = sum(value == "unmapped" for value in outcomes.values())
         result = "partial" if fetched and failed else "failed" if failed else "complete"
         summary = (
-            f"Scrape result: {result} "
-            f"({fetched} fetched, {failed} failed, {unmapped} unmapped)\n"
+            f"Scrape result: {result} ({fetched} fetched, {failed} failed, {unmapped} unmapped)\n"
         ).encode()
         sys.stdout.buffer.write(summary)
         sys.stdout.buffer.flush()
@@ -531,9 +530,7 @@ def cleanup(config: Config, batch: dict[str, str]) -> int:
         os.close(claim)
 
 
-def _gamelist_counts(
-    config: Config, folder: str, roms: list[Path]
-) -> tuple[int, int] | None:
+def _gamelist_counts(config: Config, folder: str, roms: list[Path]) -> tuple[int, int] | None:
     """Entry and unscraped counts, or None when the gamelist cannot be parsed."""
     path = config.gamelist_root / folder / "gamelist.xml"
     try:

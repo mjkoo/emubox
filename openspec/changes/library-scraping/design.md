@@ -528,7 +528,7 @@ prove only that upstream's client works).
 The first implementation gate is the `Library VM probes` CI step, which
 builds `checks.x86_64-linux.library`. Local evaluation and a built test
 driver do not establish graphical or scraper runtime behavior. No CI run
-has yet been recorded for these probes; the following remain unverified:
+has yet passed these probes; the following remain unverified:
 
 - Visible foot output under cage, both alone and from a frontend child.
 - Keyboard launch of a store-backed shell entry through an explicit
@@ -542,6 +542,16 @@ has yet been recorded for these probes; the following remain unverified:
 Record the CI run number and each observed result here before proceeding
 past the first gate. A failing probe requires revising the affected design
 before implementation continues.
+
+CI run `36005946761` stopped at the standalone visible-text assertion. Cage
+obtained the logind seat and initialized the virtual display, and foot
+started with its default configuration, but OCR returned empty or garbled
+text. No screenshot was retained, so this does not establish whether the
+terminal content was absent or simply unreadable by OCR. The harness now
+uses a fixed 32-pixel font and high contrast, waits for the terminal client
+to print before checking the screen, and attempts a screenshot even if OCR
+fails. Visible output remains a required assertion. Exit-status propagation
+and all frontend/import probes were not reached; a new CI run is required.
 
 ### Accepted risks and runtime dependencies
 

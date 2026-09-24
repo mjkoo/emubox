@@ -3,10 +3,36 @@
 let
   pkgs = self.nixosConfigurations.emubox.pkgs;
 
+  # Fixed pixel size and contrast make the visible fixture independent of
+  # terminal defaults and the virtual monitor's reported DPI.
+  terminalConfig = pkgs.writeTextFile {
+    name = "emubox-probe-foot.ini";
+    text = ''
+      font=DejaVu Sans Mono:pixelsize=32
+      pad=32x32
+      initial-color-theme=light
+      [colors-light]
+      foreground=000000
+      background=ffffff
+    '';
+    checkPhase = ''
+      ${pkgs.foot}/bin/foot --check-config --config "$target"
+    '';
+  };
+  terminalPresentation = {
+    fonts.packages = [ pkgs.dejavu_fonts ];
+    systemd.tmpfiles.rules = [
+      "d /data/home/player/.config 0755 player player -"
+      "d /data/home/player/.config/foot 0755 player player -"
+      "L+ /data/home/player/.config/foot/foot.ini - - - - ${terminalConfig}"
+    ];
+  };
+
   terminalClient = pkgs.writeShellScript "emubox-terminal-client" ''
     case "$(cat /run/emubox-probe-mode 2>/dev/null || echo wait)" in
       wait)
         printf 'FOOT ALONE PROBE\n'
+        touch /data/home/player/emubox-terminal-ready
         while [ ! -e /run/emubox-probe-release ]; do sleep 1; done
         ;;
       success) exit 0 ;;
@@ -27,7 +53,7 @@ let
     if [ ! -e /data/home/player/emubox-probe-launched ]; then
       touch /data/home/player/emubox-probe-launched
       ${pkgs.cage}/bin/cage -s -- ${pkgs.foot}/bin/foot -e ${pkgs.bash}/bin/bash -c \
-        'printf "FOOT CHILD PROBE\\n"; while [ ! -e /data/home/player/emubox-probe-release ]; do sleep 1; done'
+        'printf "FOOT CHILD PROBE\\n"; touch /data/home/player/emubox-child-terminal-ready; while [ ! -e /data/home/player/emubox-probe-release ]; do sleep 1; done'
       touch /data/home/player/emubox-probe-complete
     else
       frontend=$(pgrep -u player -x es-de | head -n 1)
@@ -65,11 +91,11 @@ in
         self.nixosModules.emubox
         ../hosts/emubox/facts.nix
         ./boot-adaptations.nix
+        terminalPresentation
       ];
       system.stateVersion = "26.05";
       virtualisation.memorySize = 2048;
       virtualisation.qemu.options = [ "-vga none -device virtio-gpu-pci" ];
-      fonts.packages = [ pkgs.dejavu_fonts ];
       services.displayManager.sddm.enable = lib.mkForce false;
       services.displayManager.autoLogin.enable = lib.mkForce false;
       services.cage = {
@@ -91,11 +117,11 @@ in
         self.nixosModules.emubox
         ../hosts/emubox/facts.nix
         ./boot-adaptations.nix
+        terminalPresentation
       ];
       system.stateVersion = "26.05";
       virtualisation.memorySize = 3072;
       virtualisation.qemu.options = [ "-vga none -device virtio-gpu-pci" ];
-      fonts.packages = [ pkgs.dejavu_fonts ];
       services.btrbk.instances.local.onCalendar = lib.mkForce null;
       emubox.facts.controllerPorts = lib.mkForce [ ];
       emubox.facts.controllerIdentities.sdlGamepadName = lib.mkForce null;
@@ -133,8 +159,15 @@ in
 
     with subtest("A standalone Cage session displays foot"):
         standalone.start()
-        standalone.wait_for_text("FOOT ALONE PROBE", timeout=120)
-        standalone.screenshot("foot-alone")
+        standalone.wait_until_succeeds(
+            "test -e /data/home/player/emubox-terminal-ready", timeout=120
+        )
+        standalone.succeed("pgrep -u player -x foot")
+        standalone.succeed(player("${pkgs.foot}/bin/foot --check-config"))
+        try:
+            standalone.wait_for_text(r"FOOT\s+ALONE\s+PROBE", timeout=60)
+        finally:
+            standalone.screenshot("foot-alone")
         standalone.succeed("touch /run/emubox-probe-release")
         standalone.wait_until_succeeds(
             "! systemctl is-active --quiet cage-tty1.service", timeout=30
@@ -177,8 +210,14 @@ in
         machine.wait_until_succeeds(
             "test -e /data/home/player/emubox-probe-launched", timeout=60
         )
-        machine.wait_for_text("FOOT CHILD PROBE", timeout=60)
-        machine.screenshot("foot-from-frontend")
+        machine.wait_until_succeeds(
+            "test -e /data/home/player/emubox-child-terminal-ready", timeout=60
+        )
+        machine.succeed("pgrep -u player -x foot")
+        try:
+            machine.wait_for_text(r"FOOT\s+CHILD\s+PROBE", timeout=60)
+        finally:
+            machine.screenshot("foot-from-frontend")
         launch_log = machine.succeed("cat /data/es-de/logs/es_log.txt")
         assert 'Launching game "update" from system "Tools (emuboxprobe)"' in launch_log, launch_log
         machine.succeed("touch /data/home/player/emubox-probe-release")

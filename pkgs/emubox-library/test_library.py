@@ -631,6 +631,31 @@ def test_report_counts_extensions_descriptions_and_unknown(config: library.Confi
     assert "Generation pending: psx" in output
 
 
+def test_report_keeps_counting_past_a_malformed_gamelist(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    (config.gamelist_root / "nes").mkdir(parents=True)
+    (config.gamelist_root / "nes" / "gamelist.xml").write_text("<gameList><game>")
+    status, output = library.report(config, 2)
+    assert status == 0
+    assert output == (
+        "nes: 1 ROMs, gamelist unreadable\n"
+        "psx: 1 ROMs, 0 gamelist entries, 1 unscraped\n"
+        "No scrape has run\n"
+        "Generation pending: none\n"
+    )
+
+
+@pytest.mark.parametrize("record", [[], {"time": "fixed"}, {"result": "complete", "folders": []}])
+def test_report_tolerates_malformed_run_record(config: library.Config, record: object) -> None:
+    game(config, "nes", "a.nes")
+    library.atomic_json(config.record_path, record)
+    status, output = library.report(config, 2)
+    assert status == 0
+    assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
+    assert "Generation pending: none" in output
+
+
 def test_report_counts_bin_when_bundled_system_lists_it(config: library.Config) -> None:
     game(config, "psx", "a.cue")
     game(config, "psx", "a.bin")

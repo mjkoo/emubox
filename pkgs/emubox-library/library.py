@@ -532,12 +532,17 @@ def cleanup(config: Config, batch: dict[str, str]) -> int:
         os.close(claim)
 
 
-def _gamelist_counts(config: Config, folder: str, roms: list[Path]) -> tuple[int, int]:
+def _gamelist_counts(
+    config: Config, folder: str, roms: list[Path]
+) -> tuple[int, int] | None:
+    """Entry and unscraped counts, or None when the gamelist cannot be parsed."""
     path = config.gamelist_root / folder / "gamelist.xml"
     try:
         games = ET.parse(path).getroot().findall("game")
     except FileNotFoundError:
         games = []
+    except ET.ParseError:
+        return None
     described = {
         Path(game.findtext("path") or "").name
         for game in games
@@ -568,7 +573,7 @@ def _scan(config_source: Config | Path, sender: _PipeSender) -> None:
         folders = discover(config, extensions)
         sender.put(("folders", list(folders)))
         for name, roms in folders.items():
-            count, unscraped = _gamelist_counts(config, name, roms)
+            counts = _gamelist_counts(config, name, roms)
             note = (
                 "unknown system"
                 if name not in extensions
@@ -576,9 +581,9 @@ def _scan(config_source: Config | Path, sender: _PipeSender) -> None:
                 if name not in platforms
                 else ""
             )
-            sender.put(("count", name, len(roms), count, unscraped, note))
+            sender.put(("count", name, len(roms), counts, note))
         sender.put(("done",))
-    except (OSError, ValueError, ET.ParseError) as error:
+    except Exception as error:
         sender.put(("error", str(error)))
 
 
@@ -586,19 +591,19 @@ def report(config: Config | Path, deadline_seconds: float = REPORT_SECONDS) -> t
     read_fd, write_fd = os.pipe()
     worker_pid = os.fork()
     if worker_pid == 0:
-        os.close(read_fd)
+        # The forked worker must never return into the caller's code.
         try:
+            os.close(read_fd)
             _scan(config, _PipeSender(write_fd))
         finally:
-            os.close(write_fd)
-        os._exit(0)
+            os._exit(0)
     os.close(write_fd)
     deadline = time.monotonic() + deadline_seconds
     record: dict[str, Any] | None = None
     record_loaded = False
     pending: list[str] | None = None
     folders: list[str] | None = None
-    counts: dict[str, tuple[int, int, int, str]] = {}
+    counts: dict[str, tuple[int, list[int] | None, str]] = {}
     complete = False
     error = ""
     buffer = bytearray()
@@ -619,8 +624,8 @@ def report(config: Config | Path, deadline_seconds: float = REPORT_SECONDS) -> t
                     message = json.loads(line)
                     kind = message[0]
                     if kind == "record":
-                        record = message[1]
-                        record_loaded = True
+                        record = message[1] if isinstance(message[1], dict) else None
+                        record_loaded = message[1] is None or record is not None
                     elif kind == "pending":
                         pending = message[1]
                     elif kind == "folders":
@@ -645,19 +650,26 @@ def report(config: Config | Path, deadline_seconds: float = REPORT_SECONDS) -> t
             if folder not in counts:
                 lines.append(f"{folder}: counts unavailable")
             else:
-                roms, entries, unscraped, note = counts[folder]
+                roms, gamelist, note = counts[folder]
                 suffix = f" ({note})" if note else ""
-                lines.append(
-                    f"{folder}: {roms} ROMs, {entries} gamelist entries, "
-                    f"{unscraped} unscraped{suffix}"
-                )
+                if gamelist is None:
+                    lines.append(f"{folder}: {roms} ROMs, gamelist unreadable{suffix}")
+                else:
+                    entries, unscraped = gamelist
+                    lines.append(
+                        f"{folder}: {roms} ROMs, {entries} gamelist entries, "
+                        f"{unscraped} unscraped{suffix}"
+                    )
     if record is None:
         lines.append("No scrape has run" if record_loaded else "Run record unavailable")
     else:
-        lines.append(f"Last run: {record['result']} at {record['time']}")
+        lines.append(
+            f"Last run: {record.get('result', 'unknown')} at {record.get('time', 'unknown time')}"
+        )
+        outcomes = record.get("folders")
         failures = [
             name
-            for name, result in record.get("folders", {}).items()
+            for name, result in (outcomes.items() if isinstance(outcomes, dict) else ())
             if result in ("fetch-failed", "generation-failed")
         ]
         if failures:

@@ -120,7 +120,7 @@ existing records surviving account refusal, process HOME and scheduling,
 and terminal/log equivalence. `77eb9bb` adds those tests. Five deliberate
 regressions fail their corresponding assertions; native and Linux package
 builds each pass Ruff, formatting, ty and 46 tests. Scoped review and the
-subset audit confirm all three corrections. The harness prevented fresh
-reviewer threads, so the separate audit reused an existing reviewer; this
-reduces independence and does not substitute for runtime CI evidence.
+subset audit confirm all three corrections. An initial audit reused a reviewer while the concurrent agent slots were
+full. After a slot became available, a fresh reviewer independently
+confirmed all 29 checked boxes at `8cec8ad`, with no unevidenced findings.
 Expanded VM execution and the manual hardware checks remain pending.

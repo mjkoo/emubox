@@ -201,6 +201,21 @@ let
       </game>
     </gameList>
   '';
+  sessionProgram =
+    config:
+    let
+      desktop = lib.head (
+        lib.filter (
+          package: (package.providedSessions or [ ]) == [ "emubox" ]
+        ) config.services.displayManager.sessionPackages
+      );
+    in
+    pkgs.runCommand "emubox-library-session-program" { } ''
+      program=$(sed -n 's/^Exec=//p' ${desktop}/share/wayland-sessions/emubox.desktop)
+      test -x "$program"
+      mkdir -p "$out/bin"
+      ln -s "$program" "$out/bin/emubox-session"
+    '';
 in
 {
   name = "emubox-library";
@@ -235,13 +250,7 @@ in
         };
         serviceConfig = {
           User = "player";
-          ExecStart = "${
-            lib.head (
-              lib.filter (
-                package: (package.providedSessions or [ ]) == [ "emubox" ]
-              ) config.services.displayManager.sessionPackages
-            )
-          }/bin/emubox-session";
+          ExecStart = "${sessionProgram config}/bin/emubox-session";
           Restart = "no";
         };
       };
@@ -269,11 +278,7 @@ in
   testScript =
     { nodes }:
     let
-      session = lib.head (
-        lib.filter (
-          package: (package.providedSessions or [ ]) == [ "emubox" ]
-        ) nodes.machine.services.displayManager.sessionPackages
-      );
+      session = sessionProgram nodes.machine;
     in
     ''
       import copy

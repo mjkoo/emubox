@@ -445,6 +445,19 @@ def test_stale_work_never_becomes_previous_gamelist_without_live_file(
     assert library.read_pending(config) == []
 
 
+def test_cleanup_logs_failure_only_when_pending_work_is_failed(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(library, "journal", lambda _config, message: messages.append(message))
+    library.atomic_json(config.revision_path, {"nes": "r1"})
+    assert library.cleanup(config, {"nes": "r1"}) == 0
+    assert messages == []
+    library.write_pending(config, ["nes"])
+    assert library.cleanup(config, {"nes": "r1"}) == 0
+    assert messages == ["Generation could not finish with a progress window; frontend starting"]
+
+
 def test_revision_cleanup_preserves_new_fetch_and_missing_identity(config: library.Config) -> None:
     library.write_pending(config, ["nes", "psx"])
     library.atomic_json(config.revision_path, {"nes": "old", "psx": "old"})

@@ -11,7 +11,7 @@ let
     shift 2
     if [ "$1" = es-de ]; then
       printf 'frontend %s\n' "$$" >> /run/emubox-library-test/events
-      exec "$@" 3600
+      exec "$@"
     fi
     printf 'window %s\n' "$*" >> /run/emubox-library-test/events
     exec "$@"
@@ -52,9 +52,15 @@ let
     printf 'generation %s\n' "$*" >> /run/emubox-library-test/events
     exec "$@"
   '';
-  testEsde = pkgs.runCommand "emubox-test-es-de" { } ''
+  testEsde = pkgs.runCommand "emubox-test-es-de" { nativeBuildInputs = [ pkgs.stdenv.cc ]; } ''
     mkdir -p "$out/bin"
-    cp ${pkgs.coreutils}/bin/sleep "$out/bin/es-de"
+    cat > frontend.c <<'C'
+    #include <unistd.h>
+    int main(void) {
+      for (;;) pause();
+    }
+    C
+    $CC -Wall -Wextra -Werror frontend.c -o "$out/bin/es-de"
     ln -s ${pkgs.es-de}/share "$out/share"
   '';
   testSkyscraper = pkgs.writeShellScriptBin "Skyscraper" ''

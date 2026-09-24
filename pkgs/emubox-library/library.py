@@ -507,12 +507,15 @@ def cleanup(config: Config, batch: dict[str, str]) -> int:
         return 1
     try:
         revisions = read_json(config.revision_path, {})
+        failed = False
         for folder, revision in batch.items():
             if folder not in read_pending(config) or revisions.get(folder) != revision:
                 continue
             _record_generation(config, folder, "generation-failed")
             write_pending(config, [item for item in read_pending(config) if item != folder])
-        journal(config, "Generation could not finish with a progress window; frontend starting")
+            failed = True
+        if failed:
+            journal(config, "Generation could not finish with a progress window; frontend starting")
         return 0
     except OSError:
         journal(config, "Generation failure cleanup deferred; records could not be written")

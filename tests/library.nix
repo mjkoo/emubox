@@ -2,7 +2,6 @@
 { self }:
 let
   pkgs = self.nixosConfigurations.emubox.pkgs;
-  py = builtins.toJSON;
 
   terminalClient = pkgs.writeShellScript "emubox-terminal-client" ''
     case "$(cat /run/emubox-probe-mode 2>/dev/null || echo wait)" in
@@ -155,12 +154,14 @@ in
     with subtest("The frontend loads the read-only store system"):
         machine.start()
         machine.wait_until_succeeds("pgrep -u player -x es-de", timeout=120)
-        log = "/data/es-de/logs/es_log.txt"
+        frontend_log_path = "/data/es-de/logs/es_log.txt"
         machine.wait_until_succeeds(
-            f"grep -F 'Found custom systems configuration file' {log}", timeout=60
+            f"grep -F 'Found custom systems configuration file' {frontend_log_path}", timeout=60
         )
-        machine.succeed(f"grep -E 'Parsed configuration for .* loaded 1 system ' {log}")
-        machine.succeed(f"grep -F 'Total game count: 1' {log}")
+        machine.succeed(
+            f"grep -E 'Parsed configuration for .* loaded 1 system ' {frontend_log_path}"
+        )
+        machine.succeed(f"grep -F 'Total game count: 1' {frontend_log_path}")
         definition = machine.succeed("cat /data/es-de/custom_systems/es_systems.xml")
         assert "<name>emuboxprobe</name>" in definition, definition
         assert "<path>${gameEntry}</path>" in definition, definition

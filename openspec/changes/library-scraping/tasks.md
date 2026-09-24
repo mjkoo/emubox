@@ -14,7 +14,21 @@ probe that fails stops the group: update this change before going on.
 - [ ] 1.5 Leg: the real `Skyscraper` run for the first time as `player` with `-c` pointing outside `~/.skyscraper` deploys its resource files and fills a fixture ROM's cache with `-s import`, asserted on exit 0 and the cache directory holding the fixture's entry; result recorded in design.md
 
 - [ ] 1.6 Real wrapper exit-status probe: run `timeout --kill-after=30 2100 cage -s -- foot -e <fixture exiting 75>` as `player` and assert the observed status is 75; include success and launch-failure controls, use no library package, and record the CI result in design.md; a failed probe stops implementation until the result channel is revised
-- [ ] 1.7 Pinned-source contract evidence: add executable checks under `tests/` and a source evidence report under `docs/` for the exact Skyscraper and ES-DE revisions, covering platform names, accepted options/flags, absence of `--stderr`, non-XDG home/resource deployment, cache locking and signal handling, media output and family-tag preservation, and frontend launch/input assumptions; distinguish source inspection from VM evidence; invalid platform and option negative controls fail, and 3.11/3.12 later bind these checks to the actual exported map and vectors
+- [x] 1.7 Pinned-source contract evidence: add executable checks under `tests/` and a source evidence report under `docs/` for the exact Skyscraper and ES-DE revisions, covering platform names, accepted options/flags, absence of `--stderr`, non-XDG home/resource deployment, cache locking and signal handling, media output and family-tag preservation, and frontend launch/input assumptions; distinguish source inspection from VM evidence; invalid platform and option negative controls fail, and 3.11/3.12 later bind these checks to the actual exported map and vectors
+
+### First CI gate status
+
+The source contracts are implemented in commit `70fd30c`, with the evidence
+report at `docs/library-source-contracts.md`. The native
+`checks.aarch64-darwin.library-source-contracts` derivation passed against
+126 platforms, 35 options and 40 flags, including rejection controls for an
+invalid platform, `--stderr` and an invalid flag. The full local
+`just check-all` gate passed with the library VM check included in evaluation.
+
+The VM probes are implemented but remain unchecked until the `Library VM
+probes` CI step runs. Record the CI run number and observed results in
+`design.md` before continuing to the next group. Source inspection and a
+built driver are not substitutes for that runtime evidence.
 
 ## 2. Custom systems as contributions
 

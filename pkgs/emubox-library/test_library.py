@@ -108,6 +108,88 @@ def test_wrong_account_refuses_without_creating_state(
     assert not config.cache_root.exists()
 
 
+@pytest.mark.parametrize("uid", [0, 987654])
+def test_wrong_account_preserves_existing_state(
+    config: library.Config, uid: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = replace(config, session_user="player")
+    monkeypatch.setattr(library.os, "geteuid", lambda: uid)
+    monkeypatch.setattr(
+        library.pwd,
+        "getpwnam",
+        lambda _name: pwd.struct_passwd(("player", "*", 123456, 123456, "", "/player", "/bin/sh")),
+    )
+    library.write_record(config, "complete", {"nes": "fetched"})
+    library.atomic_write(config.log_path, b"previous scrape\n")
+    library.atomic_json(config.revision_path, {"nes": "previous"})
+    library.write_pending(config, ["nes"])
+    before = {path: path.read_bytes() for path in config.cache_root.iterdir()}
+    assert library.scrape(config, lambda *args: pytest.fail("unexpected scraper")) == 1
+    assert {path: path.read_bytes() for path in config.cache_root.iterdir()} == before
+
+
+def test_scraper_child_uses_account_home_instead_of_inherited_home(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expected = pwd.getpwnam(config.session_user).pw_dir
+    monkeypatch.setenv("HOME", "/home/admin")
+    config = replace(config, skyscraper=sys.executable)
+    claim = held_lock(config)
+    try:
+        status, output = library.run_skyscraper(
+            config, ["-c", "import os; print(os.environ['HOME'])"], claim
+        )
+    finally:
+        os.close(claim)
+    assert status == 0
+    assert output == (expected + "\n").encode()
+    assert os.environ["HOME"] == "/home/admin"
+
+
+def test_fetch_sets_background_priorities_before_scraper(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    game(config, "nes", "a.nes")
+    calls: list[object] = []
+    monkeypatch.setattr(library.os, "nice", lambda amount: calls.append(("nice", amount)))
+    monkeypatch.setattr(library, "IONICE", "/fixture/ionice")
+
+    def run(argv: list[str], *, check: bool) -> subprocess.CompletedProcess[bytes]:
+        calls.append((argv, check))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(library.subprocess, "run", run)
+
+    def invoke(*args: object) -> tuple[int, bytes]:
+        calls.append("scraper")
+        return 0, b""
+
+    assert library.scrape(config, invoke) == 0
+    assert calls == [
+        ("nice", 19),
+        (["/fixture/ionice", "-c", "3", "-p", str(os.getpid())], True),
+        "scraper",
+    ]
+
+
+def test_fetch_log_matches_streamed_terminal_output(
+    config: library.Config, capsysbinary: pytest.CaptureFixture[bytes]
+) -> None:
+    game(config, "nes", "a.nes")
+    scraper = config.rom_root.parent / "scraper"
+    scraper.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "print('scraper stdout', flush=True)\n"
+        "print('scraper stderr', file=sys.stderr, flush=True)\n"
+    )
+    scraper.chmod(0o755)
+    assert library.scrape(replace(config, skyscraper=str(scraper))) == 0
+    terminal = capsysbinary.readouterr().out
+    assert terminal == b"Fetching nes\nscraper stdout\nscraper stderr\n"
+    assert config.log_path.read_bytes() == terminal
+
+
 @pytest.mark.parametrize("cause", ["missing", "unreadable", "placeholder"])
 def test_credentials_replace_success_record_without_touching_pending(
     config: library.Config, cause: str, monkeypatch: pytest.MonkeyPatch

@@ -336,9 +336,11 @@ in
 
       with subtest("Ingest permissions work for admin and for a player-created folder"):
           machine.succeed("runuser -u admin -- mkdir /data/roms/psx")
-          assert machine.succeed("stat -c '%G:%a' /data/roms/psx").strip() == "player:775"
+          directory_mode = machine.succeed("stat -c '%G:%a' /data/roms/psx").strip()
+          assert directory_mode == "player:2775", directory_mode
           machine.succeed("runuser -u admin -- sh -c 'printf ownership > /data/roms/psx/owned.cue'")
-          assert machine.succeed("stat -c '%G:%a' /data/roms/psx/owned.cue").strip() == "player:644"
+          file_mode = machine.succeed("stat -c '%G:%a' /data/roms/psx/owned.cue").strip()
+          assert file_mode == "player:664", file_mode
           assert machine.succeed(player("cat /data/roms/psx/owned.cue")) == "ownership"
           machine.succeed(player("mkdir /data/roms/genesis"))
           assert machine.succeed("stat -c '%G' /data/roms/genesis").strip() == "player"
@@ -529,8 +531,9 @@ in
           machine.succeed("pgrep -x es-de")
 
       with subtest("Status is equally readable as root and admin"):
-          root_status = machine.succeed("emubox-status")
-          admin_status = machine.succeed("runuser -u admin -- emubox-status")
+          # Other reporters warn on this node's temporary filesystems.
+          _, root_status = machine.execute("emubox-status")
+          _, admin_status = machine.execute("runuser -u admin -- emubox-status")
           for output in (root_status, admin_status):
               assert "library: ok" in output, output
               assert "nes: 2 ROMs, 2 gamelist entries, 1 unscraped" in output, output

@@ -15,4 +15,5 @@
   emubox-restic-backup = pkgs.callPackage ./emubox-restic-backup/package.nix { };
   emubox-status = pkgs.callPackage ./emubox-status/package.nix { };
   emubox-controllers-status = pkgs.callPackage ./emubox-controllers-status/package.nix { };
+  emubox-library = pkgs.callPackage ./emubox-library/package.nix { };
 }

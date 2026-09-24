@@ -455,7 +455,10 @@ def test_cleanup_logs_failure_only_when_pending_work_is_failed(
     assert messages == []
     library.write_pending(config, ["nes"])
     assert library.cleanup(config, {"nes": "r1"}) == 0
-    assert messages == ["Generation could not finish with a progress window; frontend starting"]
+    assert messages == [
+        "Generation failed for nes",
+        "Generation could not finish with a progress window; frontend starting",
+    ]
 
 
 def test_revision_cleanup_preserves_new_fetch_and_missing_identity(config: library.Config) -> None:

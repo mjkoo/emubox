@@ -218,7 +218,7 @@
                   --esde-source ${hostPkgs.es-de.src} \
                   --nixpkgs-source ${nixpkgs} \
                   --platform-map ${host.config.environment.etc."emubox/library-platforms.json".source} \
-                  --vectors ${perSystem.emubox-library}/share/emubox-library/vectors.json
+                  --vectors ${perSystem.emubox-library}/lib/emubox-library/vectors.json
                 touch "$out"
               '';
 

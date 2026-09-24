@@ -45,8 +45,6 @@ stdenvNoCC.mkDerivation {
     install -Dm755 emubox_library_report.py $out/bin/emubox-library-report
     install -Dm644 library.py $out/lib/emubox-library/library.py
     install -Dm644 vectors.json $out/lib/emubox-library/vectors.json
-    install -Dm644 platform-map.json $out/share/emubox-library/platform-map.json
-    install -Dm644 vectors.json $out/share/emubox-library/vectors.json
     # The entry points import their common module from the installed package.
     substituteInPlace $out/bin/emubox-scrape --replace-fail '@LIBDIR@' "$out/lib/emubox-library"
     substituteInPlace $out/bin/emubox-library-generate --replace-fail '@LIBDIR@' "$out/lib/emubox-library"

@@ -24,7 +24,10 @@ let
     mode=$(cat /run/emubox-library-test/window-mode 2>/dev/null || true)
     case "$mode" in
       fail) exit 42 ;;
-      hang) exec ${pkgs.coreutils}/bin/sleep 3600 ;;
+      hang)
+        printf '%s\n' "$$" > /run/emubox-library-test/window-pid
+        exec ${pkgs.coreutils}/bin/sleep 3600
+        ;;
       fail-handshake)
         touch /run/emubox-library-test/before-fail
         while [ ! -e /run/emubox-library-test/allow-fail ]; do
@@ -324,6 +327,7 @@ in
 
       with subtest("Ingest permissions work for admin and for a player-created folder"):
           machine.succeed("runuser -u admin -- mkdir /data/roms/psx")
+          assert machine.succeed("stat -c '%G:%a' /data/roms/psx").strip() == "player:775"
           machine.succeed("runuser -u admin -- sh -c 'printf ownership > /data/roms/psx/owned.cue'")
           assert machine.succeed("stat -c '%G:%a' /data/roms/psx/owned.cue").strip() == "player:644"
           assert machine.succeed(player("cat /data/roms/psx/owned.cue")) == "ownership"
@@ -556,6 +560,7 @@ in
           assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == previous
           assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
           assert machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip() == generation_count
+          machine.succeed("! kill -0 $(cat /run/emubox-library-test/window-pid) 2>/dev/null")
           failed = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert failed["folders"]["nes"] == "generation-failed", failed
           assert "progress window" in machine.succeed("journalctl -t emubox-library --no-pager").lower()

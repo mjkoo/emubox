@@ -243,6 +243,7 @@ in
       ];
       systemd.services.emubox-library-test-session = {
         description = "Library integration session fixture";
+        path = [ config.system.path ];
         environment = {
           HOME = "/data/home/player";
           XDG_RUNTIME_DIR = "/run/emubox-library-test";
@@ -290,10 +291,14 @@ in
           return "su player -s /bin/sh -c " + shlex.quote(command)
 
       def wait_frontend_count(count):
-          machine.wait_until_succeeds(
-              f"test $(grep -c '^frontend ' /run/emubox-library-test/events) -ge {count}",
-              timeout=180,
-          )
+          try:
+              machine.wait_until_succeeds(
+                  f"test $(grep -c '^frontend ' /run/emubox-library-test/events) -ge {count}",
+                  timeout=180,
+              )
+          except Exception:
+              print(machine.execute("journalctl -u emubox-library-test-session --no-pager")[1])
+              raise
 
       def direct_generation_count():
           return machine.succeed("cat /run/emubox-library-test/events").splitlines().count("library ")
@@ -394,7 +399,7 @@ in
           machine.succeed("printf '{\"nes\":\"import-one\"}\\n' > /data/cache/skyscraper/revisions.json")
           machine.succeed("chown player:player /data/cache/skyscraper/{pending,revisions.json}")
           machine.succeed("systemctl start emubox-library-test-session")
-          machine.wait_until_succeeds("grep -q '^frontend ' /run/emubox-library-test/events", timeout=180)
+          wait_frontend_count(1)
           events = machine.succeed("cat /run/emubox-library-test/events").splitlines()
           capture_index = events.index("library capture")
           window_index = next(i for i, event in enumerate(events) if event.startswith("window "))

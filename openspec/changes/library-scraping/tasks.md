@@ -1,39 +1,28 @@
 ## 1. Early probes and upstream contracts
 
-These land first because a failed probe changes the specs (design.md, Risks).
-Each runtime probe is a leg of the new `tests/library.nix`, kept as a
-permanent assertion when it passes; source checks and evidence are separate. VM tests run only in CI, so the evidence is a CI
-run on the change's pull request, and each task's artifact is the leg plus
-the result written into design.md's Risks section with the run's number. A
-probe that fails stops the group: update this change before going on.
+CI covers nonvisual contracts. Graphical checks are deferred to manual
+hardware acceptance in `docs/library-hardware-tests.md`; they do not block
+continued implementation and remain unchecked until evidence is recorded.
+A failed hardware check requires fixing the design before hardware acceptance.
 
-- [ ] 1.1 Scaffold `tests/library.nix` as a graphical node built from the host's modules (the shape `tests/mode.nix` uses), wire it into the flake's checks and a `just library-test` recipe, and add it to the CI job that runs the VM tests; proven by the check evaluating under `just check-all` and appearing in the CI run
-- [ ] 1.2 Leg: `cage -s -- foot -e <a command that prints and waits>` as `player` shows a window, asserted on the compositor's client list or a screenshot's text, alone and again started as a child while the frontend is up; result recorded in design.md
-- [ ] 1.3 Leg: a custom system whose path is a read-only store directory outside `/data/roms` with one `.sh` entry is loaded by the frontend, asserted on the frontend's log naming the system and its one game, and the entry is then selected through keyboard input so the leg also states the `<command>` shape the frontend accepts for a store `.sh` (an explicit interpreter or wrapper before `%ROM%`, since the frontend resolves the executable before substituting `%ROM%`), asserted on the frontend's launch log line for the entry; result and the accepted command shape recorded in design.md D7
-- [ ] 1.4 Leg: from a child of the frontend, SIGTERM to `es-de` ends it as a normal quit, asserted on the frontend having written a gamelist change made in that run, and the session relaunches it; if it does not, the same leg with the signal sent to its `cage`; the route that works is recorded in design.md D7
-- [ ] 1.5 Leg: the real `Skyscraper` run for the first time as `player` with `-c` pointing outside `~/.skyscraper` deploys its resource files and fills a fixture ROM's cache with `-s import`, asserted on exit 0 and the cache directory holding the fixture's entry; result recorded in design.md
-
-- [ ] 1.6 Real wrapper exit-status probe: run `timeout --kill-after=30 2100 cage -s -- foot -e <fixture exiting 75>` as `player` and assert the observed status is 75; include success and launch-failure controls, use no library package, and record the CI result in design.md; a failed probe stops implementation until the result channel is revised
+- [ ] 1.1 Scaffold `tests/library.nix` as a nonvisual node built from the host's modules, wire it into the flake's checks and a `just library-test` recipe, and add it to CI; proven by evaluation under `just check-all` and a green CI run
+- [ ] 1.2 Manual hardware: foot under Cage visibly prints progress, alone and as a frontend child; record hardware, revision and observations using `docs/library-hardware-tests.md`
+- [ ] 1.3 Manual hardware: the frontend loads a read-only store system outside `/data/roms` with one `.sh` entry; select it using physical input and record the launch log and accepted explicit-interpreter command shape in design.md D7
+- [ ] 1.4 Manual hardware: termination from a frontend child persists an in-memory gamelist change and the session relaunches; test ES-DE SIGTERM first, then its Cage parent if needed, and record the working route in design.md D7
+- [ ] 1.5 Nonvisual VM: the real Skyscraper's first run as `player`, with external `-c`, deploys resources and imports a fixture ROM into cache; assert exit 0 and matching quickid/resource entries, and record the CI result in design.md
+- [ ] 1.6 Manual hardware: the exact `timeout --kill-after=30 2100 cage -s -- foot -e <fixture>` chain preserves exit 75, with exit 0 and missing-executable controls; record observed statuses; this remains an unverified runtime dependency until hardware acceptance
 - [x] 1.7 Pinned-source contract evidence: add executable checks under `tests/` and a source evidence report under `docs/` for the exact Skyscraper and ES-DE revisions, covering platform names, accepted options/flags, absence of `--stderr`, non-XDG home/resource deployment, cache locking and signal handling, media output and family-tag preservation, and frontend launch/input assumptions; distinguish source inspection from VM evidence; invalid platform and option negative controls fail, and 3.11/3.12 later bind these checks to the actual exported map and vectors
 
 ### First CI gate status
 
-The source contracts are implemented in commit `70fd30c`, with the evidence
-report at `docs/library-source-contracts.md`. The native
-`checks.aarch64-darwin.library-source-contracts` derivation passed against
-126 platforms, 35 options and 40 flags, including rejection controls for an
-invalid platform, `--stderr` and an invalid flag. The full local
-`just check-all` gate passed with the library VM check included in evaluation.
-The corrected `checks.x86_64-linux.library.driver` built on the Linux builder
-at commit `4ba3454`; its type and lint checks both reported `All checks passed!`.
-The group review and scoped correction review found no blocking defects in
-the probe implementation. This is readiness for the first CI run, not group
-completion.
-
-The VM probes are implemented but remain unchecked until the `Library VM
-probes` CI step runs. Record the CI run number and observed results in
-`design.md` before continuing to the next group. Source inspection and a
-built driver are not substitutes for that runtime evidence.
+Pinned-source contracts passed against 126 platforms, 35 options and 40
+flags, including invalid-platform, `--stderr` and invalid-flag controls.
+CI run `36005946761` timed out in OCR before reaching the import probe.
+The graphical probes have been removed from CI at the user's request;
+`tests/library.nix` now runs the real first-import check without a display.
+A green CI result for this reduced check is still pending. Source inspection
+and driver builds do not prove hardware behavior. Manual tasks above remain
+unchecked; deferral is not a passing result.
 
 ## 2. Custom systems as contributions
 
@@ -82,17 +71,21 @@ one function the tests replace with a stub.
 
 ## 6. The library VM test
 
-Every leg asserts by value; the vm-test delta is the checklist.
+Every automated leg asserts by value; the vm-test delta is the checklist.
+Use a deterministic terminal adapter for session logic, preserving its child
+command and exit status. CI does not use OCR, screenshots or UI navigation
+as assertions. Real display, input and terminal-chain behavior are manual
+hardware acceptance checks.
 
 - [ ] 6.1 Ingest ownership: `admin` creates a directory and a fixture ROM under a system folder, asserted group and mode, and read as `player`; a second leg where `player` creates a system folder with a plain `mkdir` under the default umask and `admin` then creates a file in it without a permission error, asserted as `player` reading it, the default ACL of 4.1 being what makes the creation succeed
-- [ ] 6.2 Generation at start: cache filled by 1.5's import run, folder made pending, session started; gamelist entry with the fixture's description, supported media under `/data/media` with a cached wheel asserted at the marquee destination and cached textures not emitted (no `textures` or `wheels` directory required); start with no live gamelist parent and assert its creation, pending empty, a window seen during generation, all ordered before the frontend's start time; the generation compositor asserted to be started with the same console-switch flag as the frontend's, by inspecting the session script's text or the running `cage` process's arguments during the step; then the frontend is up
+- [ ] 6.2 Generation at start: cache filled by 1.5's import run, folder made pending, session started; gamelist entry with the fixture's description, supported media under `/data/media` with a cached wheel asserted at the marquee destination and cached textures not emitted (no `textures` or `wheels` directory required); start with no live gamelist parent and assert its creation, pending empty, generation invoked through the test terminal adapter, all ordered before the frontend's start time; the generation compositor asserted to be started with the same console-switch flag as the frontend's, by inspecting the production session script's text; then the frontend is up
 - [ ] 6.3 Preservation: a gamelist written beforehand gives two fixture ROMs, the cached one and a second the cache holds nothing for, a distinct non-default value for each of the eight fields (favourite, hidden, kid-game, completed, play count, last played, sort name, alternative emulator); after generation both entries exist, the cached one with its description and the uncached one without, and each of the eight values is asserted by value on both; a negative control shows the assertion fails when any one field is dropped from either entry and when the uncached entry is absent
 - [ ] 6.4 Refusals: root, `admin` and a second run under a held lock, each by exit status, message and unchanged records; placeholder credentials as the session account, starting from a previous successful last-run record, asserted by exit status, message, the last-run record replaced by one showing `refused` with the placeholder as the cause, and the pending file byte-identical; `sudo -l` for `player` equals the list captured from a node without the capability
 - [ ] 6.5 Generation failure: a pending folder whose cache is unreadable gives `generation-failed`, a journal line naming the folder, the frontend up, and nothing pending afterwards
-- [ ] 6.6 Frontend route, driven inside the running frontend: the Tools system and its entry in the frontend's log; the test driver navigates to the Tools system and selects "Update game art" through keyboard input to the frontend (the `send_key` shape `tests/mode.nix` uses), then asserts the frontend's own launch log line for the entry, a window shown by the compositor, the requested-restart mark honoured by the loop (the run not counted as a crash) and a new frontend process replacing the old one; running the entry's command directly is kept as a diagnostic step only, not the proof; three requested restarts inside the crash window leave the session running, three unrequested short exits after a requested one still end at the greeter, and the interleaving of two unrequested short exits, a requested restart and one more unrequested short exit leaves the frontend relaunched and the session running, because the requested restart reset the count
+- [ ] 6.6 Session restart logic: invoke the Tools command through its explicit interpreter with a deterministic terminal adapter, assert the requested-restart mark is honoured and a new frontend process replaces the old one; three requested restarts leave the session running, three unrequested short exits after a requested one end at the greeter, and two unrequested short exits, a requested restart and one more unrequested short exit leave the frontend relaunched; record physical frontend selection, visible progress and real child termination separately in the hardware checklist
 - [ ] 6.7 Status: `emubox-status`'s `library` section after the legs above, the fixture folder's counts (the uncached ROM counted as unscraped although it has an entry), the last result and the failed folder asserted by value; every one of these assertions run twice, from the test driver as root and as `admin` without sudo (`runuser -u admin -- emubox-status`), with the `admin` run asserted to show the same section rather than an error or "no scrape has run", and the modes of `last-run.json`, `last-run.log` and the pending file asserted `0644`
 - [ ] 6.8 Window failure: replace the window command with a failing stub and then with a stub that hangs before launching generation under a short test-only external deadline; in both cases assert the process is ended, no scraper or windowless generation starts, attempted pending entries become `generation-failed`, the live gamelist remains unchanged, the reason is logged, and the frontend launches; cover interrupted windowed generation with one folder already completed, preserving its replacement; prove a stalled batch capture leaves pending unchanged and launches the frontend within its bound; prove cleanup lock contention, write failure and a stalled cleanup cannot delay frontend beyond the cleanup bound and leave uncommitted pending entries intact
-- [ ] 6.9 Claim held at start: while a fetch holds the shared lock, assert the frontend launches, pending is byte-identical and the journal holds the line saying a fetch was running; release and restart to generate. For the windowed skip itself, a test-only handshake pauses the session after batch capture, acquires the fetch lock, then lets the real windowed command observe it and return 75. Pause again after the command returns but before result handling, release and acknowledge the fetch lock, then resume. Assert no generation or failure cleanup runs, pending is unchanged, and the frontend launches; a negative control discarding exit 75 and taking the failure-cleanup path must fail the pending assertion. No journal timing is used as a barrier. Keep the real-chain status probe from 1.6 as a separate prerequisite
+- [ ] 6.9 Claim held at start: while a fetch holds the shared lock, assert the frontend launches, pending is byte-identical and the journal holds the line saying a fetch was running; release and restart to generate. For the windowed skip itself, a test-only handshake pauses the session after batch capture, acquires the fetch lock, then lets the generation command through the test terminal adapter observe it and return 75. Pause again after the command returns but before result handling, release and acknowledge the fetch lock, then resume. Assert no generation or failure cleanup runs, pending is unchanged, and the frontend launches; a negative control discarding exit 75 and taking the failure-cleanup path must fail the pending assertion. No journal timing is used as a barrier. The real-chain status check from 1.6 is separate manual hardware acceptance, not CI proof
 
 - [ ] 6.10 Positive admin route: from an actual `admin` session invoke the exact documented `sudo -u player emubox-scrape`, with the inherited `HOME` deliberately pointing at admin's home; a test-only scraper stub and non-placeholder fixture config avoid contacting ScreenScraper while exercising the real wrapper, credential and account checks, PATH and sudo; assert a successful last-run record and fetched folder outcome, then use 1.5's real import probe to prove resource deployment under the session account home; no new sudo rule
 

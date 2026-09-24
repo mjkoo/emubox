@@ -233,8 +233,8 @@
             # The live round trip between the frontend and Plasma, including
             # refusal paths and teardown of the old graphical session.
             mode = hostPkgs.testers.runNixOSTest (import ./tests/mode.nix { inherit self; });
-            # Real terminal/compositor and scraper probes, followed by the
-            # library integration assertions as that feature is implemented.
+            # Nonvisual scraper and library integration assertions.
+            # Display and frontend interaction are checked on hardware.
             library = hostPkgs.testers.runNixOSTest (import ./tests/library.nix { inherit self; });
             # The host's software modules as a plain node with fixture
             # controller ports and fixture pad identities: the port-to-player

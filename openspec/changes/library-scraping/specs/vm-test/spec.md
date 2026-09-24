@@ -2,20 +2,23 @@
 
 ### Requirement: Library scraping is proven in the VM
 
-A VM test SHALL boot the host's software modules as a node with a graphical
-stack and prove the library route end to end without contacting the scraping
-service. It SHALL place a fixture ROM in a system folder as `admin`, fill that
+A VM test SHALL boot the host's software modules and prove the nonvisual
+library contracts without contacting the scraping service. Library CI checks
+SHALL NOT depend on OCR, screenshot matching or frontend UI navigation.
+Automated session tests SHALL use a deterministic terminal adapter that runs
+the child command and preserves its exit status. Display, physical input and
+the real terminal chain SHALL be covered by documented manual hardware
+acceptance, which MAY be deferred while implementation proceeds. It SHALL place a fixture ROM in a system folder as `admin`, fill that
 folder's cache for it with the real scraper reading local fixture files, make
 the folder pending, and start the session. It SHALL then assert that before
 the frontend process started the folder's gamelist gained the fixture's entry
 with its description even when no live gamelist parent existed beforehand,
 that supported fixture media exists under `/data/media`, cached wheels appear
 as marquees and cached textures are not emitted,
-that the pending set is empty, that a window was displayed while generation
-ran, and that the frontend is up. It SHALL assert that the compositor showing
+that the pending set is empty, that generation ran through the test terminal
+adapter, and that the frontend is up. It SHALL assert that the compositor showing
 generation's progress was started with the same console-switch flag as the
-frontend's compositor, by inspecting the session script or the running
-process's arguments, so the console-switch key stays available for the
+frontend's compositor, by inspecting the production session script, so the console-switch key stays available for the
 length of the step. Because the scraper run here is the node's first, the
 test is also the proof that the scraper's first-run setup works for the
 session account.
@@ -37,7 +40,9 @@ test starts and a folder pending, the session SHALL start, the frontend SHALL
 come up, the pending set SHALL be byte-identical to before, and the journal
 SHALL hold a line saying a fetch was running; once the claim is released, the
 next frontend start SHALL generate the folder. It SHALL also prove a
-windowed held-claim skip survives the real terminal/compositor/timeout chain.
+held-claim skip is handled correctly through the test terminal adapter.
+Propagation through the real terminal/compositor/timeout chain remains a
+separate manual hardware check.
 A deterministic handshake SHALL release the fetch claim after the command
 has returned the skip but before the session handles it. No generation or
 failure cleanup SHALL then run, pending SHALL remain unchanged, and the
@@ -76,22 +81,20 @@ frontend within its bound. Cleanup contention, write failure or a stall SHALL be
 logged and leave uncommitted work pending, with frontend launch bounded by
 the cleanup deadline rather than blocked by it.
 
-The test SHALL prove the frontend route inside the running frontend, not by
-running the entry's command by hand: the test driver SHALL select the entry
-through keyboard input to the frontend, navigating to the Tools system and
-selecting "Update game art", and SHALL then assert the frontend's own launch
-log line for the entry, a window shown by the session's compositor, the
-requested-restart mark being honoured by the session, and a new frontend
-process replacing the old one; three such restarts inside the crash window
+The automated test SHALL invoke the Tools command through its explicit
+interpreter and test terminal adapter, assert the requested-restart mark
+being honoured by the session and a new frontend process replacing the old
+one; three such restarts inside the crash window
 SHALL leave the session running, three unrequested short exits after a
 requested restart SHALL end the session at the greeter, and two unrequested
 short exits followed by a requested restart and one more unrequested short
 exit SHALL leave the frontend relaunched and the session running, since the
 requested restart reset the count. A failed termination request SHALL clear
-its mark, and a subsequent genuine crash SHALL increment the count. Running the entry's command directly, the
-way the frontend runs it, MAY be kept as a diagnostic step but SHALL NOT
-stand in for the selection, because the frontend resolves the executable
-before it substitutes the entry's path, so a command it rejects still loads.
+its mark, and a subsequent genuine crash SHALL increment the count. Direct invocation proves session logic only. Manual hardware acceptance SHALL
+select "Update game art" inside the frontend using physical input and record
+its launch log, visible progress, persisted gamelist changes and relaunch.
+This is necessary because the frontend resolves the executable before
+substituting the entry's path, so a command it rejects can still load.
 It SHALL prove that ownership comes out right for a file `admin` creates
 under a system folder, asserted as the session account reading it, and that
 a system folder the session account creates with a plain `mkdir` under its
@@ -118,3 +121,8 @@ the scraping service accepts the real account.
 #### Scenario: A regression in preservation is caught
 - **WHEN** generation is changed so that it no longer preserves any one of the eight fields, or drops the entry of a game the cache holds nothing for
 - **THEN** the test fails on that field's assertion rather than passing on the entry's presence alone
+
+#### Scenario: Graphical behavior is accepted on hardware
+- **WHEN** the manual checklist is run on the target hardware
+- **THEN** the recorded software revision and observations prove visible terminal output alone and from the frontend, physical entry selection, persisted frontend state after child termination and relaunch, and exit 75 through the real timeout/compositor/terminal chain with success and launch-failure controls
+- **AND** deferred or unrun checks remain explicitly unverified; a green CI run does not establish hardware acceptance

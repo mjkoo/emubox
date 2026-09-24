@@ -77,7 +77,8 @@ needs an admin at the box.
   ScreenScraper artwork reaches its vulnerable decoder; correct the existing
   rationale that calls these inputs trusted.
 - `vm-test`: a new requirement proving scraping, generation, the Tools system
-  and the refusals in a VM.
+  and the refusals through nonvisual VM assertions; display and physical
+  frontend interaction are deferred to manual hardware acceptance.
 
 ## Impact
 
@@ -95,7 +96,8 @@ needs an admin at the box.
   `justfile` is corrected to evaluate `emubox.backups.enable` in a form that
   renders a Boolean, since `nix eval --raw` on a Boolean aborts the recipe
   before the guard runs, and `secrets/README.md` follows.
-- New `tests/library.nix`, run in CI with the other VM tests; `tests/kiosk.nix`
+- New nonvisual `tests/library.nix`, run in CI with the other VM tests,
+  and a manual hardware checklist for display and frontend interaction; `tests/kiosk.nix`
   and the other readers and writers of custom systems, including
   `tests/controllers-config.nix` and `tests/mode.nix`, follow the option
   change; the README example follows it too.

@@ -323,10 +323,10 @@ the program does nothing that start: the pending set is left exactly as it
 was, one journal line says a fetch was running, it exits 75 - a status it
 uses for no other outcome - and the loop launches the frontend at once; the
 pending folders are generated at a later start after the fetch has ended.
-The first probe group must establish that exit 75 survives the real
-`timeout`, cage and foot chain before the package is implemented. This is
-an unverified dependency, not an assumed upstream guarantee. A failing
-probe requires revising the result channel before proceeding.
+Manual hardware acceptance must establish that exit 75 survives the real
+`timeout`, cage and foot chain. Implementation may continue before that check,
+but this remains an unverified dependency. A failed hardware check requires
+revising the result channel before hardware acceptance.
 
 The pending set is the file `/data/cache/skyscraper/pending`, one folder per
 line. When generation holds the lock, a folder leaves the set only after its
@@ -397,8 +397,8 @@ restore leaves the truncated file live).
 "Tools", whose path is a read-only store directory of `.sh` entries and whose
 `<command>` names an explicit interpreter or wrapper before `%ROM%`, because
 ES-DE resolves the executable before it substitutes `%ROM%`, so a bare
-`%ROM%` command loads but fails at launch; the custom-system probe in the
-first task group confirms the shape the frontend accepts. "Update game art" runs
+`%ROM%` command loads but fails at launch; manual hardware
+acceptance confirms the shape the frontend accepts. "Update game art" runs
 `foot -e emubox-scrape`, writes a restart mark under the session's runtime
 directory, and ends the frontend. The loop, on seeing the mark after a
 frontend exit, removes it, does not count that run as a crash whatever its
@@ -515,7 +515,13 @@ Unit tests cover discovery, the map, outcomes and run results, the lock, the
 account refusal, the credential check, the pending file and the generation
 policy, against a stub Skyscraper. The VM test fills a fixture ROM's cache
 with the real Skyscraper's `import` module, marks the folder pending, and
-lets the real generation and the real frontend take it from there. The
+lets the real generation and frontend take it from there. Automated session
+checks use a deterministic terminal adapter that runs the child and preserves
+its exit status. They prove ordering, files, outcomes and restart logic; they
+do not prove display or physical frontend interaction. CI uses no OCR or
+screenshot assertions for the library. `docs/library-hardware-tests.md`
+covers visible progress, physical entry selection, real child termination
+and exit-status propagation through the real terminal chain. The
 network fetch is upstream's code and is covered by one documented manual
 scrape with real credentials. Rejected: a fake ScreenScraper (its API is
 HTTPS at a fixed host, so it needs DNS and a trusted certificate in the VM to
@@ -525,40 +531,35 @@ prove only that upstream's client works).
 
 ### Early probe evidence
 
-The first implementation gate is the `Library VM probes` CI step, which
-builds `checks.x86_64-linux.library`. Local evaluation and a built test
-driver do not establish graphical or scraper runtime behavior. No CI run
-has yet passed these probes; the following remain unverified:
+The first CI gate runs the nonvisual `checks.x86_64-linux.library` import
+probe and pinned-source contracts. Local evaluation and a built test driver
+do not establish scraper runtime behavior; the import CI result is pending.
 
-- Visible foot output under cage, both alone and from a frontend child.
-- Keyboard launch of a store-backed shell entry through an explicit
-  interpreter in its custom system command.
+CI run `36005946761` stopped at a standalone visible-text assertion. Cage
+obtained the seat and foot started, but OCR returned empty or garbled text.
+No screenshot was retained, so this was not proof of a display failure.
+The subsequent font/readiness adjustment did not establish hardware behavior.
+At the user's request, graphical probes are removed from CI and deferred to
+manual testing on the target hardware. The checklist is
+`docs/library-hardware-tests.md`. Its checks remain pending, not passed:
+
+- Visible foot output under Cage, alone and from a frontend child.
+- Physical selection of a store-backed shell entry with an explicit interpreter.
 - Normal frontend shutdown from its child, persisted play count and relaunch.
-- First-run Skyscraper resource deployment and local import with an external
-  configuration file.
-- Exit 75 propagation through the real timeout, cage and foot chain, with
-  success and launch-failure controls.
+- Exit 75 propagation through timeout, Cage and foot, with controls.
 
-Record the CI run number and each observed result here before proceeding
-past the first gate. A failing probe requires revising the affected design
-before implementation continues.
-
-CI run `36005946761` stopped at the standalone visible-text assertion. Cage
-obtained the logind seat and initialized the virtual display, and foot
-started with its default configuration, but OCR returned empty or garbled
-text. No screenshot was retained, so this does not establish whether the
-terminal content was absent or simply unreadable by OCR. The harness now
-uses a fixed 32-pixel font and high contrast, waits for the terminal client
-to print before checking the screen, and attempts a screenshot even if OCR
-fails. Visible output remains a required assertion. Exit-status propagation
-and all frontend/import probes were not reached; a new CI run is required.
+Implementation may continue after the nonvisual CI gate without these results.
+Record hardware revision, software commit and observed results before claiming
+hardware acceptance. A failed manual check requires revising the affected
+design. This accepts the risk of discovering display or process-chain problems
+later; product requirements for visible progress and reliable skips are unchanged.
 
 ### Accepted risks and runtime dependencies
 
-- [`foot` may not display under `cage`, alone or over ES-DE] -> the first
-  probe group proves both cases in CI before implementation continues. A
-  failed probe requires revising the display mechanism, not silently dropping
-  progress or introducing windowless generation.
+- [`foot` may not display under `cage`, alone or over ES-DE] -> manual hardware
+  acceptance proves both cases. Implementation may proceed with this risk
+  open; a failed check requires revising the display mechanism while retaining
+  visible progress and the prohibition on windowless retries.
 - [Downloaded artwork reaches a vulnerable decoder] -> accepted explicitly:
   ES-DE's raster texture path calls `ImageIO::loadFromMemoryRGBA32`, which
   calls `FreeImage_LoadFromMemory`. ScreenScraper artwork is external input,

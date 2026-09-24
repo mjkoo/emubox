@@ -59,7 +59,7 @@ jobs:
       - name: Format check
         run: nix fmt -- --ci
 
-      - name: Library VM probes
+      - name: Library nonvisual integration
         run: nix build .#checks.x86_64-linux.library --no-link -L
 
       - name: Flake check

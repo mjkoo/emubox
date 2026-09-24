@@ -30,6 +30,7 @@ REPORT_SECONDS = 45
 CONFIG_PATH = Path("/etc/emubox/library.json")
 VECTORS_PATH = Path(__file__).with_name("vectors.json")
 IONICE = "@IONICE@"
+PLACEHOLDER_MARKER = "REPLACE-BEFORE-INSTALL"
 
 
 @dataclass(frozen=True)
@@ -307,18 +308,8 @@ def credentials_error(config: Config) -> str | None:
         return "missing ScreenScraper credentials"
     if not username.strip() or not password.strip():
         return "missing ScreenScraper credentials"
-    if any(
-        marker in part.lower()
-        for part in (username, password)
-        for marker in (
-            "placeholder",
-            "changeme",
-            "change-me",
-            "replace-me",
-            "replace-before-install",
-            "your_",
-        )
-    ):
+    # The committed secrets file's marker, as the install guard checks it.
+    if any(PLACEHOLDER_MARKER in part.upper() for part in (username, password)):
         return "placeholder ScreenScraper credentials"
     return None
 
@@ -397,7 +388,15 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
                 outcomes[folder] = "fetch-failed"
         fetched = sum(value == "fetched" for value in outcomes.values())
         failed = sum(value == "fetch-failed" for value in outcomes.values())
+        unmapped = sum(value == "unmapped" for value in outcomes.values())
         result = "partial" if fetched and failed else "failed" if failed else "complete"
+        summary = (
+            f"Scrape result: {result} "
+            f"({fetched} fetched, {failed} failed, {unmapped} unmapped)\n"
+        ).encode()
+        sys.stdout.buffer.write(summary)
+        sys.stdout.buffer.flush()
+        transcript.extend(summary)
         atomic_write(config.log_path, bytes(transcript))
         write_record(config, result, outcomes)
         return 0 if result == "complete" else 1

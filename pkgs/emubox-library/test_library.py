@@ -186,7 +186,10 @@ def test_fetch_log_matches_streamed_terminal_output(
     scraper.chmod(0o755)
     assert library.scrape(replace(config, skyscraper=str(scraper))) == 0
     terminal = capsysbinary.readouterr().out
-    assert terminal == b"Fetching nes\nscraper stdout\nscraper stderr\n"
+    assert terminal == (
+        b"Fetching nes\nscraper stdout\nscraper stderr\n"
+        b"Scrape result: complete (1 fetched, 0 failed, 0 unmapped)\n"
+    )
     assert config.log_path.read_bytes() == terminal
 
 
@@ -248,6 +251,28 @@ def test_empty_credential_component_refuses_before_scraper(
     assert record["result"] == "refused"
     assert "missing" in record["cause"]
     assert config.pending_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("password", ["your_secret", "changeme42", "placeholder!"])
+def test_credentials_resembling_placeholders_are_accepted(
+    config: library.Config, password: str
+) -> None:
+    config.scraper_config.write_text(f'[screenscraper]\nuserCreds="person:{password}"\n')
+    assert library.credentials_error(config) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "REPLACE-BEFORE-INSTALL-SCREENSCRAPER-USERNAME:secret",
+        "person:replace-before-install-screenscraper-password",
+    ],
+)
+def test_committed_placeholder_in_either_component_refuses(
+    config: library.Config, value: str
+) -> None:
+    config.scraper_config.write_text(f'[screenscraper]\nuserCreds="{value}"\n')
+    assert library.credentials_error(config) == "placeholder ScreenScraper credentials"
 
 
 def test_percent_in_valid_credentials_allows_fetch(config: library.Config) -> None:

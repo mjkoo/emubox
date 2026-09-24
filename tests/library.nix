@@ -501,7 +501,7 @@ in
       with subtest("Account, placeholder and held-claim refusals preserve the right state"):
           before = machine.succeed("cat /data/cache/skyscraper/last-run.json")
           for command in ("emubox-scrape", "runuser -u admin -- emubox-scrape"):
-              status, output = machine.execute(command)
+              status, output = machine.execute(command + " 2>&1")
               assert status != 0, (command, output)
               assert "sudo -u player emubox-scrape" in output, output
               assert machine.succeed("cat /data/cache/skyscraper/last-run.json") == before
@@ -512,14 +512,14 @@ in
                                         "${pkgs.util-linux}/bin/flock -x 9; "
                                         "touch /run/emubox-library-test/held; sleep 3600"))
           machine.wait_until_succeeds("test -e /run/emubox-library-test/held")
-          status, output = machine.execute(player("emubox-scrape"))
+          status, output = machine.execute(player("emubox-scrape") + " 2>&1")
           assert status != 0 and "in progress" in output.lower(), output
           assert machine.succeed("cat /data/cache/skyscraper/last-run.json") == before
           machine.succeed("systemctl stop emubox-library-lock-holder")
 
           pending_before = machine.succeed("cat /data/cache/skyscraper/pending")
           write_library_config(library_config)
-          status, output = machine.execute(player("emubox-scrape"))
+          status, output = machine.execute(player("emubox-scrape") + " 2>&1")
           assert status != 0 and "placeholder" in output.lower(), output
           refused = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert refused["result"] == "refused", refused

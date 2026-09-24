@@ -555,7 +555,10 @@ manual testing on the target hardware. The checklist is
 - Normal frontend shutdown from its child, persisted play count and relaunch.
 - Exit 75 propagation through timeout, Cage and foot, with controls.
 
-Implementation may continue after the nonvisual CI gate without these results.
+No hardware installation has been performed yet. These checks and the
+real-account smoke tests are deferred until a future installation and
+hardware-testing phase. They do not block completion of this implementation
+after its automated gates pass; this does not establish readiness to install.
 Record hardware revision, software commit and observed results before claiming
 hardware acceptance. A failed manual check requires revising the affected
 design. This accepts the risk of discovering display or process-chain problems

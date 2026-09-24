@@ -1,16 +1,19 @@
 ## 1. Early probes and upstream contracts
 
 CI covers nonvisual contracts. Graphical checks are deferred to manual
-hardware acceptance in `docs/library-hardware-tests.md`; they do not block
-continued implementation and remain unchecked until evidence is recorded.
+post-installation hardware acceptance in `docs/library-hardware-tests.md`.
+No hardware installation has been performed yet. These checks, including
+the real-account smoke tests, are deferred follow-up work and do not block
+completion of this implementation. They remain unchecked and unverified
+until hardware testing is scheduled and evidence is recorded.
 A failed hardware check requires fixing the design before hardware acceptance.
 
 - [x] 1.1 Scaffold `tests/library.nix` as a nonvisual node built from the host's modules, wire it into the flake's checks and a `just library-test` recipe, and add it to CI; proven by evaluation under `just check-all` and a green CI run
-- [ ] 1.2 Manual hardware: foot under Cage visibly prints progress, alone and as a frontend child; record hardware, revision and observations using `docs/library-hardware-tests.md`
-- [ ] 1.3 Manual hardware: the frontend loads a read-only store system outside `/data/roms` with one `.sh` entry; select it using physical input and record the launch log and accepted explicit-interpreter command shape in design.md D7
-- [ ] 1.4 Manual hardware: termination from a frontend child persists an in-memory gamelist change and the session relaunches; test ES-DE SIGTERM first, then its Cage parent if needed, and record the working route in design.md D7
+- [ ] 1.2 Deferred until hardware installation: foot under Cage visibly prints progress, alone and as a frontend child; record hardware, revision and observations using `docs/library-hardware-tests.md`
+- [ ] 1.3 Deferred until hardware installation: the frontend loads a read-only store system outside `/data/roms` with one `.sh` entry; select it using physical input and record the launch log and accepted explicit-interpreter command shape in design.md D7
+- [ ] 1.4 Deferred until hardware installation: termination from a frontend child persists an in-memory gamelist change and the session relaunches; test ES-DE SIGTERM first, then its Cage parent if needed, and record the working route in design.md D7
 - [x] 1.5 Nonvisual VM: the real Skyscraper's first run as `player`, with external `-c`, deploys resources and imports a fixture ROM into cache; assert exit 0 and matching quickid/resource entries, and record the CI result in design.md
-- [ ] 1.6 Manual hardware: the exact `timeout --kill-after=30 2100 cage -s -- foot -e <fixture>` chain preserves exit 75, with exit 0 and missing-executable controls; record observed statuses; this remains an unverified runtime dependency until hardware acceptance
+- [ ] 1.6 Deferred until hardware installation: the exact `timeout --kill-after=30 2100 cage -s -- foot -e <fixture>` chain preserves exit 75, with exit 0 and missing-executable controls; record observed statuses; this remains an unverified runtime dependency until hardware acceptance
 - [x] 1.7 Pinned-source contract evidence: add executable checks under `tests/` and a source evidence report under `docs/` for the exact Skyscraper and ES-DE revisions, covering platform names, accepted options/flags, absence of `--stderr`, non-XDG home/resource deployment, cache locking and signal handling, media output and family-tag preservation, and frontend launch/input assumptions; distinguish source inspection from VM evidence; invalid platform and option negative controls fail, and 3.11/3.12 later bind these checks to the actual exported map and vectors
 
 ### First CI gate status

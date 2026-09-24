@@ -1,14 +1,17 @@
 # Library hardware acceptance
 
-Status: pending. These checks require the target appliance, its display and
-physical keyboard or controller. A green CI run does not establish that they
+Status: deferred until a future hardware installation. No hardware installation
+has been performed yet. These checks are post-installation follow-up work and
+do not block completion of the current implementation. Run them when the
+project is ready for hardware testing; they require the target appliance, its
+display and physical keyboard or controller. A green CI run does not establish that they
 pass. CI covers source contracts, local scraper import and nonvisual library
 and session logic. It does not use OCR for the library.
 
 Record the date, tester, machine/GPU/display, deployed software commit, each
 observed result and relevant logs. Mark unavailable functionality as not run.
-The implementation is ready for hardware observation; keep failures and unrun
-checks open until retested.
+This checklist does not establish readiness to install on hardware. Keep
+failures and unrun checks open until tested on an installed appliance.
 
 Use disposable test ROMs and back up the test system's gamelist before
 changing it. Restore the test configuration and fixtures afterwards. Run
@@ -74,12 +77,13 @@ back into the implementation before accepting its restart behavior.
 
 ## Integrated generation and real account
 
-Once implemented, prepare a disposable cached game with generation pending.
+After hardware installation, prepare a disposable cached game with generation pending.
 Restart the frontend and observe progress before it starts, then confirm the
 new artwork is shown. Run one small scrape with real ScreenScraper credentials
 through the documented admin route and one through Tools. Record outcomes,
 never credentials. This checks service acceptance as well as the display.
 
-All checks above remain pending until a tester records evidence. Failure of
+All checks above, including the real-account smoke tests, are deferred until
+post-installation testing and remain unverified until a tester records evidence. Failure of
 display, state persistence or exit-status propagation requires correcting the
 implementation before hardware acceptance, even if automated checks pass.

@@ -78,7 +78,9 @@ needs an admin at the box.
   rationale that calls these inputs trusted.
 - `vm-test`: a new requirement proving scraping, generation, the Tools system
   and the refusals through nonvisual VM assertions; display and physical
-  frontend interaction are deferred to manual hardware acceptance.
+  frontend interaction are deferred to post-installation manual hardware
+  acceptance. Hardware has not been installed yet; these checks and the
+  real-account smoke tests do not block completion of this implementation.
 
 ## Impact
 

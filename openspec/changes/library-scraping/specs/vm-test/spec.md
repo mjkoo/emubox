@@ -8,7 +8,9 @@ SHALL NOT depend on OCR, screenshot matching or frontend UI navigation.
 Automated session tests SHALL use a deterministic terminal adapter that runs
 the child command and preserves its exit status. Display, physical input and
 the real terminal chain SHALL be covered by documented manual hardware
-acceptance, which MAY be deferred while implementation proceeds.
+acceptance, which MAY be deferred until post-installation testing without
+blocking implementation completion. Deferred checks SHALL remain explicitly
+unverified. The real-account smoke tests MAY be deferred to the same phase.
 
 The VM test SHALL place a fixture ROM in a system folder as `admin`, fill that
 folder's cache for it with the real scraper reading local fixture files, make

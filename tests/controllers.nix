@@ -1117,7 +1117,7 @@ in
       ):
           # Not asserted successful: this node has no btrfs snapshot layer,
           # so its backups section warns that the local layer has not yet
-          # run, whatever the other two sections report.
+          # run, whatever the other sections report.
           _, output = run_status()
           sections = status_sections(output)
           assert set(sections) == {"backups", "controllers", "library", "switchable"}, sections

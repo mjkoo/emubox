@@ -510,8 +510,9 @@ in
                           "${pkgs.bash}/bin/bash -c "
                           + shlex.quote("exec 9>/data/cache/skyscraper/lock; "
                                         "${pkgs.util-linux}/bin/flock -x 9; "
-                                        "touch /run/emubox-library-test/held; sleep 3600"))
-          machine.wait_until_succeeds("test -e /run/emubox-library-test/held")
+                                        "${pkgs.coreutils}/bin/touch /run/emubox-library-test/held; "
+                                        "exec ${pkgs.coreutils}/bin/sleep 3600"))
+          machine.wait_until_succeeds("test -e /run/emubox-library-test/held", timeout=30)
           status, output = machine.execute(player("emubox-scrape") + " 2>&1")
           assert status != 0 and "in progress" in output.lower(), output
           assert machine.succeed("cat /data/cache/skyscraper/last-run.json") == before
@@ -606,8 +607,9 @@ in
                           "${pkgs.bash}/bin/bash -c "
                           + shlex.quote("exec 9>/data/cache/skyscraper/lock; "
                                         "${pkgs.util-linux}/bin/flock -x 9; "
-                                        "touch /run/emubox-library-test/held; sleep 3600"))
-          machine.wait_until_succeeds("test -e /run/emubox-library-test/held")
+                                        "${pkgs.coreutils}/bin/touch /run/emubox-library-test/held; "
+                                        "exec ${pkgs.coreutils}/bin/sleep 3600"))
+          machine.wait_until_succeeds("test -e /run/emubox-library-test/held", timeout=30)
           requested_restart()
           wait_frontend_count(6)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == pending_before
@@ -632,8 +634,9 @@ in
                           "${pkgs.bash}/bin/bash -c "
                           + shlex.quote("exec 9>/data/cache/skyscraper/lock; "
                                         "${pkgs.util-linux}/bin/flock -x 9; "
-                                        "touch /run/emubox-library-test/held; sleep 3600"))
-          machine.wait_until_succeeds("test -e /run/emubox-library-test/held")
+                                        "${pkgs.coreutils}/bin/touch /run/emubox-library-test/held; "
+                                        "exec ${pkgs.coreutils}/bin/sleep 3600"))
+          machine.wait_until_succeeds("test -e /run/emubox-library-test/held", timeout=30)
           machine.succeed("touch /run/emubox-library-test/allow-child")
           machine.wait_until_succeeds("test -e /run/emubox-library-test/child-status")
           assert machine.succeed("cat /run/emubox-library-test/child-status").strip() == "75"
@@ -691,8 +694,9 @@ in
                           "${pkgs.bash}/bin/bash -c "
                           + shlex.quote("exec 9>/data/cache/skyscraper/lock; "
                                         "${pkgs.util-linux}/bin/flock -x 9; "
-                                        "touch /run/emubox-library-test/held; sleep 3600"))
-          machine.wait_until_succeeds("test -e /run/emubox-library-test/held")
+                                        "${pkgs.coreutils}/bin/touch /run/emubox-library-test/held; "
+                                        "exec ${pkgs.coreutils}/bin/sleep 3600"))
+          machine.wait_until_succeeds("test -e /run/emubox-library-test/held", timeout=30)
           machine.succeed("touch /run/emubox-library-test/allow-fail")
           wait_frontend_count(11)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == before

@@ -8,7 +8,9 @@ SHALL NOT depend on OCR, screenshot matching or frontend UI navigation.
 Automated session tests SHALL use a deterministic terminal adapter that runs
 the child command and preserves its exit status. Display, physical input and
 the real terminal chain SHALL be covered by documented manual hardware
-acceptance, which MAY be deferred while implementation proceeds. It SHALL place a fixture ROM in a system folder as `admin`, fill that
+acceptance, which MAY be deferred while implementation proceeds.
+
+The VM test SHALL place a fixture ROM in a system folder as `admin`, fill that
 folder's cache for it with the real scraper reading local fixture files, make
 the folder pending, and start the session. It SHALL then assert that before
 the frontend process started the folder's gamelist gained the fixture's entry
@@ -18,8 +20,8 @@ as marquees and cached textures are not emitted,
 that the pending set is empty, that generation ran through the test terminal
 adapter, and that the frontend is up. It SHALL assert that the compositor showing
 generation's progress was started with the same console-switch flag as the
-frontend's compositor, by inspecting the production session script, so the console-switch key stays available for the
-length of the step. Because the scraper run here is the node's first, the
+frontend's compositor, by inspecting the production session script, so the
+console-switch key stays available for the length of the step. Because the scraper run here is the node's first, the
 test is also the proof that the scraper's first-run setup works for the
 session account.
 

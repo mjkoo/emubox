@@ -5,11 +5,11 @@ hardware acceptance in `docs/library-hardware-tests.md`; they do not block
 continued implementation and remain unchecked until evidence is recorded.
 A failed hardware check requires fixing the design before hardware acceptance.
 
-- [ ] 1.1 Scaffold `tests/library.nix` as a nonvisual node built from the host's modules, wire it into the flake's checks and a `just library-test` recipe, and add it to CI; proven by evaluation under `just check-all` and a green CI run
+- [x] 1.1 Scaffold `tests/library.nix` as a nonvisual node built from the host's modules, wire it into the flake's checks and a `just library-test` recipe, and add it to CI; proven by evaluation under `just check-all` and a green CI run
 - [ ] 1.2 Manual hardware: foot under Cage visibly prints progress, alone and as a frontend child; record hardware, revision and observations using `docs/library-hardware-tests.md`
 - [ ] 1.3 Manual hardware: the frontend loads a read-only store system outside `/data/roms` with one `.sh` entry; select it using physical input and record the launch log and accepted explicit-interpreter command shape in design.md D7
 - [ ] 1.4 Manual hardware: termination from a frontend child persists an in-memory gamelist change and the session relaunches; test ES-DE SIGTERM first, then its Cage parent if needed, and record the working route in design.md D7
-- [ ] 1.5 Nonvisual VM: the real Skyscraper's first run as `player`, with external `-c`, deploys resources and imports a fixture ROM into cache; assert exit 0 and matching quickid/resource entries, and record the CI result in design.md
+- [x] 1.5 Nonvisual VM: the real Skyscraper's first run as `player`, with external `-c`, deploys resources and imports a fixture ROM into cache; assert exit 0 and matching quickid/resource entries, and record the CI result in design.md
 - [ ] 1.6 Manual hardware: the exact `timeout --kill-after=30 2100 cage -s -- foot -e <fixture>` chain preserves exit 75, with exit 0 and missing-executable controls; record observed statuses; this remains an unverified runtime dependency until hardware acceptance
 - [x] 1.7 Pinned-source contract evidence: add executable checks under `tests/` and a source evidence report under `docs/` for the exact Skyscraper and ES-DE revisions, covering platform names, accepted options/flags, absence of `--stderr`, non-XDG home/resource deployment, cache locking and signal handling, media output and family-tag preservation, and frontend launch/input assumptions; distinguish source inspection from VM evidence; invalid platform and option negative controls fail, and 3.11/3.12 later bind these checks to the actual exported map and vectors
 
@@ -20,7 +20,9 @@ flags, including invalid-platform, `--stderr` and invalid-flag controls.
 CI run `36005946761` timed out in OCR before reaching the import probe.
 The graphical probes have been removed from CI at the user's request;
 `tests/library.nix` now runs the real first-import check without a display.
-A green CI result for this reduced check is still pending. Source inspection
+CI run `36010935647` at `d4368db` passed the reduced library check, full
+flake checks and host build. The first-run import deployed resources and
+matched the fixture quickid to an imported cache entry. Source inspection
 and driver builds do not prove hardware behavior. Manual tasks above remain
 unchecked; deferral is not a passing result.
 

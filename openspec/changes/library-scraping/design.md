@@ -533,7 +533,11 @@ prove only that upstream's client works).
 
 The first CI gate runs the nonvisual `checks.x86_64-linux.library` import
 probe and pinned-source contracts. Local evaluation and a built test driver
-do not establish scraper runtime behavior; the import CI result is pending.
+do not establish scraper runtime behavior. CI run `36010935647` at
+`d4368db` passed: the real first-run import as `player` with external `-c`
+deployed its resources and produced a fixture quickid matching an imported
+cache resource. The full flake checks and host build also passed. This clears
+the nonvisual implementation gate.
 
 CI run `36005946761` stopped at a standalone visible-text assertion. Cage
 obtained the seat and foot started, but OCR returned empty or garbled text.

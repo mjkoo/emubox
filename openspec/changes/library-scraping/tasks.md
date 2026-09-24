@@ -170,6 +170,21 @@ no false failure summary; a red-then-green regression covers both no-op
 and actual-failure logging, and a subset audit confirmed the affected
 cleanup and review tasks. No blocking review findings remain.
 
+### Post-implementation review
+
+A later review found that the interrupt raised on SIGTERM or SIGHUP was an
+`OSError`, so generation's per-folder file-error handler absorbed it and
+went on to the next folder. A dedicated exception now ends generation,
+leaving unfinished folders pending for the session's cleanup; a
+red-then-green process test covers both signals. The same review made the
+status reporter keep counting past a malformed gamelist or run record,
+narrowed the credential check to the committed placeholder marker, added
+a closing scrape result line to the terminal and `last-run.log`, and
+removed duplicate installed data files. The package passes Ruff,
+formatting, ty and 58 tests on native and Linux builds; `just check-all`,
+the source contracts, the library and session drivers and the host
+toplevel pass locally. The library VM test awaits its next CI run.
+
 Graphical acceptance remains explicitly deferred to manual tasks 1.2,
 1.3, 1.4 and 1.6. Green CI establishes no result for those checks. The
 separate verification and archive workflows have not been invoked.

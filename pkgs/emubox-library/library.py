@@ -212,8 +212,16 @@ def terminate_group(child: subprocess.Popen[bytes]) -> None:
     child.wait()
 
 
-def _interrupt(_number: int, _frame: object) -> None:
-    raise InterruptedError("library command interrupted")
+class Interrupted(Exception):
+    """A termination request; deliberately not an OSError, so no file-error handler absorbs it."""
+
+    def __init__(self, number: int) -> None:
+        super().__init__(f"library command interrupted by signal {number}")
+        self.number = number
+
+
+def _interrupt(number: int, _frame: object) -> None:
+    raise Interrupted(number)
 
 
 def run_skyscraper(
@@ -674,7 +682,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def scrape_main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    return scrape(Config.read(args.config))
+    try:
+        return scrape(Config.read(args.config))
+    except Interrupted as interrupted:
+        return 128 + interrupted.number
 
 
 def generate_main(argv: list[str] | None = None) -> int:
@@ -690,7 +701,11 @@ def generate_main(argv: list[str] | None = None) -> int:
         return status
     if args.action == "cleanup":
         return cleanup(config, json.loads(args.batch))
-    return generate(config)
+    try:
+        return generate(config)
+    except Interrupted as interrupted:
+        # Unfinished folders stay pending for the session's failure cleanup.
+        return 128 + interrupted.number
 
 
 def report_main(argv: list[str] | None = None) -> int:

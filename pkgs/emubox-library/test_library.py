@@ -908,6 +908,68 @@ def test_signal_ends_scraper_process_group_and_releases_claim(
                 os.kill(child_pid, signal.SIGKILL)
 
 
+@pytest.mark.parametrize("ending_signal", [signal.SIGTERM, signal.SIGHUP])
+def test_signal_stops_generation_and_leaves_work_pending(
+    config: library.Config, ending_signal: int
+) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    library.write_pending(config, ["nes", "psx"])
+    parent = config.gamelist_root / "nes"
+    parent.mkdir(parents=True)
+    live = parent / "gamelist.xml"
+    live.write_text("OLD")
+    ready = config.cache_root / "writing"
+    pid_file = config.cache_root / "writer-pid"
+    invoked = config.cache_root / "invoked"
+    scraper = config.cache_root.parent / "writer"
+    scraper.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, sys, time\n"
+        "argv=sys.argv\n"
+        "root=pathlib.Path(argv[argv.index('-d')+1]).parent\n"
+        "work=pathlib.Path(argv[argv.index('-g')+1])\n"
+        "with (root/'invoked').open('a') as log: log.write(argv[argv.index('-p')+1]+'\\n')\n"
+        "(root/'writer-pid').write_text(str(os.getpid()))\n"
+        "(work/'gamelist.xml').write_text('PARTIAL')\n"
+        "(root/'writing').touch()\n"
+        "while True: time.sleep(1)\n"
+    )
+    scraper.chmod(0o755)
+    settings = cli_config(
+        replace(config, skyscraper=str(scraper)), config.cache_root.parent / "config.json"
+    )
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("emubox_library_generate.py")),
+        "--config",
+        str(settings),
+    ]
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    child_pid = None
+    try:
+        wait_for(ready)
+        child_pid = int(pid_file.read_text())
+        os.kill(process.pid, ending_signal)
+        assert process.wait(timeout=5) == 128 + ending_signal
+        assert process.stderr is not None
+        assert b"Traceback" not in process.stderr.read()
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        if child_pid is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child_pid, signal.SIGKILL)
+    assert invoked.read_text() == "nes\n"
+    assert live.read_text() == "OLD"
+    assert not list(parent.glob(".emubox-library-work-*"))
+    assert library.read_pending(config) == ["nes", "psx"]
+    assert not config.record_path.exists()
+
+
 def test_published_gamelist_survives_kill_before_pending_rewrite(config: library.Config) -> None:
     game(config, "nes", "a.nes")
     library.write_pending(config, ["nes"])

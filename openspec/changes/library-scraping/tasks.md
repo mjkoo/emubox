@@ -24,6 +24,11 @@ report at `docs/library-source-contracts.md`. The native
 126 platforms, 35 options and 40 flags, including rejection controls for an
 invalid platform, `--stderr` and an invalid flag. The full local
 `just check-all` gate passed with the library VM check included in evaluation.
+The corrected `checks.x86_64-linux.library.driver` built on the Linux builder
+at commit `4ba3454`; its type and lint checks both reported `All checks passed!`.
+The group review and scoped correction review found no blocking defects in
+the probe implementation. This is readiness for the first CI run, not group
+completion.
 
 The VM probes are implemented but remain unchecked until the `Library VM
 probes` CI step runs. Record the CI run number and observed results in

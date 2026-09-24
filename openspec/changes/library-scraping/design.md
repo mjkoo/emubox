@@ -523,6 +523,28 @@ prove only that upstream's client works).
 
 ## Risks / Trade-offs
 
+### Early probe evidence
+
+The first implementation gate is the `Library VM probes` CI step, which
+builds `checks.x86_64-linux.library`. Local evaluation and a built test
+driver do not establish graphical or scraper runtime behavior. No CI run
+has yet been recorded for these probes; the following remain unverified:
+
+- Visible foot output under cage, both alone and from a frontend child.
+- Keyboard launch of a store-backed shell entry through an explicit
+  interpreter in its custom system command.
+- Normal frontend shutdown from its child, persisted play count and relaunch.
+- First-run Skyscraper resource deployment and local import with an external
+  configuration file.
+- Exit 75 propagation through the real timeout, cage and foot chain, with
+  success and launch-failure controls.
+
+Record the CI run number and each observed result here before proceeding
+past the first gate. A failing probe requires revising the affected design
+before implementation continues.
+
+### Accepted risks and runtime dependencies
+
 - [`foot` may not display under `cage`, alone or over ES-DE] -> the first
   probe group proves both cases in CI before implementation continues. A
   failed probe requires revising the display mechanism, not silently dropping

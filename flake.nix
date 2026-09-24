@@ -204,6 +204,16 @@
             inherit self;
             pkgs = pkgsFor system;
           };
+          perSystem.library-source-contracts =
+            (pkgsFor system).runCommand "emubox-library-source-contracts"
+              { nativeBuildInputs = [ (pkgsFor system).python3 ]; }
+              ''
+                python3 ${./tests/library-source-contracts.py} \
+                  --skyscraper-source ${hostPkgs.skyscraper.src} \
+                  --esde-source ${hostPkgs.es-de.src} \
+                  --nixpkgs-source ${nixpkgs}
+                touch "$out"
+              '';
 
           # The host configuration extended with the test module: the VM
           # test installs and boots its toplevel, and the closure check greps
@@ -223,6 +233,9 @@
             # The live round trip between the frontend and Plasma, including
             # refusal paths and teardown of the old graphical session.
             mode = hostPkgs.testers.runNixOSTest (import ./tests/mode.nix { inherit self; });
+            # Real terminal/compositor and scraper probes, followed by the
+            # library integration assertions as that feature is implemented.
+            library = hostPkgs.testers.runNixOSTest (import ./tests/library.nix { inherit self; });
             # The host's software modules as a plain node with fixture
             # controller ports and fixture pad identities: the port-to-player
             # mapping, the session hint, the owned controller keys and the

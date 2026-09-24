@@ -31,6 +31,7 @@ eval:
     nix eval --raw .#checks.x86_64-linux.vm.drvPath
     nix eval --raw .#checks.x86_64-linux.kiosk.drvPath
     nix eval --raw .#checks.x86_64-linux.mode.drvPath
+    nix eval --raw .#checks.x86_64-linux.library.drvPath
     nix eval --raw .#checks.x86_64-linux.controllers.drvPath
     nix eval --raw .#checks.x86_64-linux.session.drvPath
     nix eval --raw .#checks.x86_64-linux.retroarch-settings.drvPath
@@ -51,6 +52,10 @@ kiosk-test:
 # Build and run the mode-switch VM test (x86_64-linux builder with KVM)
 mode-test:
     nix build .#checks.x86_64-linux.mode --no-link
+
+# Build and run the library VM test (x86_64-linux builder with KVM)
+library-test:
+    nix build .#checks.x86_64-linux.library --no-link
 
 # Build and run the controllers VM test (x86_64-linux builder with KVM)
 controllers-test:

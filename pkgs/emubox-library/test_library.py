@@ -145,6 +145,43 @@ def test_credentials_replace_success_record_without_touching_pending(
     assert config.pending_path.read_bytes() == before
 
 
+@pytest.mark.parametrize("value", ['":secret"', '"person:"'])
+def test_empty_credential_component_refuses_before_scraper(
+    config: library.Config, value: str
+) -> None:
+    game(config, "nes", "a.nes")
+    library.write_record(config, "complete", {"nes": "fetched"})
+    library.write_pending(config, ["nes"])
+    before = config.pending_path.read_bytes()
+    config.scraper_config.write_text(f"[screenscraper]\nuserCreds={value}\n")
+    invoked = []
+
+    def stub(*args: object) -> tuple[int, bytes]:
+        invoked.append(args)
+        return 0, b""
+
+    assert library.scrape(config, stub) == 1
+    assert invoked == []
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == "refused"
+    assert "missing" in record["cause"]
+    assert config.pending_path.read_bytes() == before
+
+
+def test_percent_in_valid_credentials_allows_fetch(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    config.scraper_config.write_text('[screenscraper]\nuserCreds="person:pa%ss"\n')
+    seen: list[list[str]] = []
+
+    def stub(_config: library.Config, argv: list[str], _claim: int) -> tuple[int, bytes]:
+        seen.append(argv)
+        return 0, b"ok\n"
+
+    assert library.scrape(config, stub) == 0
+    assert seen == [library.fetch_vector(config, "nes", "nes")]
+    assert json.loads(config.record_path.read_text())["result"] == "complete"
+
+
 def test_fetch_outcomes_vectors_revision_and_modes(config: library.Config) -> None:
     for folder, name in (
         ("nes", "a.nes"),
@@ -180,6 +217,39 @@ def test_fetch_outcomes_vectors_revision_and_modes(config: library.Config) -> No
         assert stat.S_IMODE(path.stat().st_mode) == 0o644
     assert b"Fetching nes" in config.log_path.read_bytes()
     assert b"scraper output" in config.log_path.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_result", "expected_outcome", "expected_pending"),
+    [
+        (0, "complete", "fetched", ["nes", "psx"]),
+        (1, "failed", "fetch-failed", []),
+    ],
+)
+def test_all_mapped_fetches_have_exact_run_result(
+    config: library.Config,
+    status: int,
+    expected_result: str,
+    expected_outcome: str,
+    expected_pending: list[str],
+) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    seen: list[list[str]] = []
+
+    def stub(_config: library.Config, argv: list[str], _claim: int) -> tuple[int, bytes]:
+        seen.append(argv)
+        return status, b"done\n"
+
+    assert library.scrape(config, stub) == (0 if status == 0 else 1)
+    assert seen == [
+        library.fetch_vector(config, "nes", "nes"),
+        library.fetch_vector(config, "psx", "psx"),
+    ]
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == expected_result
+    assert record["folders"] == {"nes": expected_outcome, "psx": expected_outcome}
+    assert library.read_pending(config) == expected_pending
 
 
 def test_no_mapped_folder_is_complete_and_held_lock_preserves_records(
@@ -262,6 +332,37 @@ def test_generation_creates_missing_parent_and_keeps_appended_pending(
     assert library.read_pending(config) == ["psx"]
 
 
+@pytest.mark.parametrize("status", [0, 1])
+def test_stale_work_never_becomes_previous_gamelist_without_live_file(
+    config: library.Config, status: int
+) -> None:
+    library.write_pending(config, ["nes"])
+    parent = config.gamelist_root / "nes"
+    stale = parent / ".emubox-library-work-old"
+    stale.mkdir(parents=True)
+    (stale / "gamelist.xml").write_text("TRUNCATED")
+    seen: list[bool] = []
+
+    def stub(
+        _config: library.Config, argv: list[str], _claim: int, _limit: float
+    ) -> tuple[int, bytes]:
+        work = Path(argv[argv.index("-g") + 1])
+        seen.append((work / "gamelist.xml").exists())
+        (work / "gamelist.xml").write_text("NEW" if status == 0 else "BROKEN")
+        return status, b""
+
+    assert library.generate(config, stub) == 0
+    assert seen == [False]
+    assert not stale.exists()
+    assert not list(parent.glob(".emubox-library-work-*"))
+    live = parent / "gamelist.xml"
+    assert (live.read_text() if live.exists() else None) == ("NEW" if status == 0 else None)
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == (
+        "generated" if status == 0 else "generation-failed"
+    )
+    assert library.read_pending(config) == []
+
+
 def test_revision_cleanup_preserves_new_fetch_and_missing_identity(config: library.Config) -> None:
     library.write_pending(config, ["nes", "psx"])
     library.atomic_json(config.revision_path, {"nes": "old", "psx": "old"})
@@ -306,6 +407,52 @@ def test_capture_preserves_pending_with_missing_revision(config: library.Config)
     assert library.read_pending(config) == ["nes"]
 
 
+def test_cleanup_preserves_new_different_folder_after_batch_capture(config: library.Config) -> None:
+    library.write_pending(config, ["nes"])
+    library.atomic_json(config.revision_path, {"nes": "old"})
+    assert library.capture(config) == (0, {"nes": "old"})
+    library.atomic_json(config.revision_path, {"nes": "old", "psx": "new"})
+    library.write_pending(config, ["nes", "psx"])
+    assert library.cleanup(config, {"nes": "old"}) == 0
+    assert library.read_pending(config) == ["psx"]
+    assert json.loads(config.record_path.read_text())["folders"] == {"nes": "generation-failed"}
+
+
+def test_killed_cleanup_keeps_uncommitted_pending_entry(config: library.Config) -> None:
+    library.write_pending(config, ["nes"])
+    library.atomic_json(config.revision_path, {"nes": "r1"})
+    settings = cli_config(config, config.cache_root.parent / "config.json")
+    marker = config.cache_root / "recorded-before-rewrite"
+    code = (
+        "import library, pathlib, sys, time\n"
+        "config=library.Config.read(pathlib.Path(sys.argv[1]))\n"
+        "def pause(config, folders):\n"
+        " record=library.read_json(config.record_path, {})\n"
+        " assert record['folders']['nes'] == 'generation-failed'\n"
+        " (config.cache_root/'recorded-before-rewrite').touch()\n"
+        " time.sleep(30)\n"
+        "library.write_pending=pause\n"
+        "library.cleanup(config, {'nes':'r1'})\n"
+    )
+    environment = dict(os.environ, PYTHONPATH=str(Path(__file__).parent))
+    process = subprocess.Popen(
+        [sys.executable, "-c", code, str(settings)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=environment,
+    )
+    try:
+        wait_for(marker)
+        process.kill()
+        process.wait(timeout=3)
+        assert library.read_pending(config) == ["nes"]
+        assert json.loads(config.record_path.read_text())["folders"]["nes"] == ("generation-failed")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
 def test_overall_generation_limit_records_all_unreached_without_invoking_scraper(
     config: library.Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -317,6 +464,33 @@ def test_overall_generation_limit_records_all_unreached_without_invoking_scraper
         "nes": "generation-failed",
         "psx": "generation-failed",
     }
+
+
+def test_per_folder_deadline_kills_hung_scraper_without_publishing_work(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library.write_pending(config, ["nes"])
+    parent = config.gamelist_root / "nes"
+    parent.mkdir(parents=True)
+    live = parent / "gamelist.xml"
+    live.write_text("OLD")
+    scraper = config.cache_root.parent / "hung-scraper"
+    scraper.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys, time\n"
+        "work=pathlib.Path(sys.argv[sys.argv.index('-g')+1])\n"
+        "(work/'gamelist.xml').write_text('PARTIAL')\n"
+        "time.sleep(30)\n"
+    )
+    scraper.chmod(0o755)
+    monkeypatch.setattr(library, "PER_FOLDER_SECONDS", 0.2)
+    start = time.monotonic()
+    assert library.generate(replace(config, skyscraper=str(scraper))) == 0
+    assert time.monotonic() - start < 3
+    assert live.read_text() == "OLD"
+    assert not list(parent.glob(".emubox-library-work-*"))
+    assert json.loads(config.record_path.read_text())["folders"] == {"nes": "generation-failed"}
+    assert library.read_pending(config) == []
 
 
 def test_unreadable_pending_does_not_generate_or_claim_skip(
@@ -374,6 +548,61 @@ def test_report_without_records(config: library.Config) -> None:
     assert status == 0
     assert "No scrape has run" in output
     assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
+
+
+@pytest.mark.parametrize(
+    ("result", "outcome", "description", "expected"),
+    [
+        (
+            "failed",
+            "fetch-failed",
+            False,
+            "nes: 1 ROMs, 0 gamelist entries, 1 unscraped\n"
+            "Last run: failed at fixed\nFailed folders: nes\nGeneration pending: none\n",
+        ),
+        (
+            "complete",
+            "generated",
+            True,
+            "nes: 1 ROMs, 1 gamelist entries, 0 unscraped\n"
+            "Last run: complete at fixed\nGeneration pending: none\n",
+        ),
+        (
+            "complete",
+            "generation-failed",
+            False,
+            "nes: 1 ROMs, 0 gamelist entries, 1 unscraped\n"
+            "Last run: complete at fixed\nFailed folders: nes\nGeneration pending: none\n",
+        ),
+    ],
+)
+def test_report_exact_record_outcomes(
+    config: library.Config, result: str, outcome: str, description: bool, expected: str
+) -> None:
+    game(config, "nes", "a.nes")
+    if description:
+        parent = config.gamelist_root / "nes"
+        parent.mkdir(parents=True)
+        (parent / "gamelist.xml").write_text(
+            "<gameList><game><path>./a.nes</path><desc>Art</desc></game></gameList>"
+        )
+    library.atomic_json(
+        config.record_path, {"result": result, "time": "fixed", "folders": {"nes": outcome}}
+    )
+    assert library.report(config, 2) == (0, expected)
+
+
+def test_report_unmapped_folder_without_failures(config: library.Config) -> None:
+    game(config, "genesis", "a.md")
+    library.atomic_json(
+        config.record_path,
+        {"result": "complete", "time": "fixed", "folders": {"genesis": "unmapped"}},
+    )
+    assert library.report(config, 2) == (
+        0,
+        "genesis: 1 ROMs, 0 gamelist entries, 1 unscraped (unmapped)\n"
+        "Last run: complete at fixed\nGeneration pending: none\n",
+    )
 
 
 def test_report_deadline_covers_discovery_and_keeps_records(config: library.Config) -> None:
@@ -672,6 +901,12 @@ def test_descendant_is_ended_after_scraper_leader_exits(config: library.Config) 
         wait_for(marker)
     finally:
         os.close(claim)
+    # Signal delivery to a surviving descendant and descriptor closure are
+    # asynchronous; the wrapper must still end that process promptly.
+    deadline = time.monotonic() + 2
     new_claim = library.lock(config)
+    while new_claim is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+        new_claim = library.lock(config)
     assert new_claim is not None
     os.close(new_claim)

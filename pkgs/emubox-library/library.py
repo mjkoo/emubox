@@ -284,14 +284,20 @@ def credentials_error(config: Config) -> str | None:
         return "missing ScreenScraper credentials"
     except OSError:
         return "unreadable ScreenScraper credentials"
-    parser = configparser.ConfigParser()
+    # Skyscraper's QSettings format stores userCreds inside literal quotes.
+    # Interpolation is not part of that format and would reject valid '%' passwords.
+    parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read_string(content)
-        value = parser["screenscraper"]["usercreds"]
+        value = parser["screenscraper"]["usercreds"].strip()
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        elif value.startswith('"') or value.endswith('"'):
+            return "missing ScreenScraper credentials"
         username, password = value.split(":", 1)
     except (KeyError, ValueError, configparser.Error):
         return "missing ScreenScraper credentials"
-    if not username or not password:
+    if not username.strip() or not password.strip():
         return "missing ScreenScraper credentials"
     if any(
         marker in part.lower()

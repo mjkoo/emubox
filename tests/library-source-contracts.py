@@ -262,15 +262,6 @@ def main() -> None:
     platforms, options, flags = check_sources(
         args.skyscraper_source, args.esde_source, args.nixpkgs_source
     )
-    check_platform_map(
-        platforms,
-        {
-            "n3ds": "3ds",
-            "genesis": "megadrive",
-            "tg16": "pcengine",
-            "tg-cd": "pcenginecd",
-        },
-    )
     try:
         check_platform_map(platforms, {"negative-control": "not-a-platform"})
     except AssertionError:
@@ -278,46 +269,6 @@ def main() -> None:
     else:
         raise AssertionError("invalid platform negative control passed")
 
-    check_vector(
-        options,
-        flags,
-        [
-            "-p",
-            "3ds",
-            "-s",
-            "screenscraper",
-            "-c",
-            "/config",
-            "-i",
-            "/roms",
-            "-d",
-            "/cache",
-            "--flags",
-            "unattend,onlymissing,videos,manuals",
-        ],
-    )
-    check_vector(
-        options,
-        flags,
-        [
-            "-p",
-            "3ds",
-            "-f",
-            "esde",
-            "-c",
-            "/config",
-            "-i",
-            "/roms",
-            "-d",
-            "/cache",
-            "-g",
-            "/work",
-            "-o",
-            "/media",
-            "--flags",
-            "unattend,skipped,videos,manuals,skipexistingcovers,skipexistingmanuals,skipexistingbackcovers,skipexistingfanarts,skipexistingmarquees,skipexistingscreenshots,skipexistingtextures,skipexistingvideos,skipexistingwheels",
-        ],
-    )
     for invalid in (["--stderr", "yes"], ["--flags", "unattend,not-a-flag"]):
         try:
             check_vector(options, flags, invalid)

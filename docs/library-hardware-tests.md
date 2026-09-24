@@ -2,13 +2,13 @@
 
 Status: pending. These checks require the target appliance, its display and
 physical keyboard or controller. A green CI run does not establish that they
-pass. CI covers source contracts, local scraper import and, as implementation
-lands, nonvisual library and session logic. It does not use OCR for the library.
+pass. CI covers source contracts, local scraper import and nonvisual library
+and session logic. It does not use OCR for the library.
 
 Record the date, tester, machine/GPU/display, deployed software commit, each
 observed result and relevant logs. Mark unavailable functionality as not run.
-The library feature is still being implemented, so the full workflow below
-cannot yet be exercised. Keep failures and unrun checks open until retested.
+The implementation is ready for hardware observation; keep failures and unrun
+checks open until retested.
 
 Use disposable test ROMs and back up the test system's gamelist before
 changing it. Restore the test configuration and fixtures afterwards. Run

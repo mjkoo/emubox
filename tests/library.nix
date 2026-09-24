@@ -74,6 +74,7 @@ let
     for arg in "$@"; do
       if [ "$arg" = screenscraper ]; then
         printf '%s\n' "$*" >> /run/emubox-library-test/fetches
+        printf '%s\n' "$HOME" >> /run/emubox-library-test/fetch-homes
         exit 0
       fi
     done
@@ -289,6 +290,9 @@ in
               timeout=180,
           )
 
+      def direct_generation_count():
+          return machine.succeed("cat /run/emubox-library-test/events").splitlines().count("library ")
+
       def requested_restart():
           machine.succeed("touch /run/emubox-library-test/emubox-frontend-restart")
           machine.succeed("pkill -TERM -x es-de")
@@ -396,6 +400,7 @@ in
           games = {game.findtext("path") or "": game for game in gamelist.findall("game")}
           fixture = next(game for path, game in games.items() if path.endswith("fixture.nes"))
           assert fixture.findtext("desc") == "Imported fixture description"
+          machine.succeed("test -n \"$(find /data/media/nes/covers -type f -name '*fixture*' -print -quit)\"")
           machine.succeed("test -n \"$(find /data/media/nes/marquees -type f -name '*fixture*' -print -quit)\"")
           machine.succeed("test ! -e /data/media/nes/textures")
           machine.succeed("test ! -e /data/media/nes/wheels")
@@ -472,6 +477,7 @@ in
           assert successful["result"] == "complete", successful
           assert successful["folders"]["nes"] == "fetched", successful
           assert "screenscraper" in machine.succeed("cat /run/emubox-library-test/fetches")
+          assert set(machine.succeed("cat /run/emubox-library-test/fetch-homes").splitlines()) == {"/data/home/player"}
           machine.succeed("test -f /data/home/player/.skyscraper/resources/boxfront.png")
 
       with subtest("Account, placeholder and held-claim refusals preserve the right state"):
@@ -538,11 +544,13 @@ in
           machine.succeed("chown player:player /data/cache/skyscraper/{pending,revisions.json}")
           machine.succeed("printf 'fail\\n' > /run/emubox-library-test/window-mode")
           generation_count = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
+          direct_count = direct_generation_count()
           requested_restart()
           wait_frontend_count(4)
           assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == previous
           assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
           assert machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip() == generation_count
+          assert direct_generation_count() == direct_count
           failed = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert failed["folders"]["nes"] == "generation-failed", failed
           assert "progress window" in machine.succeed("journalctl -t emubox-library --no-pager").lower()
@@ -555,11 +563,13 @@ in
           machine.succeed("chown player:player /data/cache/skyscraper/{pending,revisions.json}")
           machine.succeed("printf 'hang\\n' > /run/emubox-library-test/window-mode")
           generation_count = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
+          direct_count = direct_generation_count()
           requested_restart()
           wait_frontend_count(5)
           assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == previous
           assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
           assert machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip() == generation_count
+          assert direct_generation_count() == direct_count
           machine.succeed("! kill -0 $(cat /run/emubox-library-test/window-pid) 2>/dev/null")
           failed = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert failed["folders"]["nes"] == "generation-failed", failed

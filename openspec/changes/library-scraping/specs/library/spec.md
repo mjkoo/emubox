@@ -104,7 +104,7 @@ and SHALL leave the pending set unchanged.
 
 #### Scenario: Placeholder credentials
 - **WHEN** `emubox-scrape` runs as the session account with the committed placeholder credentials
-- **THEN** it exits non-zero naming the placeholder as the cause, the last-run record shows `refused`, and the pending set is unchanged
+- **THEN** it exits non-zero naming the placeholder as the cause, the last-run record shows `refused` and keeps the previous record's folder outcomes, and the pending set is unchanged
 
 ### Requirement: One run at a time
 While a run is in progress, a second `emubox-scrape` SHALL get the result

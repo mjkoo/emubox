@@ -116,7 +116,7 @@ same meanings.
 | run result `complete` | Every mapped folder was `fetched`, including the case where there are none. |
 | run result `partial` | At least one `fetched` and at least one `fetch-failed`. |
 | run result `failed` | Folders were attempted and none was `fetched`. |
-| run result `refused` | Nothing was attempted: wrong account, credentials unusable, or another run holds the lock. |
+| run result `refused` | Nothing was attempted: wrong account, credentials unusable, or another run holds the lock. A credential refusal replaces the last-run record but carries the previous record's folder outcomes forward, since nothing was attempted that could change them; status therefore keeps naming earlier failures. |
 | unscraped | A ROM file, as defined above, whose entry in its folder's gamelist carries no description, or that has no entry at all: a game the household can see in the frontend that lacks a description. |
 
 An empty folder, one with no ROM file directly in it, has no outcome: it is
@@ -326,7 +326,11 @@ pending folders are generated at a later start after the fetch has ended.
 Manual hardware acceptance must establish that exit 75 survives the real
 `timeout`, cage and foot chain. Implementation may continue before that check,
 but this remains an unverified dependency. A failed hardware check requires
-revising the result channel before hardware acceptance.
+revising the result channel before hardware acceptance. A lost 75 does no
+damage in the meantime: the step then runs failure cleanup, which takes the
+claim without waiting, finds it still held by the fetch, and leaves pending
+state alone. Only a fetch that ends in the moment between the window closing
+and cleanup starting would let cleanup fail folders the skip left pending.
 
 The pending set is the file `/data/cache/skyscraper/pending`, one folder per
 line. When generation holds the lock, a folder leaves the set only after its
@@ -347,7 +351,9 @@ reach and removes those folders from the pending set too, so a pass that ran
 at all leaves the set holding only folders a fetch appended meanwhile.
 
 After the windowed step, the session never retries generation without a
-window. Exit 75 leaves the pending set untouched even if the fetch has
+window. The session journals the window's exit status whenever it is
+non-zero, so a window that failed to start is told apart from one that hit
+its deadline. Exit 75 leaves the pending set untouched even if the fetch has
 since ended. Otherwise, if the window failed, hung or was interrupted and
 left work pending, a record-only cleanup mode of `emubox-library-generate`
 records `generation-failed` for the remaining work from that attempt and
@@ -362,7 +368,9 @@ fetch even for the same folder. Pending membership remains a file of folder
 names; revision identities live in `/data/cache/skyscraper/revisions.json`,
 a file of their own beside the lock, changed under the same lock. Each successful fetch stores a fresh revision before
 publishing its pending entry. A missing or inconsistent revision is treated
-conservatively as newer work and is not removed by failure cleanup; revision
+conservatively as newer work and is not removed by failure cleanup;
+capture still reports such a folder, with a null identity, so a pending
+folder always opens the progress window and generation still works it; revision
 state survives replacement of the last-run summary. If the claim cannot be taken, cleanup leaves state alone and
 logs that cleanup was deferred. The session externally bounds record-only
 cleanup to five seconds, ends its process group on expiry, and launches the

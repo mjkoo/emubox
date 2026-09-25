@@ -1,13 +1,13 @@
 {
   "fetch": [
     "-p", "{platform}", "-s", "screenscraper", "-c", "{config}",
-    "-i", "{rom_dir}", "-d", "{cache_dir}",
+    "-i", "{rom_dir}", "-d", "{cache_dir}", "--addext", "{extensions}",
     "--flags", "unattend,onlymissing,videos,manuals"
   ],
   "generate": [
     "-p", "{platform}", "-f", "esde", "-c", "{config}",
     "-i", "{rom_dir}", "-d", "{cache_dir}", "-g", "{work_dir}",
-    "-o", "{media_dir}",
+    "-o", "{media_dir}", "--addext", "{extensions}",
     "--flags", "unattend,skipped,videos,manuals,skipexistingcovers,skipexistingmanuals,skipexistingbackcovers,skipexistingfanarts,skipexistingmarquees,skipexistingscreenshots,skipexistingtextures,skipexistingvideos,skipexistingwheels"
   ]
 }

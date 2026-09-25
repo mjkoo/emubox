@@ -309,6 +309,11 @@ and unscraped counts, unmapped systems, the last fetch result, failures and
 pending generation. A game with a gamelist entry but no description still
 counts as unscraped. An incomplete scan reports unavailable counts explicitly.
 
+`complete` means the scraper processes exited successfully. Skyscraper can
+also exit successfully after a service or quota interruption, so this does
+not guarantee that every game received metadata. Check the unscraped counts
+and scrape output; a later manual fetch retries games absent from the cache.
+
 After deployment, test a small folder of a few ROMs with real credentials:
 run `sudo -u player emubox-scrape`, inspect `emubox-status`, restart the frontend
 and confirm descriptions and art. Then exercise Tools with physical input.

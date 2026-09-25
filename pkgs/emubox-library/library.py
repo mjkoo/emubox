@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import configparser
 import contextlib
+import copy
 import fcntl
 import functools
 import json
@@ -32,6 +33,22 @@ CONFIG_PATH = Path("/etc/emubox/library.json")
 VECTORS_PATH = Path(__file__).with_name("vectors.json")
 IONICE = "@IONICE@"
 PLACEHOLDER_MARKER = "REPLACE-BEFORE-INSTALL"
+FAMILY_FIELDS = (
+    "favorite",
+    "hidden",
+    "kidgame",
+    "lastplayed",
+    "playcount",
+    "sortname",
+    "altemulator",
+    "completed",
+    "broken",
+    "controller",
+    "collectionsortname",
+    "hidemetadata",
+    "nogamecount",
+    "nomultiscrape",
+)
 
 
 @dataclass(frozen=True)
@@ -201,6 +218,7 @@ def fetch_vector(config: Config, folder: str, platform: str) -> list[str]:
         config=str(config.scraper_config),
         rom_dir=str(config.rom_root / folder),
         cache_dir=str(config.cache_root / folder),
+        extensions=" ".join(sorted(system_extensions(config).get(folder, set()))),
     )
 
 
@@ -213,6 +231,7 @@ def generate_vector(config: Config, folder: str, platform: str, work: Path) -> l
         cache_dir=str(config.cache_root / folder),
         work_dir=str(work),
         media_dir=str(config.media_root / folder),
+        extensions=" ".join(sorted(system_extensions(config).get(folder, set()))),
     )
 
 
@@ -451,6 +470,70 @@ def _publish_gamelist(work: Path, live: Path) -> None:
         os.close(directory)
 
 
+def _read_gamelist(path: Path) -> ET.Element:
+    root = ET.parse(path).getroot()
+    if root.tag != "gameList":
+        raise ValueError("Expected a gameList root")
+    return root
+
+
+def _file_signature(path: Path) -> tuple[int, int, int] | None:
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    return info.st_ino, info.st_mtime_ns, info.st_ctime_ns
+
+
+def _reconcile_gamelist(
+    config: Config, folder: str, previous: ET.Element, candidate: ET.Element
+) -> None:
+    """Keep existing games and family metadata the scraper did not emit."""
+    directory = (config.rom_root / folder).resolve()
+    extensions = system_extensions(config).get(folder, set())
+
+    def identity(entry: ET.Element) -> Path | None:
+        value = entry.findtext("path")
+        if not value:
+            return None
+        path = (directory / value).resolve()
+        if not path.is_relative_to(directory):
+            return None
+        if path.suffix.casefold() not in extensions or not path.is_file():
+            return None
+        return path.relative_to(directory)
+
+    entries: dict[Path, ET.Element] = {}
+    for entry in candidate.findall("game"):
+        key = identity(entry)
+        if key is not None:
+            if key in entries:
+                raise ValueError("Duplicate game path in generated gamelist")
+            entries[key] = entry
+    for old in previous.findall("game"):
+        key = identity(old)
+        if key is None:
+            continue
+        current = entries.get(key)
+        if current is None:
+            current = copy.deepcopy(old)
+            candidate.append(current)
+            entries[key] = current
+        else:
+            for field in FAMILY_FIELDS:
+                saved = old.find(field)
+                if saved is not None:
+                    for generated in current.findall(field):
+                        current.remove(generated)
+                    current.append(copy.deepcopy(saved))
+    if directory.exists():
+        for rom in rom_files(directory, extensions):
+            if rom.resolve().relative_to(directory) not in entries:
+                entry = ET.SubElement(candidate, "game")
+                ET.SubElement(entry, "path").text = f"./{rom.name}"
+                ET.SubElement(entry, "name").text = rom.stem
+
+
 def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscraper) -> int:
     if not correct_account(config):
         return 1
@@ -475,8 +558,12 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
                     parent.mkdir(parents=True, exist_ok=True)
                     _discard_work(parent)
                     work = Path(tempfile.mkdtemp(prefix=".emubox-library-work-", dir=parent))
+                    source = work / "gamelist.xml"
+                    previous = ET.Element("gameList")
                     if live.exists():
-                        shutil.copy2(live, work / "gamelist.xml")
+                        shutil.copy2(live, source)
+                        previous = _read_gamelist(source)
+                    before = _file_signature(source)
                     limit = min(end, time.monotonic() + PER_FOLDER_SECONDS)
                     status, _ = invoke(
                         config,
@@ -487,13 +574,19 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
                     if (
                         status == 0
                         and time.monotonic() < limit
-                        and (work / "gamelist.xml").is_file()
+                        and source.is_file()
+                        and _file_signature(source) != before
                     ):
+                        candidate = _read_gamelist(source)
+                        _reconcile_gamelist(config, folder, previous, candidate)
+                        ET.ElementTree(candidate).write(source, encoding="utf-8")
+                        if time.monotonic() >= limit:
+                            raise ValueError("Generation deadline expired before publication")
                         _publish_gamelist(work, live)
                         outcome = "generated"
                     else:
                         outcome = "generation-failed"
-                except OSError:
+                except (OSError, ValueError, ET.ParseError):
                     outcome = "generation-failed"
                 finally:
                     if work is not None:

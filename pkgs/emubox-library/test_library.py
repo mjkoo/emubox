@@ -416,13 +416,232 @@ def test_generation_uses_fresh_work_and_renames_only_success(config: library.Con
     ) -> tuple[int, bytes]:
         work = Path(argv[argv.index("-g") + 1])
         assert (work / "gamelist.xml").read_bytes() == old
-        (work / "gamelist.xml").write_text("NEW")
+        (work / "gamelist.xml").write_text(
+            "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
+        )
         return 0, b""
 
     assert library.generate(config, success) == 0
-    assert live.read_text() == "NEW"
+    assert (
+        live.read_text() == "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
+    )
     assert library.read_pending(config) == []
     assert not list(parent.glob(".emubox-library-work-*"))
+
+
+def test_vectors_include_frontend_extensions(config: library.Config) -> None:
+    for argv in (
+        library.fetch_vector(config, "psx", "psx"),
+        library.generate_vector(config, "psx", "psx", config.cache_root / "work"),
+    ):
+        assert argv[argv.index("--addext") + 1] == ".cue"
+    argv = library.fetch_vector(config, "nes", "nes")
+    assert argv[argv.index("--addext") + 1] == ".nes"
+
+
+@pytest.mark.parametrize("output", [None, "", "<gameList><game>", "<wrong />", "missing"])
+def test_unsuccessful_output_never_replaces_live_gamelist(
+    config: library.Config, output: str | None
+) -> None:
+    game(config, "nes", "a.nes")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    old = b"<gameList><game><path>./a.nes</path><favorite>true</favorite></game></gameList>"
+    live.write_bytes(old)
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        source = Path(argv[argv.index("-g") + 1]) / "gamelist.xml"
+        if output == "missing":
+            source.unlink()
+        elif output is not None:
+            source.write_text(output)
+        return 0, b""
+
+    assert library.generate(config, invoke) == 0
+    assert live.read_bytes() == old
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
+    assert library.read_pending(config) == []
+    assert not list(live.parent.glob(".emubox-library-work-*"))
+
+
+def test_identical_rewrite_is_successful(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    old = b"<gameList><game><path>./a.nes</path><name>A</name></game></gameList>"
+    live.write_bytes(old)
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_bytes(old)
+        return 0, b""
+
+    assert library.generate(config, invoke) == 0
+    assert live.read_bytes() == old
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generated"
+
+
+@pytest.mark.parametrize("old", ["<gameList><game>", "<wrong />"])
+def test_invalid_previous_gamelist_prevents_generation(config: library.Config, old: str) -> None:
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    live.write_text(old)
+    library.write_pending(config, ["nes"])
+    assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
+    assert live.read_text() == old
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
+
+
+def test_reconciliation_preserves_distinct_paths_and_omitted_games(config: library.Config) -> None:
+    for name in ("same.nes", "nested/same.nes", "omitted.nes", "new.nes"):
+        path = config.rom_root / "nes" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("ROM")
+    outside = config.rom_root / "outside.nes"
+    outside.write_text("ROM")
+    game(config, "nes", "sidecar.txt")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    previous = ET.Element("gameList")
+    for name, count in (
+        ("same.nes", "1"),
+        ("nested/same.nes", "2"),
+        ("omitted.nes", "3"),
+        ("deleted.nes", "4"),
+        ("../outside.nes", "5"),
+        ("sidecar.txt", "6"),
+    ):
+        entry = ET.SubElement(previous, "game")
+        ET.SubElement(entry, "path").text = f"./{name}"
+        ET.SubElement(entry, "playcount").text = count
+        ET.SubElement(entry, "favorite").text = "true"
+        ET.SubElement(entry, "altemulator").text = f"emulator-{count}"
+        ET.SubElement(entry, "custom", {"keep": "yes"}).text = count
+    ET.ElementTree(previous).write(live)
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        candidate = ET.Element("gameList")
+        for path in (str(config.rom_root / "nes" / "same.nes"), "./nested/../nested/same.nes"):
+            entry = ET.SubElement(candidate, "game")
+            ET.SubElement(entry, "path").text = path
+            ET.SubElement(entry, "playcount").text = "0"
+            ET.SubElement(entry, "desc").text = "New description"
+        ET.ElementTree(candidate).write(Path(argv[argv.index("-g") + 1]) / "gamelist.xml")
+        return 0, b""
+
+    assert library.generate(config, invoke) == 0
+    games = {
+        (config.rom_root / "nes" / entry.findtext("path", ""))
+        .resolve()
+        .relative_to(config.rom_root / "nes")
+        .as_posix(): entry
+        for entry in ET.parse(live).getroot().findall("game")
+    }
+    assert set(games) == {"same.nes", "nested/same.nes", "omitted.nes", "new.nes"}
+    for name, count in (("same.nes", "1"), ("nested/same.nes", "2"), ("omitted.nes", "3")):
+        assert games[name].findtext("playcount") == count
+        assert games[name].findtext("favorite") == "true"
+        assert games[name].findtext("altemulator") == f"emulator-{count}"
+    assert games["same.nes"].findtext("desc") == "New description"
+    assert ET.tostring(games["omitted.nes"]) == ET.tostring(previous.findall("game")[2])
+    assert games["new.nes"].findtext("name") == "new"
+    assert games["new.nes"].find("desc") is None
+
+
+def test_publication_failure_keeps_live_file(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    live.write_bytes(b"<gameList />")
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text("<gameList />")
+        return 0, b""
+
+    def fail(_work: Path, _live: Path) -> None:
+        raise OSError("No space left")
+
+    monkeypatch.setattr(library, "_publish_gamelist", fail)
+    assert library.generate(config, invoke) == 0
+    assert live.read_bytes() == b"<gameList />"
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
+
+
+def test_zero_exit_with_service_diagnostic_retains_upstream_semantics(
+    config: library.Config,
+) -> None:
+    game(config, "nes", "a.nes")
+    assert (
+        library.scrape(
+            config, lambda *args: (0, b"Your daily ScreenScraper request limit has been reached\n")
+        )
+        == 0
+    )
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == "complete"
+    assert record["folders"] == {"nes": "fetched"}
+    assert library.read_pending(config) == ["nes"]
+
+
+def test_reconciliation_expiry_does_not_publish(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    live.write_bytes(b"<gameList />")
+    library.write_pending(config, ["nes"])
+    now = [0.0]
+    monkeypatch.setattr(library.time, "monotonic", lambda: now[0])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text("<gameList />")
+        return 0, b""
+
+    def expire(*args: object) -> None:
+        now[0] = library.PER_FOLDER_SECONDS + 1
+
+    monkeypatch.setattr(library, "_reconcile_gamelist", expire)
+    assert library.generate(config, invoke) == 0
+    assert live.read_bytes() == b"<gameList />"
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
+
+
+def test_reconciliation_keeps_all_family_fields(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    fields = {
+        "favorite": "true",
+        "hidden": "true",
+        "kidgame": "false",
+        "lastplayed": "20260925T120000",
+        "playcount": "12",
+        "sortname": "Sorted",
+        "altemulator": "Custom",
+        "completed": "true",
+        "broken": "false",
+        "controller": "gamepad",
+        "collectionsortname": "Collected",
+        "hidemetadata": "true",
+        "nogamecount": "true",
+        "nomultiscrape": "true",
+    }
+    previous = ET.fromstring("<gameList><game><path>./a.nes</path></game></gameList>")
+    old = previous.find("game")
+    assert old is not None
+    for name, value in fields.items():
+        ET.SubElement(old, name).text = value
+    candidate = ET.fromstring(
+        "<gameList><game><path>./a.nes</path><desc>New metadata</desc>"
+        "<favorite>false</favorite></game></gameList>"
+    )
+    library._reconcile_gamelist(config, "nes", previous, candidate)
+    for name, value in fields.items():
+        assert candidate.findtext(f"game/{name}") == value
+    assert len(candidate.findall("game/favorite")) == 1
+    assert candidate.findtext("game/desc") == "New metadata"
 
 
 def test_generation_creates_missing_parent_and_keeps_appended_pending(
@@ -436,12 +655,16 @@ def test_generation_creates_missing_parent_and_keeps_appended_pending(
         work = Path(argv[argv.index("-g") + 1])
         assert work.parent == config.gamelist_root / "nes"
         assert not (work / "gamelist.xml").exists()
-        (work / "gamelist.xml").write_text("NEW")
+        (work / "gamelist.xml").write_text(
+            "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
+        )
         library.write_pending(config, ["nes", "psx"])
         return 0, b""
 
     assert library.generate(config, invoke) == 0
-    assert (config.gamelist_root / "nes" / "gamelist.xml").read_text() == "NEW"
+    assert (
+        config.gamelist_root / "nes" / "gamelist.xml"
+    ).read_text() == "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
     assert library.read_pending(config) == ["psx"]
 
 
@@ -461,7 +684,11 @@ def test_stale_work_never_becomes_previous_gamelist_without_live_file(
     ) -> tuple[int, bytes]:
         work = Path(argv[argv.index("-g") + 1])
         seen.append((work / "gamelist.xml").exists())
-        (work / "gamelist.xml").write_text("NEW" if status == 0 else "BROKEN")
+        (work / "gamelist.xml").write_text(
+            "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
+            if status == 0
+            else "BROKEN"
+        )
         return status, b""
 
     assert library.generate(config, stub) == 0
@@ -469,7 +696,11 @@ def test_stale_work_never_becomes_previous_gamelist_without_live_file(
     assert not stale.exists()
     assert not list(parent.glob(".emubox-library-work-*"))
     live = parent / "gamelist.xml"
-    assert (live.read_text() if live.exists() else None) == ("NEW" if status == 0 else None)
+    assert (live.read_text() if live.exists() else None) == (
+        "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
+        if status == 0
+        else None
+    )
     assert json.loads(config.record_path.read_text())["folders"]["nes"] == (
         "generated" if status == 0 else "generation-failed"
     )
@@ -617,7 +848,7 @@ def test_per_folder_deadline_kills_hung_scraper_without_publishing_work(
     parent = config.gamelist_root / "nes"
     parent.mkdir(parents=True)
     live = parent / "gamelist.xml"
-    live.write_text("OLD")
+    live.write_text("<gameList><game><path>./a.nes</path><name>OLD</name></game></gameList>")
     scraper = config.cache_root.parent / "hung-scraper"
     scraper.write_text(
         f"#!{sys.executable}\n"
@@ -631,7 +862,9 @@ def test_per_folder_deadline_kills_hung_scraper_without_publishing_work(
     start = time.monotonic()
     assert library.generate(replace(config, skyscraper=str(scraper))) == 0
     assert time.monotonic() - start < 10
-    assert live.read_text() == "OLD"
+    assert (
+        live.read_text() == "<gameList><game><path>./a.nes</path><name>OLD</name></game></gameList>"
+    )
     assert not list(parent.glob(".emubox-library-work-*"))
     assert json.loads(config.record_path.read_text())["folders"] == {"nes": "generation-failed"}
     assert library.read_pending(config) == []
@@ -907,7 +1140,7 @@ def test_killed_generation_keeps_live_gamelist_and_pending(config: library.Confi
     parent = config.gamelist_root / "nes"
     parent.mkdir(parents=True)
     live = parent / "gamelist.xml"
-    live.write_text("OLD")
+    live.write_text("<gameList><game><path>./a.nes</path><name>OLD</name></game></gameList>")
     ready = config.cache_root / "writing"
     pid_file = config.cache_root / "writer-pid"
     release = config.cache_root / "release"
@@ -923,7 +1156,7 @@ def test_killed_generation_keeps_live_gamelist_and_pending(config: library.Confi
         " (work/'gamelist.xml').write_text('PARTIAL')\n"
         " (root/'writing').touch()\n"
         " while True: time.sleep(1)\n"
-        "(work/'gamelist.xml').write_text('NEW')\n"
+        "(work/'gamelist.xml').write_text('<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>')\n"
     )
     scraper.chmod(0o755)
     settings = cli_config(
@@ -940,7 +1173,10 @@ def test_killed_generation_keeps_live_gamelist_and_pending(config: library.Confi
         wait_for(ready)
         os.kill(first.pid, signal.SIGKILL)
         first.wait(timeout=3)
-        assert live.read_text() == "OLD"
+        assert (
+            live.read_text()
+            == "<gameList><game><path>./a.nes</path><name>OLD</name></game></gameList>"
+        )
         assert library.read_pending(config) == ["nes"]
     finally:
         if pid_file.exists():
@@ -951,7 +1187,9 @@ def test_killed_generation_keeps_live_gamelist_and_pending(config: library.Confi
     release.touch()
     second = subprocess.run(command, capture_output=True, text=True, timeout=5)
     assert second.returncode == 0, second.stderr
-    assert live.read_text() == "NEW"
+    assert (
+        live.read_text() == "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
+    )
     assert library.read_pending(config) == []
     assert not list(parent.glob(".emubox-library-work-*"))
 
@@ -1013,7 +1251,7 @@ def test_signal_stops_generation_and_leaves_work_pending(
     parent = config.gamelist_root / "nes"
     parent.mkdir(parents=True)
     live = parent / "gamelist.xml"
-    live.write_text("OLD")
+    live.write_text("<gameList><game><path>./a.nes</path><name>OLD</name></game></gameList>")
     ready = config.cache_root / "writing"
     pid_file = config.cache_root / "writer-pid"
     invoked = config.cache_root / "invoked"
@@ -1059,7 +1297,9 @@ def test_signal_stops_generation_and_leaves_work_pending(
             with contextlib.suppress(ProcessLookupError):
                 os.kill(child_pid, signal.SIGKILL)
     assert invoked.read_text() == "nes\n"
-    assert live.read_text() == "OLD"
+    assert (
+        live.read_text() == "<gameList><game><path>./a.nes</path><name>OLD</name></game></gameList>"
+    )
     assert not list(parent.glob(".emubox-library-work-*"))
     assert library.read_pending(config) == ["nes", "psx"]
     assert not config.record_path.exists()
@@ -1071,14 +1311,14 @@ def test_published_gamelist_survives_kill_before_pending_rewrite(config: library
     parent = config.gamelist_root / "nes"
     parent.mkdir(parents=True)
     live = parent / "gamelist.xml"
-    live.write_text("OLD")
+    live.write_text("<gameList><game><path>./a.nes</path><name>OLD</name></game></gameList>")
     marker = config.cache_root / "renamed"
     scraper = config.cache_root.parent / "writer"
     scraper.write_text(
         f"#!{sys.executable}\n"
         "import pathlib, sys\n"
         "work=pathlib.Path(sys.argv[sys.argv.index('-g')+1])\n"
-        "(work/'gamelist.xml').write_text('NEW')\n"
+        "(work/'gamelist.xml').write_text('<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>')\n"
     )
     scraper.chmod(0o755)
     settings = cli_config(
@@ -1089,7 +1329,8 @@ def test_published_gamelist_survives_kill_before_pending_rewrite(config: library
         "config=library.Config.read(pathlib.Path(sys.argv[1]))\n"
         "original=library.write_pending\n"
         "def pause(config, folders):\n"
-        " assert (config.gamelist_root/'nes'/'gamelist.xml').read_text() == 'NEW'\n"
+        " live = config.gamelist_root/'nes'/'gamelist.xml'\n"
+        " assert library.ET.parse(live).findtext('game/name') == 'NEW'\n"
         " (config.cache_root/'renamed').touch()\n"
         " time.sleep(30)\n"
         " original(config, folders)\n"
@@ -1107,7 +1348,10 @@ def test_published_gamelist_survives_kill_before_pending_rewrite(config: library
         wait_for(marker)
         wrapper.kill()
         wrapper.wait(timeout=3)
-        assert live.read_text() == "NEW"
+        assert (
+            live.read_text()
+            == "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
+        )
         assert library.read_pending(config) == ["nes"]
     finally:
         if wrapper.poll() is None:
@@ -1180,7 +1424,9 @@ def test_generation_drains_pending_past_a_malformed_run_record(
     def success(
         _config: library.Config, argv: list[str], _claim: int, _limit: float
     ) -> tuple[int, bytes]:
-        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text("NEW")
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text(
+            "<gameList><game><path>./a.nes</path><name>NEW</name></game></gameList>"
+        )
         return 0, b""
 
     assert library.generate(config, success) == 0

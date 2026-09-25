@@ -854,5 +854,52 @@ in
           wait_frontend_count(25)
           journal = machine.succeed("journalctl -u emubox-library-test-session --no-pager")
           assert "crash 2 of 3" in journal, journal
+
+      with subtest("Real generation keeps frontend-only formats and distinct nested paths"):
+          machine.succeed("systemctl stop emubox-library-test-session")
+          base = "/data/cache/library-preservation"
+          machine.succeed(f"install -d -o player -g player {base}/roms/n3ds {base}/import/textual {base}/gamelists/n3ds")
+          files = {
+              "roms/n3ds/cached.3ds": "cached fixture ROM",
+              "import/definitions.dat": "Description: ###DESCRIPTION###\n",
+              "import/textual/cached.txt": "Description: Imported preservation description\n",
+              "import.ini": f"[main]\nimportFolder={base}/import\n",
+          }
+          for name, content in files.items():
+              machine.succeed("printf %s " + shlex.quote(content) + " > " + shlex.quote(base + "/" + name))
+          machine.succeed(f"chown -R player:player {base}")
+          machine.succeed(player(
+              "${pkgs.skyscraper}/bin/Skyscraper -p 3ds -s import "
+              f"-c {base}/import.ini -i {base}/roms/n3ds -d {base}/cache/n3ds --flags unattend"
+          ))
+          machine.succeed(f"install -d -o player -g player {base}/roms/n3ds/nested")
+          for name in ("uncached.cxi", "nested/cached.3ds"):
+              machine.succeed("printf %s " + shlex.quote("different ROM " + name) + " > " + shlex.quote(base + "/roms/n3ds/" + name))
+          old = ET.Element("gameList")
+          for name, count in (("cached.3ds", "7"), ("uncached.cxi", "8"), ("nested/cached.3ds", "9"), ("deleted.cxi", "10")):
+              game = ET.SubElement(old, "game")
+              for tag, value in {"path": "./" + name, "favorite": "true", "playcount": count, "altemulator": "custom-" + count}.items():
+                  ET.SubElement(game, tag).text = value
+          machine.succeed("printf %s " + shlex.quote(ET.tostring(old, encoding="unicode")) + f" > {base}/gamelists/n3ds/gamelist.xml")
+          settings = json.loads(machine.succeed("cat /etc/emubox/library.json"))
+          settings.update(rom_root=base + "/roms", cache_root=base + "/cache",
+                          gamelist_root=base + "/gamelists", media_root=base + "/media",
+                          skyscraper="${pkgs.skyscraper}/bin/Skyscraper")
+          machine.succeed("printf %s " + shlex.quote(json.dumps(settings)) + f" > {base}/library.json")
+          machine.succeed(f"printf 'n3ds\\n' > {base}/cache/pending")
+          machine.succeed(f"chown -R player:player {base}")
+          machine.succeed(player("${pkgs.emubox-library}/bin/emubox-library-generate " + f"--config {base}/library.json"))
+          root = ET.fromstring(machine.succeed(f"cat {base}/gamelists/n3ds/gamelist.xml"))
+          entries = {entry.findtext("path").removeprefix("./"): entry for entry in root.findall("game")}
+          assert set(entries) == {"cached.3ds", "uncached.cxi", "nested/cached.3ds"}, entries
+          for name, count in (("cached.3ds", "7"), ("uncached.cxi", "8"), ("nested/cached.3ds", "9")):
+              assert entries[name].findtext("favorite") == "true"
+              assert entries[name].findtext("playcount") == count
+              assert entries[name].findtext("altemulator") == "custom-" + count
+          assert entries["cached.3ds"].findtext("desc") == "Imported preservation description"
+          assert not entries["uncached.cxi"].findtext("desc")
+          record = json.loads(machine.succeed(f"cat {base}/cache/last-run.json"))
+          assert record["folders"] == {"n3ds": "generated"}, record
+          machine.succeed(f"test ! -s {base}/cache/pending")
     '';
 }

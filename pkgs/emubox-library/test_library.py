@@ -10,6 +10,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, replace
@@ -96,7 +97,7 @@ def test_discovery_uses_frontend_extensions_and_ignores_empty_directories(
     (config.rom_root / "empty").mkdir()
     found = library.discover(config, library.system_extensions(config))
     assert list(found) == ["psx", "unknown"]
-    assert [file.name for file in found["psx"]] == ["disc.cue"]
+    assert [file.name for file in found["psx"] or ()] == ["disc.cue"]
 
 
 def test_wrong_account_refuses_without_creating_state(
@@ -1520,3 +1521,288 @@ def test_signalled_fetch_keeps_finished_folders_pending_and_old_record(
     assert library.read_pending(config) == ["nes"]
     assert set(json.loads(config.revision_path.read_text())) == {"nes"}
     assert config.record_path.read_bytes() == before
+
+
+def journal_log(config: library.Config) -> tuple[library.Config, Path]:
+    log = config.cache_root.parent / "journal.log"
+    cat = config.cache_root.parent / "journal-cat"
+    cat.write_text(f"#!/bin/sh\ncat >> {log}\n")
+    cat.chmod(0o755)
+    return replace(config, systemd_cat=str(cat)), log
+
+
+needs_permissions = pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+
+
+@needs_permissions
+def test_unlistable_folder_fails_alone_and_the_run_records(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    seen: list[str] = []
+
+    def invoke(_config: library.Config, argv: list[str], _claim: int) -> tuple[int, bytes]:
+        seen.append(argv[argv.index("-p") + 1])
+        return 0, b""
+
+    (config.rom_root / "psx").chmod(0)
+    try:
+        assert library.scrape(config, invoke) == 1
+    finally:
+        (config.rom_root / "psx").chmod(0o755)
+    assert seen == ["nes"]
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == "partial"
+    assert record["folders"] == {"nes": "fetched", "psx": "fetch-failed"}
+    assert library.read_pending(config) == ["nes"]
+
+
+def test_scraper_that_cannot_start_fails_one_folder(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+
+    def invoke(_config: library.Config, argv: list[str], _claim: int) -> tuple[int, bytes]:
+        if "psx" in argv:
+            raise PermissionError("not executable")
+        return 0, b""
+
+    assert library.scrape(config, invoke) == 1
+    record = json.loads(config.record_path.read_text())
+    assert record["folders"] == {"nes": "fetched", "psx": "fetch-failed"}
+    assert b"not executable" in config.log_path.read_bytes()
+
+
+def test_fetch_vector_is_exactly_the_cache_only_command(config: library.Config) -> None:
+    assert library.fetch_vector(config, "nes", "nes") == [
+        "-p", "nes", "-s", "screenscraper", "-c", str(config.scraper_config),
+        "-i", str(config.rom_root / "nes"), "-d", str(config.cache_root / "nes"),
+        "--addext", ".nes",
+        "--flags", "unattend,onlymissing,videos,manuals",
+    ]  # fmt: skip
+
+
+def test_fetch_uses_the_mapped_platform_with_folder_named_paths(config: library.Config) -> None:
+    mapping = config.platform_map
+    mapping.write_text(json.dumps({"genesis": "megadrive"}))
+    game(config, "genesis", "a.md")
+    seen: list[list[str]] = []
+
+    def invoke(_config: library.Config, argv: list[str], _claim: int) -> tuple[int, bytes]:
+        seen.append(argv)
+        return 0, b""
+
+    assert library.scrape(config, invoke) == 0
+    (argv,) = seen
+    assert argv[argv.index("-p") + 1] == "megadrive"
+    assert argv[argv.index("-i") + 1] == str(config.rom_root / "genesis")
+    assert argv[argv.index("-d") + 1] == str(config.cache_root / "genesis")
+    assert json.loads(config.record_path.read_text())["folders"] == {"genesis": "fetched"}
+    assert library.read_pending(config) == ["genesis"]
+
+
+def test_empty_and_sidecar_only_folders_are_never_visited(config: library.Config) -> None:
+    config.bundled_systems.write_text(
+        "<systemList><system><name>nes</name><extension>.nes</extension></system>"
+        "<system><name>snes</name><extension>.sfc</extension></system>"
+        "<system><name>gba</name><extension>.gba</extension></system></systemList>"
+    )
+    config.platform_map.write_text(json.dumps({"nes": "nes", "snes": "snes", "gba": "gba"}))
+    game(config, "nes", "a.nes")
+    (config.rom_root / "snes").mkdir()
+    game(config, "gba", "notes.txt")
+    seen: list[str] = []
+
+    def invoke(_config: library.Config, argv: list[str], _claim: int) -> tuple[int, bytes]:
+        seen.append(argv[argv.index("-p") + 1])
+        return 0, b""
+
+    assert library.scrape(config, invoke) == 0
+    assert seen == ["nes"]
+    assert json.loads(config.record_path.read_text())["folders"] == {"nes": "fetched"}
+
+
+def test_refused_second_run_leaves_the_first_to_record_its_result(
+    config: library.Config,
+) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    ready = config.cache_root.parent / "child-ready"
+    release = config.cache_root.parent / "release"
+    scraper = config.cache_root.parent / "scraper"
+    scraper.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys, time\n"
+        "cache=pathlib.Path(sys.argv[sys.argv.index('-d')+1])\n"
+        "root=cache.parent.parent\n"
+        "if cache.name == 'psx':\n"
+        " (root/'child-ready').touch()\n"
+        " while not (root/'release').exists(): time.sleep(0.05)\n"
+    )
+    scraper.chmod(0o755)
+    settings = cli_config(
+        replace(config, skyscraper=str(scraper)), config.cache_root.parent / "config.json"
+    )
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("emubox_scrape.py")),
+        "--config",
+        str(settings),
+    ]
+    first = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(ready)
+        second = subprocess.run(command, capture_output=True, text=True, timeout=5)
+        assert second.returncode == 1
+        assert "in progress" in second.stderr
+        release.touch()
+        assert first.wait(timeout=10) == 0
+    finally:
+        release.touch()
+        if first.poll() is None:
+            first.kill()
+            first.wait(timeout=3)
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == "complete"
+    assert record["folders"] == {"nes": "fetched", "psx": "fetched"}
+
+
+def test_nothing_pending_generates_nothing(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    live.write_text("<gameList />")
+    before = {path: path.read_bytes() for path in config.gamelist_root.rglob("*") if path.is_file()}
+    assert library.capture(config) == (0, {})
+    assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
+    after = {path: path.read_bytes() for path in config.gamelist_root.rglob("*") if path.is_file()}
+    assert after == before
+
+
+def test_generation_prints_a_heading_per_folder(
+    config: library.Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    game(config, "nes", "a.nes")
+    library.write_pending(config, ["nes"])
+    assert library.generate(config, lambda *args: (1, b"")) == 0
+    assert "Generating nes" in capsys.readouterr().out
+
+
+def test_unreadable_gamelist_journal_line_names_the_remedy(config: library.Config) -> None:
+    config, log = journal_log(config)
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    live.write_text("<gameList><game>")
+    library.write_pending(config, ["nes"])
+    assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
+    assert live.read_text() == "<gameList><game>"
+    line = log.read_text()
+    assert "Generation failed for nes" in line
+    assert "gamelist is unreadable" in line
+    assert "move it aside" in line
+    assert library.read_pending(config) == []
+
+
+def test_journal_never_raises_when_systemd_cat_is_missing_or_hangs(
+    config: library.Config,
+) -> None:
+    library.journal(replace(config, systemd_cat="/nonexistent/systemd-cat"), "message")
+    hang = config.cache_root.parent / "hang"
+    hang.write_text("#!/bin/sh\nexec sleep 30\n")
+    hang.chmod(0o755)
+    started = time.monotonic()
+    library.journal(replace(config, systemd_cat=str(hang)), "message")
+    assert time.monotonic() - started < 10
+
+
+def pending_batch(config: library.Config) -> dict[str, str | None]:
+    library.write_pending(config, ["nes"])
+    library.atomic_json(config.revision_path, {"nes": "one"})
+    return {"nes": "one"}
+
+
+def test_cleanup_waits_briefly_for_a_claim_being_released(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(library, "CLEANUP_CLAIM_SECONDS", 3.0)
+    batch = pending_batch(config)
+    claim = held_lock(config)
+    timer = threading.Timer(0.5, os.close, (claim,))
+    timer.start()
+    assert library.cleanup(config, batch) == 0
+    timer.join()
+    assert library.read_pending(config) == []
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
+
+
+def test_cleanup_defers_when_the_claim_stays_held(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(library, "CLEANUP_CLAIM_SECONDS", 0.5)
+    batch = pending_batch(config)
+    claim = held_lock(config)
+    try:
+        started = time.monotonic()
+        assert library.cleanup(config, batch) == 1
+        assert 0.4 < time.monotonic() - started < 3
+    finally:
+        os.close(claim)
+    assert library.read_pending(config) == ["nes"]
+    assert not config.record_path.exists()
+
+
+def test_report_matches_gamelist_entries_by_relative_path(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "nes/sub", "a.nes")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    live.write_text("<gameList><game><path>./sub/a.nes</path><desc>Nested</desc></game></gameList>")
+    status, output = library.report(config, 5)
+    assert status == 0
+    assert "nes: 1 ROMs, 1 gamelist entries, 1 unscraped" in output
+    live.write_text(
+        f"<gameList><game><path>{config.rom_root / 'nes' / 'a.nes'}</path>"
+        "<desc>Top</desc></game></gameList>"
+    )
+    assert "nes: 1 ROMs, 1 gamelist entries, 0 unscraped" in library.report(config, 5)[1]
+
+
+@pytest.mark.parametrize(
+    "damage", ["unparseable", pytest.param("unreadable", marks=needs_permissions)]
+)
+def test_report_keeps_counting_past_a_damaged_run_record(
+    config: library.Config, damage: str
+) -> None:
+    game(config, "nes", "a.nes")
+    library.write_pending(config, ["nes"])
+    config.record_path.write_text("{bad")
+    if damage == "unreadable":
+        config.record_path.chmod(0)
+    status, output = library.report(config, 5)
+    assert "Run record unavailable" in output
+    assert "Generation pending: nes" in output
+    assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
+    assert status == 0
+
+
+@needs_permissions
+def test_report_keeps_counting_past_an_unreadable_pending_file(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    library.write_pending(config, ["nes"])
+    config.pending_path.chmod(0)
+    status, output = library.report(config, 5)
+    assert "Pending state unavailable" in output
+    assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
+    assert status == 0
+
+
+@needs_permissions
+def test_report_marks_an_unlistable_folder_and_counts_the_rest(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    (config.rom_root / "psx").chmod(0)
+    try:
+        status, output = library.report(config, 5)
+    finally:
+        (config.rom_root / "psx").chmod(0o755)
+    assert "psx: counts unavailable" in output
+    assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
+    assert status == 1

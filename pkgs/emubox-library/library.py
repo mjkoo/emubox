@@ -29,6 +29,7 @@ from typing import Any
 PER_FOLDER_SECONDS = 600
 ALL_FOLDERS_SECONDS = 1800
 REPORT_SECONDS = 45
+CLEANUP_CLAIM_SECONDS = 3.0
 CONFIG_PATH = Path("/etc/emubox/library.json")
 VECTORS_PATH = Path(__file__).with_name("vectors.json")
 IONICE = "@IONICE@"
@@ -190,13 +191,18 @@ def rom_files(directory: Path, extensions: set[str] | None) -> list[Path]:
     )
 
 
-def discover(config: Config, extensions: dict[str, set[str]]) -> dict[str, list[Path]]:
+def discover(config: Config, extensions: dict[str, set[str]]) -> dict[str, list[Path] | None]:
+    """Folders holding ROM files; a directory that cannot be listed maps to None."""
     if not config.rom_root.exists():
         return {}
-    result = {}
+    result: dict[str, list[Path] | None] = {}
     for directory in sorted(config.rom_root.iterdir()):
         if directory.is_dir():
-            files = rom_files(directory, extensions.get(directory.name))
+            try:
+                files = rom_files(directory, extensions.get(directory.name))
+            except OSError:
+                result[directory.name] = None
+                continue
             if files:
                 result[directory.name] = files
     return result
@@ -358,13 +364,23 @@ def write_record(config: Config, result: str, outcomes: dict[str, str], cause: s
     atomic_json(config.record_path, record)
 
 
+def show(line: str) -> bytes:
+    """Print one line to the terminal and return it for the run's log."""
+    data = f"{line}\n".encode()
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+    return data
+
+
 def journal(config: Config, message: str) -> None:
-    subprocess.run(
-        [config.systemd_cat, "-t", "emubox-library"],
-        input=(message + "\n").encode(),
-        check=False,
-        timeout=2,
-    )
+    """Best effort: a missing or stuck journal never changes a library outcome."""
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run(
+            [config.systemd_cat, "-t", "emubox-library"],
+            input=(message + "\n").encode(),
+            check=False,
+            timeout=2,
+        )
 
 
 def correct_account(config: Config) -> bool:
@@ -398,18 +414,21 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         platforms = read_json(config.platform_map, {})
         outcomes: dict[str, str] = {}
         transcript = bytearray()
-        for folder in discover(config, extensions):
+        for folder, roms in discover(config, extensions).items():
             if folder not in extensions:
                 continue
             platform = platforms.get(folder)
             if platform is None:
                 outcomes[folder] = "unmapped"
                 continue
-            heading = f"Fetching {folder}\n".encode()
-            sys.stdout.buffer.write(heading)
-            sys.stdout.buffer.flush()
-            transcript.extend(heading)
-            status, output = invoke(config, fetch_vector(config, folder, platform), claim)
+            transcript.extend(show(f"Fetching {folder}"))
+            if roms is None:
+                status, output = 1, show(f"Cannot list {folder}")
+            else:
+                try:
+                    status, output = invoke(config, fetch_vector(config, folder, platform), claim)
+                except OSError as error:
+                    status, output = 1, show(f"Could not start the scraper for {folder}: {error}")
             transcript.extend(output)
             if status == 0:
                 revisions = read_mapping(config.revision_path)
@@ -425,12 +444,11 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         failed = sum(value == "fetch-failed" for value in outcomes.values())
         unmapped = sum(value == "unmapped" for value in outcomes.values())
         result = "partial" if fetched and failed else "failed" if failed else "complete"
-        summary = (
-            f"Scrape result: {result} ({fetched} fetched, {failed} failed, {unmapped} unmapped)\n"
-        ).encode()
-        sys.stdout.buffer.write(summary)
-        sys.stdout.buffer.flush()
-        transcript.extend(summary)
+        transcript.extend(
+            show(
+                f"Scrape result: {result} ({fetched} fetched, {failed} failed, {unmapped} unmapped)"
+            )
+        )
         atomic_write(config.log_path, bytes(transcript))
         write_record(config, result, outcomes)
         return 0 if result == "complete" else 1
@@ -438,7 +456,7 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         os.close(claim)
 
 
-def _record_generation(config: Config, folder: str, outcome: str) -> None:
+def _record_generation(config: Config, folder: str, outcome: str, reason: str = "") -> None:
     record: dict[str, Any] = read_mapping(config.record_path) or {
         "result": "complete",
         "time": timestamp(),
@@ -449,7 +467,7 @@ def _record_generation(config: Config, folder: str, outcome: str) -> None:
     folders[folder] = outcome
     atomic_json(config.record_path, record)
     if outcome == "generation-failed":
-        journal(config, f"Generation failed for {folder}")
+        journal(config, f"Generation failed for {folder}" + (f": {reason}" if reason else ""))
 
 
 def _discard_work(parent: Path) -> None:
@@ -548,9 +566,11 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
         for folder in pending:
             if folder not in read_pending(config):
                 continue
+            reason = ""
             if time.monotonic() >= end or folder not in platforms:
                 outcome = "generation-failed"
             else:
+                show(f"Generating {folder}")
                 parent = config.gamelist_root / folder
                 live = parent / "gamelist.xml"
                 work: Path | None = None
@@ -562,7 +582,11 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
                     previous = ET.Element("gameList")
                     if live.exists():
                         shutil.copy2(live, source)
-                        previous = _read_gamelist(source)
+                        try:
+                            previous = _read_gamelist(source)
+                        except (ValueError, ET.ParseError):
+                            reason = "its gamelist is unreadable; repair it or move it aside"
+                            raise
                     before = _file_signature(source)
                     limit = min(end, time.monotonic() + PER_FOLDER_SECONDS)
                     status, _ = invoke(
@@ -591,7 +615,7 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
                 finally:
                     if work is not None:
                         shutil.rmtree(work, ignore_errors=True)
-            _record_generation(config, folder, outcome)
+            _record_generation(config, folder, outcome, reason)
             write_pending(config, [item for item in read_pending(config) if item != folder])
         return 0
     except (OSError, ValueError) as error:
@@ -619,7 +643,12 @@ def capture(config: Config) -> tuple[int, dict[str, str | None]]:
 def cleanup(config: Config, batch: dict[str, str | None]) -> int:
     if not correct_account(config):
         return 1
+    # A generation program the window's deadline killed can outlive it briefly.
+    end = time.monotonic() + CLEANUP_CLAIM_SECONDS
     claim = lock(config)
+    while claim is None and time.monotonic() < end:
+        time.sleep(0.1)
+        claim = lock(config)
     if claim is None:
         journal(config, "Generation failure cleanup deferred; a fetch was running")
         return 1
@@ -655,11 +684,16 @@ def _gamelist_counts(config: Config, folder: str, roms: list[Path]) -> tuple[int
         games = []
     except ET.ParseError:
         return None
-    described = {
-        Path(game.findtext("path") or "").name
-        for game in games
-        if (game.findtext("desc") or "").strip()
-    }
+    directory = config.rom_root / folder
+    described = set()
+    for game in games:
+        path = Path(game.findtext("path") or "")
+        if (game.findtext("desc") or "").strip() and path.parts:
+            if path.is_absolute():
+                if not path.is_relative_to(directory):
+                    continue
+                path = path.relative_to(directory)
+            described.add(os.path.normpath(path))
     return len(games), sum(rom.name not in described for rom in roms)
 
 
@@ -676,15 +710,23 @@ class _PipeSender:
 def _scan(config_source: Config | Path, sender: _PipeSender) -> None:
     try:
         config = Config.read(config_source) if isinstance(config_source, Path) else config_source
-        record = read_json(config.record_path, None)
+        try:
+            record = read_json(config.record_path, None)
+        except (OSError, ValueError):
+            record = "unavailable"
         sender.put(("record", record))
-        pending = read_pending(config)
+        try:
+            pending = read_pending(config)
+        except (OSError, ValueError):
+            pending = None
         sender.put(("pending", pending))
         extensions = system_extensions(config)
         platforms = read_json(config.platform_map, {})
         folders = discover(config, extensions)
         sender.put(("folders", list(folders)))
         for name, roms in folders.items():
+            if roms is None:
+                continue
             counts = _gamelist_counts(config, name, roms)
             note = (
                 "unknown system"
@@ -795,7 +837,8 @@ def report(config: Config | Path, deadline_seconds: float = REPORT_SECONDS) -> t
         lines.append(
             "Library scan incomplete; counts unavailable" + (f": {error}" if error else "")
         )
-    return (0 if complete else 1), "\n".join(lines) + "\n"
+    counted = complete and all(folder in counts for folder in folders or ())
+    return (0 if counted else 1), "\n".join(lines) + "\n"
 
 
 def _parser() -> argparse.ArgumentParser:

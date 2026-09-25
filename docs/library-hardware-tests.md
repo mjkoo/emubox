@@ -1,12 +1,13 @@
 # Library hardware acceptance
 
-Status: deferred until a future hardware installation. No hardware installation
-has been performed yet. These checks are post-installation follow-up work and
-do not block completion of the current implementation. Run them when the
-project is ready for hardware testing; they require the target appliance, its
-display and physical keyboard or controller. A green CI run does not establish that they
-pass. CI covers source contracts, local scraper import and nonvisual library
-and session logic. It does not use OCR for the library.
+Status: deferred until a future hardware installation. No hardware
+installation has been performed yet. These checks are post-installation
+follow-up work and do not block completion of the current implementation. Run
+them when the project is ready for hardware testing; they require the target
+appliance, its display and physical keyboard or controller. A green CI run
+does not establish that they pass. CI covers source contracts, local scraper
+import and nonvisual library and session logic. It does not use OCR for the
+library.
 
 Record the date, tester, machine/GPU/display, deployed software commit, each
 observed result and relevant logs. Mark unavailable functionality as not run.
@@ -58,9 +59,7 @@ exact command and store path. With the frontend running:
    Record the old and new frontend PIDs and the session journal.
 
 Source inspection or invoking the entry directly does not prove frontend
-selection. Use a temporary declarative test entry that prints and waits if
-the scrape command is not yet available; record that limited scope and leave
-the full "Update game art" acceptance pending. Do not edit store files.
+selection. Do not edit store files.
 
 ## Child termination and saved state
 
@@ -77,13 +76,15 @@ back into the implementation before accepting its restart behavior.
 
 ## Integrated generation and real account
 
-After hardware installation, prepare a disposable cached game with generation pending.
-Restart the frontend and observe progress before it starts, then confirm the
-new artwork is shown. Run one small scrape with real ScreenScraper credentials
-through the documented admin route and one through Tools. Record outcomes,
-never credentials. This checks service acceptance as well as the display.
+After hardware installation, prepare a disposable cached game with generation
+pending. Restart the frontend and observe progress before it starts, then
+confirm the new artwork is shown. Run one small scrape with real ScreenScraper
+credentials through the documented admin route and one through Tools. Record
+outcomes, never credentials. This checks service acceptance as well as the
+display.
 
 All checks above, including the real-account smoke tests, are deferred until
-post-installation testing and remain unverified until a tester records evidence. Failure of
-display, state persistence or exit-status propagation requires correcting the
-implementation before hardware acceptance, even if automated checks pass.
+post-installation testing and remain unverified until a tester records
+evidence. Failure of display, state persistence or exit-status propagation
+requires correcting the implementation before hardware acceptance, even if
+automated checks pass.

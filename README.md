@@ -8,14 +8,14 @@ off-site save backups, and remote administration over Tailscale.
 ## Layout
 
 ```
-flake.nix          inputs, nixosConfigurations.emubox, packages, checks, devShell
-hosts/emubox/      the physical box: hardware facts, disko layout
-modules/           the software stack, one directory per concern
-modules/library/   scraping, generation, ingest permissions and status
-overlays/, pkgs/   the packages the flake builds: vendored, and its own
+flake.nix             inputs, nixosConfigurations.emubox, packages, checks, devShell
+hosts/emubox/         the physical box: hardware facts, disko layout
+modules/              the software stack, one directory per concern
+modules/library/      scraping, generation, ingest permissions and status
+overlays/, pkgs/      the packages the flake builds: vendored, and its own
 pkgs/emubox-library/  unprivileged library commands and their tests
-tests/             VM tests (disko install, kiosk session, controllers, mode switching), test values and key
-secrets/           sops files (encrypted); recipients in .sops.yaml
+tests/                VM tests (disko install, kiosk session, controllers, mode switching, library), test values and key
+secrets/              sops files (encrypted); recipients in .sops.yaml
 ```
 
 ## Development
@@ -188,7 +188,7 @@ emubox.kiosk.customSystems = [
       <fullname>Example</fullname>
       <path>/data/roms/example</path>
       <extension>.example</extension>
-      <command>/bin/true %ROM%</command>
+      <command>${pkgs.coreutils}/bin/true %ROM%</command>
       <platform>example</platform>
       <theme>example</theme>
     </system>
@@ -273,14 +273,15 @@ is:
 
 ```sh
 ssh admin@emubox 'mkdir -p /data/roms/nes'
-rsync -rt --no-perms --no-owner --no-group --chmod=ugo+rX,Dg+w ./nes/ admin@emubox:/data/roms/nes/
+rsync -rtO --no-perms --no-owner --no-group --chmod=ugo+rX,Dg+w ./nes/ admin@emubox:/data/roms/nes/
 ssh -t admin@emubox 'sudo -u player emubox-scrape'
 ```
 
 Use the box's configured address in place of `emubox`. Avoid `rsync -a`: archive
 mode preserves source permissions and attempts to preserve ownership, which
 can defeat the destination's shared access rules. The command above leaves
-ownership to the destination and makes new game files readable. This SSH route
+ownership to the destination and makes new game files readable; `-O` skips
+directory times, which `admin` cannot set on a folder `player` created. This SSH route
 waits on remote administration, which is not provided by the library feature;
 sshd is currently loopback-only. The frontend route works without SSH.
 

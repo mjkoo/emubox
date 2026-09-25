@@ -148,8 +148,13 @@ install target *args:
     # first makes a failed decrypt a loud failure, not a skipped check.
     plain="$(SOPS_AGE_KEY_FILE={{quote(age_key)}} sops decrypt secrets/secrets.yaml)"
     backup_enabled="$(nix eval --json .#nixosConfigurations.{{host}}.config.emubox.backups.enable)"
-    if ! printf '%s' "$plain" | bash scripts/emubox-install-placeholder-guard "$backup_enabled"; then
+    guard=0
+    printf '%s' "$plain" | bash scripts/emubox-install-placeholder-guard "$backup_enabled" || guard=$?
+    if [ "$guard" -eq 1 ]; then
         echo "secrets/secrets.yaml still holds placeholders; run: just secrets-edit" >&2
+        exit 1
+    elif [ "$guard" -ne 0 ]; then
+        echo "emubox.backups.enable evaluated to '$backup_enabled', not true or false" >&2
         exit 1
     fi
     staging="$(mktemp -d)"

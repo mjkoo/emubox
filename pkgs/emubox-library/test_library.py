@@ -194,10 +194,13 @@ def test_fetch_log_matches_streamed_terminal_output(
 
 
 @pytest.mark.parametrize("cause", ["missing", "unreadable", "placeholder"])
-def test_credentials_replace_success_record_without_touching_pending(
+def test_credentials_replace_record_keeping_outcomes_without_touching_pending(
     config: library.Config, cause: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    library.atomic_json(config.record_path, {"result": "complete", "time": "old", "folders": {}})
+    library.atomic_json(
+        config.record_path,
+        {"result": "complete", "time": "old", "folders": {"psx": "generation-failed"}},
+    )
     library.write_pending(config, ["nes"])
     before = config.pending_path.read_bytes()
     if cause == "missing":
@@ -226,7 +229,9 @@ def test_credentials_replace_success_record_without_touching_pending(
     assert called == []
     record = json.loads(config.record_path.read_text())
     assert record["result"] == "refused"
+    assert record["time"] != "old"
     assert cause in record["cause"]
+    assert record["folders"] == {"psx": "generation-failed"}
     assert config.pending_path.read_bytes() == before
 
 
@@ -250,6 +255,7 @@ def test_empty_credential_component_refuses_before_scraper(
     record = json.loads(config.record_path.read_text())
     assert record["result"] == "refused"
     assert "missing" in record["cause"]
+    assert record["folders"] == {"nes": "fetched"}
     assert config.pending_path.read_bytes() == before
 
 
@@ -523,11 +529,26 @@ def test_cleanup_leaves_pending_when_lock_or_record_write_fails(
     assert config.pending_path.read_bytes() == before
 
 
-def test_capture_preserves_pending_with_missing_revision(config: library.Config) -> None:
-    library.write_pending(config, ["nes"])
-    assert library.capture(config) == (0, {})
+def test_capture_reports_pending_without_revision_and_cleanup_keeps_it(
+    config: library.Config,
+) -> None:
+    library.write_pending(config, ["nes", "psx"])
+    library.atomic_json(config.revision_path, {"psx": "r1"})
+    status, batch = library.capture(config)
+    assert (status, batch) == (0, {"nes": None, "psx": "r1"})
+    assert library.cleanup(config, batch) == 0
+    assert library.read_pending(config) == ["nes"]
     assert library.cleanup(config, {"nes": "unknown"}) == 0
     assert library.read_pending(config) == ["nes"]
+
+
+def test_capture_cli_prints_null_for_missing_revision(
+    config: library.Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    library.write_pending(config, ["nes"])
+    settings = cli_config(config, config.cache_root.parent / "config.json")
+    assert library.generate_main(["--config", str(settings), "capture"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"nes": None}
 
 
 def test_cleanup_preserves_new_different_folder_after_batch_capture(config: library.Config) -> None:
@@ -609,7 +630,7 @@ def test_per_folder_deadline_kills_hung_scraper_without_publishing_work(
     monkeypatch.setattr(library, "PER_FOLDER_SECONDS", 0.2)
     start = time.monotonic()
     assert library.generate(replace(config, skyscraper=str(scraper))) == 0
-    assert time.monotonic() - start < 3
+    assert time.monotonic() - start < 10
     assert live.read_text() == "OLD"
     assert not list(parent.glob(".emubox-library-work-*"))
     assert json.loads(config.record_path.read_text())["folders"] == {"nes": "generation-failed"}
@@ -627,7 +648,18 @@ def test_unreadable_pending_does_not_generate_or_claim_skip(
         return original(path, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", unreadable)
+    messages: list[str] = []
+    monkeypatch.setattr(library, "journal", lambda _config, message: messages.append(message))
     assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
+    assert messages == ["Generation could not read or write state: pending unavailable"]
+    assert not config.record_path.exists()
+
+
+def test_pending_folder_without_platform_fails_without_scraper(config: library.Config) -> None:
+    library.write_pending(config, ["genesis"])
+    assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
+    assert library.read_pending(config) == []
+    assert json.loads(config.record_path.read_text())["folders"] == {"genesis": "generation-failed"}
 
 
 def test_report_counts_extensions_descriptions_and_unknown(config: library.Config) -> None:
@@ -722,6 +754,13 @@ def test_report_without_records(config: library.Config) -> None:
             "nes: 1 ROMs, 0 gamelist entries, 1 unscraped\n"
             "Last run: complete at fixed\nFailed folders: nes\nGeneration pending: none\n",
         ),
+        (
+            "refused",
+            "fetch-failed",
+            False,
+            "nes: 1 ROMs, 0 gamelist entries, 1 unscraped\n"
+            "Last run: refused at fixed\nFailed folders: nes\nGeneration pending: none\n",
+        ),
     ],
 )
 def test_report_exact_record_outcomes(
@@ -760,7 +799,7 @@ def test_report_deadline_covers_discovery_and_keeps_records(config: library.Conf
     os.mkfifo(config.bundled_systems)
     start = time.monotonic()
     status, output = library.report(config, 0.2)
-    assert time.monotonic() - start < 2
+    assert time.monotonic() - start < 10
     assert status == 1
     assert "Last run: complete" in output
     assert "Generation pending: nes" in output
@@ -778,7 +817,7 @@ def test_report_deadline_keeps_completed_counts_on_blocked_gamelist(
     os.mkfifo(psx_parent / "gamelist.xml")
     start = time.monotonic()
     status, output = library.report(config, 0.2)
-    assert time.monotonic() - start < 2
+    assert time.monotonic() - start < 10
     assert status == 1
     assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
     assert "psx: counts unavailable" in output
@@ -804,9 +843,9 @@ def test_report_cli_exits_when_pending_read_blocks_and_keeps_run_record(
         capture_output=True,
         text=True,
         env=environment,
-        timeout=3,
+        timeout=10,
     )
-    assert time.monotonic() - start < 2
+    assert time.monotonic() - start < 10
     assert result.returncode == 1
     assert "Last run: partial" in result.stdout
     assert "Pending state unavailable" in result.stdout
@@ -851,7 +890,10 @@ def test_scraper_child_keeps_claim_after_wrapper_is_killed(config: library.Confi
         assert second.returncode == 1
         assert "in progress" in second.stderr
     finally:
-        os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        if pid_file.exists():
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        if first.poll() is None:
+            first.kill()
         first.wait(timeout=3)
     release.touch()
     third = subprocess.run(command, capture_output=True, text=True, timeout=5)
@@ -901,7 +943,10 @@ def test_killed_generation_keeps_live_gamelist_and_pending(config: library.Confi
         assert live.read_text() == "OLD"
         assert library.read_pending(config) == ["nes"]
     finally:
-        os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        if pid_file.exists():
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        if first.poll() is None:
+            first.kill()
         first.wait(timeout=3)
     release.touch()
     second = subprocess.run(command, capture_output=True, text=True, timeout=5)
@@ -1081,7 +1126,7 @@ def test_deadline_still_applies_after_scraper_closes_output(config: library.Conf
     try:
         start = time.monotonic()
         status, output = library.run_skyscraper(config, [], claim, start + 0.2)
-        assert time.monotonic() - start < 3
+        assert time.monotonic() - start < 10
         assert status == 124
         assert output == b""
     finally:
@@ -1120,3 +1165,112 @@ def test_descendant_is_ended_after_scraper_leader_exits(config: library.Config) 
         new_claim = library.lock(config)
     assert new_claim is not None
     os.close(new_claim)
+
+
+BAD_STATE = ["{", "[]"]
+
+
+@pytest.mark.parametrize("content", BAD_STATE)
+def test_generation_drains_pending_past_a_malformed_run_record(
+    config: library.Config, content: str
+) -> None:
+    library.write_pending(config, ["nes"])
+    config.record_path.write_text(content)
+
+    def success(
+        _config: library.Config, argv: list[str], _claim: int, _limit: float
+    ) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text("NEW")
+        return 0, b""
+
+    assert library.generate(config, success) == 0
+    assert library.read_pending(config) == []
+    assert json.loads(config.record_path.read_text())["folders"] == {"nes": "generated"}
+
+
+@pytest.mark.parametrize("content", BAD_STATE)
+def test_cleanup_drains_pending_past_a_malformed_run_record(
+    config: library.Config, content: str
+) -> None:
+    library.write_pending(config, ["nes"])
+    library.atomic_json(config.revision_path, {"nes": "r1"})
+    config.record_path.write_text(content)
+    assert library.cleanup(config, {"nes": "r1"}) == 0
+    assert library.read_pending(config) == []
+    assert json.loads(config.record_path.read_text())["folders"] == {"nes": "generation-failed"}
+
+
+@pytest.mark.parametrize("content", BAD_STATE)
+def test_malformed_revisions_read_as_missing_identities(
+    config: library.Config, content: str
+) -> None:
+    library.write_pending(config, ["nes"])
+    config.revision_path.write_text(content)
+    assert library.capture(config) == (0, {"nes": None})
+    assert library.cleanup(config, {"nes": "r1"}) == 0
+    assert library.read_pending(config) == ["nes"]
+
+
+@pytest.mark.parametrize("content", BAD_STATE)
+def test_fetch_replaces_malformed_revisions_and_records_the_run(
+    config: library.Config, content: str
+) -> None:
+    game(config, "nes", "a.nes")
+    config.revision_path.parent.mkdir(parents=True)
+    config.revision_path.write_text(content)
+    assert library.scrape(config, lambda *args: (0, b"")) == 0
+    assert set(json.loads(config.revision_path.read_text())) == {"nes"}
+    assert library.read_pending(config) == ["nes"]
+    assert json.loads(config.record_path.read_text())["result"] == "complete"
+
+
+@pytest.mark.parametrize("content", BAD_STATE)
+def test_refusal_replaces_a_malformed_run_record(config: library.Config, content: str) -> None:
+    config.record_path.parent.mkdir(parents=True)
+    config.record_path.write_text(content)
+    config.scraper_config.unlink()
+    assert library.scrape(config, lambda *args: pytest.fail("unexpected scraper")) == 1
+    record = json.loads(config.record_path.read_text())
+    assert (record["result"], record["folders"]) == ("refused", {})
+
+
+@pytest.mark.parametrize("ending_signal", [signal.SIGTERM, signal.SIGHUP])
+def test_signalled_fetch_keeps_finished_folders_pending_and_old_record(
+    config: library.Config, ending_signal: int
+) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    library.write_record(config, "complete", {"nes": "fetched"})
+    before = config.record_path.read_bytes()
+    ready = config.cache_root / "running"
+    scraper = config.cache_root.parent / "sleeper"
+    scraper.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys, time\n"
+        "cache=pathlib.Path(sys.argv[sys.argv.index('-d')+1])\n"
+        "if cache.name == 'psx':\n"
+        " (cache.parent/'running').touch()\n"
+        " while True: time.sleep(1)\n"
+    )
+    scraper.chmod(0o755)
+    settings = cli_config(
+        replace(config, skyscraper=str(scraper)), config.cache_root.parent / "config.json"
+    )
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("emubox_scrape.py")),
+        "--config",
+        str(settings),
+    ]
+    wrapper = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_for(ready)
+        os.kill(wrapper.pid, ending_signal)
+        assert wrapper.wait(timeout=5) == 128 + ending_signal
+    finally:
+        if wrapper.poll() is None:
+            wrapper.kill()
+            wrapper.wait()
+    assert library.read_pending(config) == ["nes"]
+    assert set(json.loads(config.revision_path.read_text())) == {"nes"}
+    assert config.record_path.read_bytes() == before

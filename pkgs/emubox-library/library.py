@@ -6,6 +6,7 @@ import argparse
 import configparser
 import contextlib
 import fcntl
+import functools
 import json
 import os
 import pwd
@@ -117,6 +118,15 @@ def read_json(path: Path, default: Any) -> Any:
         return default
 
 
+def read_mapping(path: Path) -> dict[str, Any]:
+    """A state file the library itself writes; unusable contents read as empty."""
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def read_pending(config: Config) -> list[str]:
     try:
         return list(dict.fromkeys(config.pending_path.read_text().splitlines()))
@@ -175,9 +185,13 @@ def discover(config: Config, extensions: dict[str, set[str]]) -> dict[str, list[
     return result
 
 
+@functools.cache
+def _vectors() -> dict[str, list[str]]:
+    return json.loads(VECTORS_PATH.read_text())
+
+
 def vector(kind: str, **values: str) -> list[str]:
-    vectors = json.loads(VECTORS_PATH.read_text())
-    return [part.format_map(values) for part in vectors[kind]]
+    return [part.format_map(values) for part in _vectors()[kind]]
 
 
 def fetch_vector(config: Config, folder: str, platform: str) -> list[str]:
@@ -352,7 +366,9 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         error = credentials_error(config)
         if error:
             print(error, file=sys.stderr)
-            write_record(config, "refused", {}, error)
+            # Nothing was attempted, so earlier outcomes still describe the folders.
+            previous = read_mapping(config.record_path).get("folders")
+            write_record(config, "refused", previous if isinstance(previous, dict) else {}, error)
             atomic_write(config.log_path, (error + "\n").encode())
             return 1
         with contextlib.suppress(OSError):
@@ -377,7 +393,7 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
             status, output = invoke(config, fetch_vector(config, folder, platform), claim)
             transcript.extend(output)
             if status == 0:
-                revisions = read_json(config.revision_path, {})
+                revisions = read_mapping(config.revision_path)
                 revisions[folder] = uuid.uuid4().hex
                 atomic_json(config.revision_path, revisions)
                 pending = read_pending(config)
@@ -404,10 +420,14 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
 
 
 def _record_generation(config: Config, folder: str, outcome: str) -> None:
-    record = read_json(
-        config.record_path, {"result": "complete", "time": timestamp(), "folders": {}}
-    )
-    record.setdefault("folders", {})[folder] = outcome
+    record: dict[str, Any] = read_mapping(config.record_path) or {
+        "result": "complete",
+        "time": timestamp(),
+    }
+    folders = record.get("folders")
+    if not isinstance(folders, dict):
+        folders = record["folders"] = {}
+    folders[folder] = outcome
     atomic_json(config.record_path, record)
     if outcome == "generation-failed":
         journal(config, f"Generation failed for {folder}")
@@ -488,7 +508,7 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
         os.close(claim)
 
 
-def capture(config: Config) -> tuple[int, dict[str, str]]:
+def capture(config: Config) -> tuple[int, dict[str, str | None]]:
     if not correct_account(config):
         return 1, {}
     claim = lock(config)
@@ -496,15 +516,14 @@ def capture(config: Config) -> tuple[int, dict[str, str]]:
         journal(config, "A fetch was running; generation deferred")
         return 75, {}
     try:
-        revisions = read_json(config.revision_path, {})
-        return 0, {
-            folder: revisions[folder] for folder in read_pending(config) if folder in revisions
-        }
+        revisions = read_mapping(config.revision_path)
+        # A folder with no identity is still attempted; cleanup never retires it.
+        return 0, {folder: revisions.get(folder) for folder in read_pending(config)}
     finally:
         os.close(claim)
 
 
-def cleanup(config: Config, batch: dict[str, str]) -> int:
+def cleanup(config: Config, batch: dict[str, str | None]) -> int:
     if not correct_account(config):
         return 1
     claim = lock(config)
@@ -512,10 +531,14 @@ def cleanup(config: Config, batch: dict[str, str]) -> int:
         journal(config, "Generation failure cleanup deferred; a fetch was running")
         return 1
     try:
-        revisions = read_json(config.revision_path, {})
+        revisions = read_mapping(config.revision_path)
         failed = False
         for folder, revision in batch.items():
-            if folder not in read_pending(config) or revisions.get(folder) != revision:
+            if (
+                revision is None
+                or folder not in read_pending(config)
+                or revisions.get(folder) != revision
+            ):
                 continue
             _record_generation(config, folder, "generation-failed")
             write_pending(config, [item for item in read_pending(config) if item != folder])

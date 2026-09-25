@@ -102,10 +102,28 @@ hardware acceptance checks.
 
 ## 8. Gate and reviews
 
-- [x] 8.1 `just check-all` passes at the final implementation commit, and the host toplevel, the session script, `pkgs/emubox-library` and the library and kiosk test drivers build on the x86_64-linux builder; the commands' final lines are recorded under this task
-- [x] 8.2 A green CI run of every check at the final implementation commit, its run number recorded under this task, since the session script's text changes and with it every VM check
+- [ ] 8.1 `just check-all` passes at the final implementation commit, and the host toplevel, the session script, `pkgs/emubox-library` and the library and kiosk test drivers build on the x86_64-linux builder; the commands' final lines are recorded under this task
+- [ ] 8.2 A green CI run of every check at the final implementation commit, its run number recorded under this task, since the session script's text changes and with it every VM check
 - [x] 8.3 Per-group evidencing reviews and the closing review wave the implementation workflow requires, with findings and their resolutions recorded under this task
 
+
+8.1 and 8.2 are reopened for the commit that closes group 9. The evidence
+below names `4b3af66` and run 36044891955; a later run, 36169570415, was
+green at `82eaaf2` before group 9 began.
+
+## 9. Verification fix round
+
+- [ ] 9.1 A folder the session account cannot list, or a scraper that cannot be started, records `fetch-failed` for that folder alone and the run continues and writes its record (design D4, D5); unit tests with an unreadable folder beside a good one and with an `invoke` that raises `OSError`
+- [ ] 9.2 Status reads the run record and the pending file independently: an unreadable or non-JSON record marks only itself unavailable, and an unlistable folder shows counts unavailable while others are counted (design D10); unit tests for `{bad`, mode 000 and an unlistable folder
+- [ ] 9.3 An unparseable live gamelist is left byte-identical, records `generation-failed`, and the journal line names the folder, says its gamelist is unreadable and says to repair it or move it aside (design D6); the existing invalid-gamelist unit test asserts the journal text
+- [ ] 9.4 Journal writes never raise, whether `systemd-cat` is missing or hangs; unit tests for both
+- [ ] 9.5 Failure cleanup retries the claim for up to three seconds before deferring (design, accepted risks); unit tests for a claim released within the window and one held past it
+- [ ] 9.6 Status matches gamelist entries to ROM files by relative path (design D10); unit test with a nested entry sharing a top-level ROM's file name
+- [ ] 9.7 Generation prints a heading per folder, as fetch does
+- [ ] 9.8 Unit tests: the literal fetch vector (with `onlymissing`, and no `-g`, `-o` or `-f`) written out by hand rather than read from the vectors file; a folder whose platform name differs from its folder name; the mixed-folders run with an empty and a sidecar-only directory; a refused second run while a live first run finishes and records its own result; nothing pending leaves the gamelist tree untouched
+- [ ] 9.9 VM test: the failed-termination and held-claim assertions read only their own subtest's evidence and prove generation ran; a real-Skyscraper run of the production fetch vector (with only the scraping module and config swapped for the local import) leaves gamelists and `/data/media` unchanged; nothing pending opens no window and leaves the gamelist byte-identical; screenshots, videos and manuals from the import fixture land under `/data/media/nes`, and an imported texture is still not emitted; the Tools-triggered restart carries the fixture description; credentials never appear in fetch arguments; the lock holder is still active when a concurrent run is refused; requested restarts log no crash count; a nested admin directory and an admin file in a session-account folder carry the `player` group
+- [ ] 9.10 README gives the unreadable-gamelist recovery and the smoke test's exact restart route; the hardware runbook records whether cleanup's retry covers the generation program outliving the outer deadline
+- [ ] 9.11 A scoped fresh review of `2ef007a`, `ef1a210`, `82eaaf2` and this group's commits, recorded below with the test count
 
 ### Implementation review evidence
 

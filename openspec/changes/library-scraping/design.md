@@ -194,7 +194,12 @@ file directly in it is empty and is neither visited nor reported. A
 directory named for no system the frontend knows has no extension list, so
 any regular file directly in it makes it a folder; it is not fetched, gets
 no outcome, and is only noted by status (D1). Discovery only decides which
-folders exist: Skyscraper's own scan of `-i` handles the files inside. The
+folders exist: Skyscraper's own scan of `-i` handles the files inside, and
+every Skyscraper run passes the folder's frontend extension list with
+`--addext` so that scan admits every extension the frontend lists, not only
+Skyscraper's default formats for the platform. A folder the session account
+cannot list is not skipped: it is a mapped folder whose fetch failed, so it
+costs that folder alone. The
 extension list that decides what is a ROM file comes from the
 frontend's bundled systems document
 (`${pkgs.es-de}/share/es-de/resources/systems/linux/es_systems.xml`), overridden per system by the rendered custom systems
@@ -257,11 +262,13 @@ Per folder:
 
     Skyscraper -p <platform> -s screenscraper -c <config> \
       -i /data/roms/<folder> -d /data/cache/skyscraper/<folder> \
+      --addext "<frontend extensions>" \
       --flags unattend,onlymissing,videos,manuals
 
 Credentials are checked before anything is contacted: a config file that is
 missing, unreadable, or still holds the committed placeholder makes the run
-`refused`. One folder failing does not stop the rest. Region priority is US,
+`refused`. One folder failing does not stop the rest, whether the scraper
+exits non-zero, cannot be started, or the folder cannot be listed. Region priority is US,
 EU, JP and the language is English, from the config file. The thread count is
 an option defaulting to 1, the free account tier.
 
@@ -294,7 +301,7 @@ one, and runs
 
     Skyscraper -p <platform> -f esde -c <config> \
       -i /data/roms/<folder> -d /data/cache/skyscraper/<folder> \
-      -g <workdir> -o /data/media/<folder> \
+      -g <workdir> -o /data/media/<folder> --addext "<frontend extensions>" \
       --flags unattend,skipped,videos,manuals,<every skipexisting flag>
 
 Skyscraper reads the previous gamelist it preserves tags from out of the `-g`
@@ -317,6 +324,30 @@ not Skyscraper owns the live file.
 `skipped` keeps an entry for every ROM the cache holds nothing for, so the
 tags ES-DE stored on such a game survive regeneration instead of being
 dropped with the entry.
+
+The wrapper does not rely on Skyscraper alone for that preservation. Before
+the run it parses the copied previous gamelist; after a zero exit it
+requires that Skyscraper wrote a new `gamelist.xml` (a changed file, with a
+`gameList` root) and merges the previous file into it before the rename:
+for each game present in both, matched by its path relative to the folder,
+every family field the frontend stores (favorite, hidden, kid game, last
+played, play count, sort name, alternative emulator, completed, broken,
+controller, collection sort name, and the hide-metadata, no-game-count and
+no-multiscrape flags) is taken from the previous entry; a game the previous file held and the output omits is carried over
+whole; and a ROM file with no entry at all gets a minimal entry. A duplicate
+path in the output, an output that does not parse, or the limit expiring
+during the merge is `generation-failed`, and nothing is renamed.
+
+A live gamelist that does not parse, or whose root is not `gameList`, is
+never replaced: the folder records `generation-failed` without running the
+scraper, the file is left byte-identical, and the journal line names the
+folder, says its gamelist is unreadable, and says to repair it or move it
+aside. The folder leaves the pending set as any failed folder does, and
+status reports its gamelist as unreadable. This is deliberate: a damaged
+file may still hold family metadata worth recovering by hand, and
+generation cannot tell that apart from a file safe to discard. Moving the
+file aside and marking the folder for another fetch is the recovery; the
+next generation then starts from an empty previous gamelist.
 
 Generation takes the lock D3 describes, without waiting. If a fetch holds it,
 the program does nothing that start: the pending set is left exactly as it
@@ -472,7 +503,9 @@ those values so the refusal leg exercises the actual placeholder check.
 A `library` reporter registered through `emubox.status.reporters`: per
 folder the ROM file count, gamelist entry count, unscraped count (ROM files
 whose gamelist entry carries no description or that have no entry, as D1
-defines it, so a `skipped` entry counts) and an `unmapped` note or a note
+defines it, so a `skipped` entry counts; an entry is matched to a ROM file by
+its path relative to the folder, so a nested entry with the same file name
+does not describe a top-level ROM) and an `unmapped` note or a note
 that the frontend knows no system by that name (D1); then the last run's
 result and time, folders whose last outcome was `fetch-failed` or
 `generation-failed`, and whether anything is pending. A ROM file is what D1
@@ -488,7 +521,11 @@ gamelists, needs no privilege, and bounds its output like the other
 reporters. All filesystem reads run in a worker with a 45-second whole-scan deadline,
 including run records, pending state, discovery, directory reads and
 gamelist parsing. Records are read first so they can be returned even if
-counting stalls; an unavailable record is identified as unavailable. The parent
+counting stalls; an unavailable record is identified as unavailable. The run
+record and the pending file are read independently, and a record that is
+unreadable or not JSON marks only itself unavailable: pending state and
+folder counts are still reported. A folder the reporter cannot list is shown
+with counts unavailable while the other folders are counted. The parent
 retains completed folder results, stops the worker on expiry without an
 unbounded wait, and returns within 50 seconds including reporting and
 cleanup. Incomplete counts are labelled "counts unavailable" rather than
@@ -585,23 +622,35 @@ later; product requirements for visible progress and reliable skips are unchange
   FreeImage permission, patches and vulnerability list, and update its
   acceptance rationale in the flake and packages spec. CI detects build
   regressions; it does not make image decoding safe.
-
-- [Ending ES-DE from a child may skip its own gamelist write] → probe whether
+- [Exit 75 may not survive the real `timeout`, cage and foot chain] ->
+  manual hardware acceptance checks it with exit 0 and missing-executable
+  controls. Until then it is an unverified runtime dependency; a lost 75
+  falls back to failure cleanup, which finds the claim still held by the
+  fetch and leaves pending state alone (D6).
+- [After the outer deadline kills the window, the generation program may
+  outlive `timeout` briefly] -> under the real foot it runs in foot's own
+  terminal session, outside `timeout`'s process group, and ends on the
+  hangup that follows, while its Skyscraper child still holds the inherited
+  claim. Failure cleanup therefore retries the claim for up to three seconds
+  before deferring; a longer straggler only defers cleanup, which keeps the
+  folders pending for the next start. Hardware acceptance records whether
+  the retry suffices.
+- [Ending ES-DE from a child may skip its own gamelist write] -> probe whether
   SIGTERM to `es-de` is treated as a normal quit; if not, signal its `cage`
   after ES-DE's launch wrapper has returned. The Tools system's own play
   count is the only data at stake.
 - [ES-DE may refuse a custom system whose path is a read-only store
-  directory outside the ROM directory] → fallback: a tmpfiles-managed
+  directory outside the ROM directory] -> fallback: a tmpfiles-managed
   directory of symlinks under `/data/roms`.
 - [Skyscraper's first run deploys resource files into `~/.skyscraper` from
-  its store prefix; with `-c` elsewhere this may behave differently] → the VM
+  its store prefix; with `-c` elsewhere this may behave differently] -> the VM
   test's first run is a first run; the unit under test is the real binary.
-- [A long first scrape over SSH dies with the connection] → accepted: the
+- [A long first scrape over SSH dies with the connection] -> accepted: the
   same command resumes it, and the Tools entry runs on the box.
 - [ROMs ScreenScraper does not know are asked about again on every run] →
   accepted for a manual trigger; the status section names them so the admin
   can rename or remove them.
-- [A household member can start a scrape] → accepted: it spends quota and
+- [A household member can start a scrape] -> accepted: it spends quota and
   idle-priority CPU, and ends with a frontend restart they asked for. It also
   holds the display: the scrape's progress is what the TV shows until the
   scrape ends, and there is no way back to the frontend before then. A first

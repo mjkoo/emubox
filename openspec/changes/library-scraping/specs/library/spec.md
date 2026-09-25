@@ -205,6 +205,10 @@ to the bounded failure-cleanup exceptions below; newer fetches remain pending.
 - **WHEN** the session ends after a folder's live gamelist has been replaced and before the pending set has been rewritten
 - **THEN** the live gamelist is the completed new one, the folder is still pending, and the next start generates it again with the same result
 
+#### Scenario: An unreadable gamelist is left alone
+- **WHEN** a folder is pending and its live gamelist does not parse or has no `gameList` root
+- **THEN** that gamelist is byte-identical afterwards, no scraper runs for the folder, its outcome is `generation-failed`, the journal line names the folder and says its gamelist is unreadable, and the folder leaves the pending set
+
 #### Scenario: Nothing pending
 - **WHEN** no folder is pending and the session is about to launch the frontend
 - **THEN** no generation runs and no gamelist is modified

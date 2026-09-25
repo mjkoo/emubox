@@ -890,7 +890,10 @@ in
           machine.succeed(f"chown -R player:player {base}")
           machine.succeed(player("${pkgs.emubox-library}/bin/emubox-library-generate " + f"--config {base}/library.json"))
           root = ET.fromstring(machine.succeed(f"cat {base}/gamelists/n3ds/gamelist.xml"))
-          entries = {entry.findtext("path").removeprefix("./"): entry for entry in root.findall("game")}
+          entries = {
+              entry.findtext("path").removeprefix(base + "/roms/n3ds/").removeprefix("./"): entry
+              for entry in root.findall("game")
+          }
           assert set(entries) == {"cached.3ds", "uncached.cxi", "nested/cached.3ds"}, entries
           for name, count in (("cached.3ds", "7"), ("uncached.cxi", "8"), ("nested/cached.3ds", "9")):
               assert entries[name].findtext("favorite") == "true"

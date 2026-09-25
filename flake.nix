@@ -209,19 +209,6 @@
             inherit self;
             pkgs = pkgsFor system;
           };
-          perSystem.library-source-contracts =
-            (pkgsFor system).runCommand "emubox-library-source-contracts"
-              { nativeBuildInputs = [ (pkgsFor system).python3 ]; }
-              ''
-                python3 ${./tests/library-source-contracts.py} \
-                  --skyscraper-source ${hostPkgs.skyscraper.src} \
-                  --esde-source ${hostPkgs.es-de.src} \
-                  --nixpkgs-source ${nixpkgs} \
-                  --platform-map ${host.config.environment.etc."emubox/library-platforms.json".source} \
-                  --vectors ${perSystem.emubox-library}/lib/emubox-library/vectors.json
-                touch "$out"
-              '';
-
           # The host configuration extended with the test module: the VM
           # test installs and boots its toplevel, and the closure check greps
           # that same toplevel, so a test override reaches both.
@@ -231,6 +218,8 @@
           # nixpkgsConfig and overlay included.
           hostOnly = {
             toplevel = self.nixosConfigurations.emubox.config.system.build.toplevel;
+            # Custom system fragments merge into one document, and the
+            # session carries a pre-frontend step only when a module sets one.
             custom-systems = import ./tests/custom-systems.nix {
               inherit self;
               pkgs = hostPkgs;
@@ -244,18 +233,40 @@
             # The live round trip between the frontend and Plasma, including
             # refusal paths and teardown of the old graphical session.
             mode = hostPkgs.testers.runNixOSTest (import ./tests/mode.nix { inherit self; });
-            # Nonvisual scraper and library integration assertions.
-            # Display and frontend interaction are checked on hardware.
+            # The bundled systems document the library reads its extension
+            # lists from exists at the path the module passes.
             library-resources = hostPkgs.runCommand "emubox-library-resources" { } ''
               test -f ${hostPkgs.es-de}/share/es-de/resources/systems/linux/es_systems.xml
               touch "$out"
             '';
+            # Every platform and scraper option the library passes exists in
+            # the pinned Skyscraper and ES-DE sources. Host-only because those
+            # sources are the host package set's pins.
+            library-source-contracts =
+              hostPkgs.runCommand "emubox-library-source-contracts" { nativeBuildInputs = [ hostPkgs.python3 ]; }
+                ''
+                  python3 ${./tests/library-source-contracts.py} \
+                    --skyscraper-source ${hostPkgs.skyscraper.src} \
+                    --esde-source ${hostPkgs.es-de.src} \
+                    --nixpkgs-source ${nixpkgs} \
+                    --platform-map ${host.config.environment.etc."emubox/library-platforms.json".source} \
+                    --vectors ${hostPkgs.emubox-library}/lib/emubox-library/vectors.json
+                  touch "$out"
+                '';
+            # Nonvisual scraper and library integration assertions.
+            # Display and frontend interaction are checked on hardware.
             library = hostPkgs.testers.runNixOSTest (import ./tests/library.nix { inherit self; });
             # The host's software modules as a plain node with fixture
             # controller ports and fixture pad identities: the port-to-player
             # mapping, the session hint, the owned controller keys and the
             # status aggregation.
             controllers = hostPkgs.testers.runNixOSTest (import ./tests/controllers.nix { inherit self; });
+            # The session loop's control flow run with stub processes: the
+            # crash count, requested restarts and the pre-frontend step.
+            session-restarts = import ./tests/session-restarts.nix {
+              inherit self;
+              pkgs = hostPkgs;
+            };
             # The kiosk session script on its own, because building it is
             # what runs its shellcheck: `writeShellApplication` does that in
             # its check phase, and nothing the admin's Mac can run reaches
@@ -265,10 +276,6 @@
             # CI, which is exactly what happened to the EXIT trap. Selected
             # by `providedSessions` rather than by position: the recovery
             # module puts Plasma's session package in the same list.
-            session-restarts = import ./tests/session-restarts.nix {
-              inherit self;
-              pkgs = hostPkgs;
-            };
             session =
               let
                 ours = lib.filter (

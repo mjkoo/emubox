@@ -891,7 +891,7 @@ in
           machine.succeed(player("${pkgs.emubox-library}/bin/emubox-library-generate " + f"--config {base}/library.json"))
           root = ET.fromstring(machine.succeed(f"cat {base}/gamelists/n3ds/gamelist.xml"))
           entries = {
-              entry.findtext("path").removeprefix(base + "/roms/n3ds/").removeprefix("./"): entry
+              (entry.findtext("path") or "").removeprefix(base + "/roms/n3ds/").removeprefix("./"): entry
               for entry in root.findall("game")
           }
           assert set(entries) == {"cached.3ds", "uncached.cxi", "nested/cached.3ds"}, entries

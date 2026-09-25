@@ -118,6 +118,9 @@ in
       elif [ -n "$batch" ] && [ "$batch" != '{}' ]; then
         generation_rc=0
         ${pkgs.coreutils}/bin/timeout --kill-after=30 2100 cage -s -- ${pkgs.foot}/bin/foot -e emubox-library-generate || generation_rc=$?
+        if [ "$generation_rc" -ne 0 ]; then
+          printf 'library generation window exited with %s\n' "$generation_rc" | systemd-cat -t emubox-library || true
+        fi
         if [ "$generation_rc" -ne 75 ]; then
           if ! ${pkgs.coreutils}/bin/timeout --signal=KILL 5 emubox-library-generate cleanup --batch "$batch"; then
             printf 'library failure cleanup deferred; starting frontend\n' | systemd-cat -t emubox-library || true

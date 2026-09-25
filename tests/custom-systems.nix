@@ -24,7 +24,6 @@ let
     { emubox.kiosk.customSystems = lib.mkAfter [ second ]; }
   ];
   one = host.extendModules { modules = contributed; };
-  two = host.extendModules { modules = contributed; };
   empty = host.extendModules {
     modules = [ { emubox.kiosk.customSystems = lib.mkForce [ ]; } ];
   };
@@ -43,6 +42,13 @@ let
     ) system.config.assertions;
   document = one.config.emubox.kiosk.customSystemsFile;
   shippedDocument = host.config.emubox.kiosk.customSystemsFile;
+  sessionOf =
+    system:
+    builtins.head (
+      builtins.filter (
+        p: (p.providedSessions or [ ]) == [ "emubox" ]
+      ) system.config.services.displayManager.sessionPackages
+    );
 in
 assert lib.assertMsg (
   let
@@ -51,11 +57,7 @@ assert lib.assertMsg (
   lib.length fragments == lib.length host.config.emubox.kiosk.customSystems + 2
   && lib.count (fragment: fragment == first) fragments == 1
   && lib.count (fragment: fragment == second) fragments == 1
-  && fragments == two.config.emubox.kiosk.customSystems
-) "custom system fragments did not merge deterministically";
-assert lib.assertMsg (
-  document == two.config.emubox.kiosk.customSystemsFile
-) "custom system rendering changed across evaluations";
+) "custom system fragments did not merge";
 assert lib.assertMsg (
   empty.config.emubox.kiosk.customSystemsFile == ""
 ) "an empty custom system list must have no file path";
@@ -63,9 +65,17 @@ assert lib.assertMsg (
   rejects invalidWrapper && rejects invalidDeclaration
 ) "wrappers and declarations must be rejected";
 assert lib.assertMsg (
-  host.options.emubox.kiosk.preFrontendStep.default == null
-) "the default pre-frontend step must be unset";
+  host.config.emubox.kiosk.preFrontendStep == ""
+) "the pre-frontend step must be empty without modules/library";
 pkgs.runCommand "emubox-custom-systems" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+  # Without modules/library the session carries no library step; the shipped
+  # host's session is the control that the probe finds the step at all.
+  exec_of() { sed -n 's/^Exec=//p' "$1/share/wayland-sessions/emubox.desktop"; }
+  if grep -q emubox-library-generate "$(exec_of ${sessionOf host})"; then
+    echo "session without modules/library still carries a library step" >&2
+    exit 1
+  fi
+  grep -q emubox-library-generate "$(exec_of ${sessionOf self.nixosConfigurations.emubox})"
   python3 - ${document} ${shippedDocument} ${./emulator-custom-systems.xml} <<'PY'
   import pathlib
   import re

@@ -116,8 +116,9 @@ let
       ids=$(${pkgs.procps}/bin/pgrep "$@") || exit $?
       mode=$(cat /run/emubox-library-test/pgrep-mode 2>/dev/null || true)
       if [ "$mode" = lose-target ]; then
-        kill -TERM $ids
-        ${pkgs.coreutils}/bin/sleep 0.2
+        ${pkgs.coreutils}/bin/true &
+        ids=$!
+        wait "$ids"
       fi
       printf '%s\n' "$ids"
       SH
@@ -312,6 +313,14 @@ in
       def requested_restart():
           machine.succeed("touch /run/emubox-library-test/emubox-frontend-restart")
           machine.succeed("pkill -TERM -x es-de")
+
+      def library_journal():
+          return machine.succeed("journalctl -t emubox-library --no-pager -o cat")
+
+      def new_library_journal(before):
+          after = library_journal()
+          assert after.startswith(before), "the library journal was rewritten"
+          return after[len(before):].lower()
 
       def gamelist_games(folder):
           root = ET.fromstring(machine.succeed(
@@ -525,6 +534,7 @@ in
           refused = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert refused["result"] == "refused", refused
           assert "placeholder" in refused["cause"].lower(), refused
+          assert refused["folders"] == json.loads(before)["folders"], (refused, before)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == pending_before
           write_library_config(good_config)
 
@@ -533,13 +543,14 @@ in
           machine.succeed("printf 'psx\\n' > /data/cache/skyscraper/pending")
           machine.succeed("printf '{\"psx\":\"unreadable-cache\"}\\n' > /data/cache/skyscraper/revisions.json")
           machine.succeed("chown player:player /data/cache/skyscraper/{pending,revisions.json}")
+          journal_before = library_journal()
           requested_restart()
           wait_frontend_count(3)
           failed = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert failed["folders"]["psx"] == "generation-failed", failed
           assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
-          journal = machine.succeed("journalctl -t emubox-library --no-pager")
-          assert "psx" in journal and "failed" in journal.lower(), journal
+          journal = new_library_journal(journal_before)
+          assert "generation failed for psx" in journal, journal
           machine.succeed("pgrep -x es-de")
 
       with subtest("Status is equally readable as root and admin"):
@@ -565,6 +576,7 @@ in
           machine.succeed("printf 'fail\\n' > /run/emubox-library-test/window-mode")
           generation_count = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
           direct_count = direct_generation_count()
+          journal_before = library_journal()
           requested_restart()
           wait_frontend_count(4)
           assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == previous
@@ -573,7 +585,9 @@ in
           assert direct_generation_count() == direct_count
           failed = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert failed["folders"]["nes"] == "generation-failed", failed
-          assert "progress window" in machine.succeed("journalctl -t emubox-library --no-pager").lower()
+          journal = new_library_journal(journal_before)
+          assert "generation window exited with 42" in journal, journal
+          assert "progress window" in journal, journal
           machine.succeed("rm /run/emubox-library-test/window-mode")
 
       with subtest("A hung progress window reaches the shortened external deadline"):
@@ -584,6 +598,7 @@ in
           machine.succeed("printf 'hang\\n' > /run/emubox-library-test/window-mode")
           generation_count = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
           direct_count = direct_generation_count()
+          journal_before = library_journal()
           requested_restart()
           wait_frontend_count(5)
           assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == previous
@@ -593,7 +608,9 @@ in
           machine.succeed("! kill -0 $(cat /run/emubox-library-test/window-pid) 2>/dev/null")
           failed = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert failed["folders"]["nes"] == "generation-failed", failed
-          assert "progress window" in machine.succeed("journalctl -t emubox-library --no-pager").lower()
+          journal = new_library_journal(journal_before)
+          assert "generation window exited with 124" in journal, journal
+          assert "progress window" in journal, journal
           machine.succeed("rm /run/emubox-library-test/window-mode")
 
       with subtest("A fetch claim held at capture leaves pending unchanged"):
@@ -610,11 +627,13 @@ in
                                         "${pkgs.coreutils}/bin/touch /run/emubox-library-test/held; "
                                         "exec ${pkgs.coreutils}/bin/sleep 3600"))
           machine.wait_until_succeeds("test -e /run/emubox-library-test/held", timeout=30)
+          journal_before = library_journal()
           requested_restart()
           wait_frontend_count(6)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == pending_before
           assert machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip() == window_before
-          assert "fetch was running" in machine.succeed("journalctl -t emubox-library --no-pager").lower()
+          journal = new_library_journal(journal_before)
+          assert "fetch was running" in journal, journal
           machine.succeed("systemctl stop emubox-library-lock-at-capture")
           requested_restart()
           wait_frontend_count(7)
@@ -628,6 +647,7 @@ in
           before = machine.succeed("cat /run/emubox-library-test/events")
           machine.succeed("rm -f /run/emubox-library-test/{before-child,allow-child,child-status,allow-return,held}")
           machine.succeed("printf 'handshake\\n' > /run/emubox-library-test/window-mode")
+          journal_before = library_journal()
           requested_restart()
           machine.wait_until_succeeds("test -e /run/emubox-library-test/before-child")
           machine.succeed("systemd-run --unit=emubox-library-lock-in-window --property=User=player "
@@ -647,6 +667,9 @@ in
           new_events = after[len(before):].splitlines()
           assert not any(event.startswith("library cleanup") for event in new_events), new_events
           assert machine.succeed("cat /data/cache/skyscraper/pending") == pending_before
+          journal = new_library_journal(journal_before)
+          assert "generation window exited with 75" in journal, journal
+          assert "cleanup deferred" not in journal, journal
           machine.succeed("rm /run/emubox-library-test/window-mode")
 
           # The negative control runs cleanup against a copy of the same
@@ -665,11 +688,13 @@ in
           machine.succeed("printf 'capture-hang\\n' > /run/emubox-library-test/command-mode")
           before = machine.succeed("cat /data/cache/skyscraper/pending")
           windows = machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip()
+          journal_before = library_journal()
           requested_restart()
           wait_frontend_count(9)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == before
           assert machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip() == windows
-          assert "batch capture skipped" in machine.succeed("journalctl -t emubox-library --no-pager").lower()
+          journal = new_library_journal(journal_before)
+          assert "batch capture skipped" in journal, journal
           machine.succeed("rm /run/emubox-library-test/command-mode")
 
       with subtest("A stalled cleanup is bounded and leaves pending intact"):
@@ -677,17 +702,20 @@ in
           live = machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml")
           machine.succeed("printf 'fail\\n' > /run/emubox-library-test/window-mode")
           machine.succeed("printf 'cleanup-hang\\n' > /run/emubox-library-test/command-mode")
+          journal_before = library_journal()
           requested_restart()
           wait_frontend_count(10)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == before
           assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == live
-          assert "cleanup deferred" in machine.succeed("journalctl -t emubox-library --no-pager").lower()
+          journal = new_library_journal(journal_before)
+          assert "cleanup deferred" in journal, journal
           machine.succeed("rm /run/emubox-library-test/{window-mode,command-mode}")
 
       with subtest("Cleanup contention cannot consume a newer pending batch"):
           before = machine.succeed("cat /data/cache/skyscraper/pending")
           machine.succeed("rm -f /run/emubox-library-test/{before-fail,allow-fail,held}")
           machine.succeed("printf 'fail-handshake\\n' > /run/emubox-library-test/window-mode")
+          journal_before = library_journal()
           requested_restart()
           machine.wait_until_succeeds("test -e /run/emubox-library-test/before-fail")
           machine.succeed("systemd-run --unit=emubox-library-lock-at-cleanup --property=User=player "
@@ -700,7 +728,8 @@ in
           machine.succeed("touch /run/emubox-library-test/allow-fail")
           wait_frontend_count(11)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == before
-          assert "cleanup deferred" in machine.succeed("journalctl -t emubox-library --no-pager").lower()
+          journal = new_library_journal(journal_before)
+          assert "cleanup deferred" in journal, journal
           machine.succeed("systemctl stop emubox-library-lock-at-cleanup")
           machine.succeed("rm /run/emubox-library-test/window-mode")
 
@@ -725,6 +754,7 @@ in
           before = machine.succeed("cat /data/cache/skyscraper/pending")
           machine.succeed("rm -f /run/emubox-library-test/{before-fail,allow-fail}")
           machine.succeed("printf 'fail-handshake\\n' > /run/emubox-library-test/window-mode")
+          journal_before = library_journal()
           requested_restart()
           machine.wait_until_succeeds("test -e /run/emubox-library-test/before-fail")
           machine.succeed("chmod 0555 /data/cache/skyscraper")
@@ -732,7 +762,8 @@ in
           wait_frontend_count(13)
           machine.succeed("chmod 0755 /data/cache/skyscraper")
           assert machine.succeed("cat /data/cache/skyscraper/pending") == before
-          assert "cleanup deferred" in machine.succeed("journalctl -t emubox-library --no-pager").lower()
+          journal = new_library_journal(journal_before)
+          assert "cleanup deferred" in journal, journal
           machine.succeed("rm /run/emubox-library-test/window-mode")
 
       with subtest("A completed folder keeps its replacement when later generation is interrupted"):
@@ -817,10 +848,11 @@ in
               + shlex.quote(interpreter) + " " + shlex.quote(entry)
           ))
           assert status != 0, output
-          wait_frontend_count(25)
           machine.succeed("test ! -e /run/emubox-library-test/emubox-frontend-restart")
+          machine.succeed("rm /run/emubox-library-test/pgrep-mode")
+          machine.succeed("pkill -TERM -x es-de")
+          wait_frontend_count(25)
           journal = machine.succeed("journalctl -u emubox-library-test-session --no-pager")
           assert "crash 2 of 3" in journal, journal
-          machine.succeed("rm /run/emubox-library-test/pgrep-mode")
     '';
 }

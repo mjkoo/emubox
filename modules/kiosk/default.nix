@@ -207,7 +207,7 @@ let
         # log into is the right destination, because no relaunch of the same
         # call would do any better.
         emubox-prepare ${cfg.ownedValuesFile} "${customSystemsPath}"
-        ${lib.optionalString (cfg.preFrontendStep != null) cfg.preFrontendStep}
+        ${cfg.preFrontendStep}
 
         # The loop needs the run's length, not its status, but the status is
         # captured rather than discarded with `|| true` so that `set -e` does
@@ -386,9 +386,9 @@ in
     };
 
     preFrontendStep = lib.mkOption {
-      type = lib.types.nullOr lib.types.lines;
-      default = null;
-      description = "An optional shell step to run before each frontend launch.";
+      type = lib.types.lines;
+      default = "";
+      description = "Shell step text to run before each frontend launch; empty runs nothing.";
     };
 
     appdataDir = lib.mkOption {

@@ -1377,6 +1377,35 @@ def test_deadline_still_applies_after_scraper_closes_output(config: library.Conf
         os.close(claim)
 
 
+def test_termination_handler_raises_once_per_run() -> None:
+    library._arm_interrupt()
+    with pytest.raises(library.Interrupted):
+        library._interrupt(signal.SIGTERM, None)
+    assert library._interrupt(signal.SIGHUP, None) is None
+    assert library._interrupt(signal.SIGINT, None) is None
+
+
+def test_each_scraper_run_rearms_the_termination_handler(config: library.Config) -> None:
+    scraper = config.cache_root.parent / "self-terminating"
+    scraper.write_text(
+        f"#!{sys.executable}\n"
+        "import os, signal, time\n"
+        "os.kill(os.getppid(), signal.SIGTERM)\n"
+        "time.sleep(30)\n"
+    )
+    scraper.chmod(0o755)
+    config = replace(config, skyscraper=str(scraper))
+    claim = held_lock(config)
+    try:
+        for _ in range(2):
+            start = time.monotonic()
+            with pytest.raises(library.Interrupted):
+                library.run_skyscraper(config, [], claim, start + 20)
+            assert time.monotonic() - start < 10
+    finally:
+        os.close(claim)
+
+
 def test_descendant_is_ended_after_scraper_leader_exits(config: library.Config) -> None:
     marker = config.cache_root.parent / "descendant"
     scraper = config.cache_root.parent / "forking-scraper"

@@ -259,8 +259,20 @@ class Interrupted(Exception):
         self.number = number
 
 
+_interrupt_armed = True
+
+
+def _arm_interrupt() -> None:
+    global _interrupt_armed
+    _interrupt_armed = True
+
+
 def _interrupt(number: int, _frame: object) -> None:
-    raise Interrupted(number)
+    # A later signal must not unwind the cleanup the first one started.
+    global _interrupt_armed
+    if _interrupt_armed:
+        _interrupt_armed = False
+        raise Interrupted(number)
 
 
 def run_skyscraper(
@@ -271,6 +283,7 @@ def run_skyscraper(
     environment = dict(os.environ, HOME=account.pw_dir)
     signals = {signal.SIGTERM, signal.SIGINT, signal.SIGHUP}
     old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, signals)
+    _arm_interrupt()
     previous_term = signal.signal(signal.SIGTERM, _interrupt)
     previous_int = signal.signal(signal.SIGINT, _interrupt)
     previous_hup = signal.signal(signal.SIGHUP, _interrupt)
@@ -293,10 +306,8 @@ def run_skyscraper(
             while selector.get_map():
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
-                    terminate_group(child)
                     return 124, bytes(output)
                 if not selector.select(remaining):
-                    terminate_group(child)
                     return 124, bytes(output)
                 chunk = os.read(child.stdout.fileno(), 65536)
                 if not chunk:

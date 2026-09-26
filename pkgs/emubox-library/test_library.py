@@ -2179,3 +2179,19 @@ def test_scrape_names_a_failed_priority_change_in_one_line(
     error = capsys.readouterr().err
     assert error.count("\n") == 1 and "priority" in error, error
     assert library.read_pending(config) == []
+
+
+def test_interruption_keeps_its_status_when_the_record_cannot_be_written(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    game(config, "nes", "a.nes")
+
+    def invoke(*_args: object) -> tuple[int, bytes]:
+        raise library.Interrupted(signal.SIGTERM)
+
+    def fail(path: Path, content: bytes) -> None:
+        raise PermissionError(f"read-only {path}")
+
+    monkeypatch.setattr(library, "atomic_write", fail)
+    with pytest.raises(library.Interrupted):
+        library.scrape(config, invoke)

@@ -510,8 +510,10 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
             previous = read_mapping(config.record_path).get("folders")
             carried = dict(previous) if isinstance(previous, dict) else {}
             carried.update(outcomes)
-            atomic_write(config.log_path, bytes(transcript))
-            write_record(config, "interrupted", carried)
+            # A failed write must not replace the interruption's exit status.
+            with contextlib.suppress(OSError):
+                atomic_write(config.log_path, bytes(transcript))
+                write_record(config, "interrupted", carried)
             raise
         fetched = sum(value == "fetched" for value in outcomes.values())
         failed = sum(value == "fetch-failed" for value in outcomes.values())

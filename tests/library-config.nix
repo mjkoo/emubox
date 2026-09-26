@@ -76,6 +76,12 @@ assert lib.assertMsg (
   (lib.head reporters).command == [ "${host.pkgs.emubox-library}/bin/emubox-library-report" ]
 ) "the library reporter runs emubox-library-report";
 assert lib.assertMsg (
+  cfg.users.users.player.extraGroups == without.users.users.player.extraGroups
+) "the library adds no group to the player account";
+assert lib.assertMsg (
+  cfg.users.users.player.group == without.users.users.player.group
+) "the library leaves the player account's primary group alone";
+assert lib.assertMsg (
   cfg.security.sudo.configFile == without.security.sudo.configFile
 ) "the library adds no sudo rule";
 assert lib.assertMsg (

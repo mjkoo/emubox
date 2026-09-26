@@ -29,7 +29,6 @@ from typing import Any
 PER_FOLDER_SECONDS = 600
 ALL_FOLDERS_SECONDS = 1800
 REPORT_SECONDS = 45
-CLEANUP_CLAIM_SECONDS = 3.0
 CONFIG_PATH = Path("/etc/emubox/library.json")
 VECTORS_PATH = Path(__file__).with_name("vectors.json")
 IONICE = "@IONICE@"
@@ -643,12 +642,7 @@ def capture(config: Config) -> tuple[int, dict[str, str | None]]:
 def cleanup(config: Config, batch: dict[str, str | None]) -> int:
     if not correct_account(config):
         return 1
-    # A generation program the window's deadline killed can outlive it briefly.
-    end = time.monotonic() + CLEANUP_CLAIM_SECONDS
     claim = lock(config)
-    while claim is None and time.monotonic() < end:
-        time.sleep(0.1)
-        claim = lock(config)
     if claim is None:
         journal(config, "Generation failure cleanup deferred; a fetch was running")
         return 1

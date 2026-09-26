@@ -54,10 +54,10 @@ printf 'status=%s\n' "$?"
 pgrep -a -u player sleep
 ```
 
-Record the status and whether the `sleep` survives `timeout` and for how
-long. Failure cleanup retries the library claim for three seconds; a child
-that outlives that retry only defers cleanup to the next start, which keeps
-the folders pending. Record which of the two happened.
+Record the status, whether the `sleep` survives `timeout`, and how long it
+lives after the status is printed. Failure cleanup takes the library claim
+without waiting, so a surviving generation program only defers cleanup: its
+folders stay pending and the next start opens one more window for them.
 
 ## Frontend launch and return
 

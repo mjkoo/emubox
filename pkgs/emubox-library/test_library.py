@@ -10,7 +10,6 @@ import signal
 import stat
 import subprocess
 import sys
-import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, replace
@@ -1711,42 +1710,6 @@ def test_journal_never_raises_when_systemd_cat_is_missing_or_hangs(
     started = time.monotonic()
     library.journal(replace(config, systemd_cat=str(hang)), "message")
     assert time.monotonic() - started < 10
-
-
-def pending_batch(config: library.Config) -> dict[str, str | None]:
-    library.write_pending(config, ["nes"])
-    library.atomic_json(config.revision_path, {"nes": "one"})
-    return {"nes": "one"}
-
-
-def test_cleanup_waits_briefly_for_a_claim_being_released(
-    config: library.Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(library, "CLEANUP_CLAIM_SECONDS", 3.0)
-    batch = pending_batch(config)
-    claim = held_lock(config)
-    timer = threading.Timer(0.5, os.close, (claim,))
-    timer.start()
-    assert library.cleanup(config, batch) == 0
-    timer.join()
-    assert library.read_pending(config) == []
-    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
-
-
-def test_cleanup_defers_when_the_claim_stays_held(
-    config: library.Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(library, "CLEANUP_CLAIM_SECONDS", 0.5)
-    batch = pending_batch(config)
-    claim = held_lock(config)
-    try:
-        started = time.monotonic()
-        assert library.cleanup(config, batch) == 1
-        assert 0.4 < time.monotonic() - started < 3
-    finally:
-        os.close(claim)
-    assert library.read_pending(config) == ["nes"]
-    assert not config.record_path.exists()
 
 
 def test_report_matches_gamelist_entries_by_relative_path(config: library.Config) -> None:

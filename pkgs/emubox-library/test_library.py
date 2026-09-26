@@ -1045,6 +1045,32 @@ def test_report_exact_record_outcomes(
     assert library.report(config, 2) == (0, expected)
 
 
+@pytest.mark.parametrize("status", [0, 1])
+def test_generation_without_a_run_record_invents_no_run_result(
+    config: library.Config, status: int
+) -> None:
+    game(config, "nes", "a.nes")
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text(
+            "<gameList><game><path>./a.nes</path><desc>Art</desc></game></gameList>"
+        )
+        return status, b""
+
+    assert library.generate(config, invoke) == 0
+    outcome = "generated" if status == 0 else "generation-failed"
+    assert json.loads(config.record_path.read_text()) == {"folders": {"nes": outcome}}
+    code, output = library.report(config, 5)
+    assert code == 0
+    assert "complete" not in output
+    assert output.endswith(
+        "No scrape has run\n"
+        + ("" if status == 0 else "Failed folders: nes\n")
+        + "Generation pending: none\n"
+    )
+
+
 def test_report_unmapped_folder_without_failures(config: library.Config) -> None:
     game(config, "genesis", "a.md")
     library.atomic_json(

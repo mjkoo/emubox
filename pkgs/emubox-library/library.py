@@ -467,10 +467,8 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
 
 
 def _record_generation(config: Config, folder: str, outcome: str, reason: str = "") -> None:
-    record: dict[str, Any] = read_mapping(config.record_path) or {
-        "result": "complete",
-        "time": timestamp(),
-    }
+    # Without an earlier record there is no run result to report, only outcomes.
+    record: dict[str, Any] = read_mapping(config.record_path)
     folders = record.get("folders")
     if not isinstance(folders, dict):
         folders = record["folders"] = {}
@@ -823,7 +821,9 @@ def report(config: Config | Path, deadline_seconds: float = REPORT_SECONDS) -> t
         lines.append("No scrape has run" if record_loaded else "Run record unavailable")
     else:
         lines.append(
-            f"Last run: {record.get('result', 'unknown')} at {record.get('time', 'unknown time')}"
+            f"Last run: {record['result']} at {record.get('time', 'unknown time')}"
+            if "result" in record
+            else "No scrape has run"
         )
         outcomes = record.get("folders")
         failures = [

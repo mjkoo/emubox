@@ -213,12 +213,23 @@ def system_extensions(config: Config) -> dict[str, set[str]]:
     return result
 
 
+def _regular_file(entry: Path) -> bool:
+    """A regular file, or a symbolic link to one, as the frontend follows links."""
+    info = entry.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        try:
+            info = entry.stat()
+        except OSError:
+            # A broken or looping link names no ROM.
+            return False
+    return stat.S_ISREG(info.st_mode)
+
+
 def rom_files(directory: Path, extensions: set[str] | None) -> list[Path]:
     return sorted(
         entry
         for entry in directory.iterdir()
-        if stat.S_ISREG(entry.lstat().st_mode)
-        and (extensions is None or entry.suffix.casefold() in extensions)
+        if (extensions is None or entry.suffix.casefold() in extensions) and _regular_file(entry)
     )
 
 

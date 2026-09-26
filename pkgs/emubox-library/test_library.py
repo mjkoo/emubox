@@ -2253,3 +2253,39 @@ def test_interrupted_record_is_written_when_the_log_cannot_be(config: library.Co
     assert record["result"] == "interrupted"
     assert record["folders"] == {"nes": "fetched"}
     assert not config.log_path.exists()
+
+
+def test_linked_rom_counts_and_broken_or_directory_links_do_not(config: library.Config) -> None:
+    elsewhere = config.rom_root.parent / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "linked.nes").write_text("ROM")
+    (elsewhere / "folder.nes").mkdir()
+    nes = config.rom_root / "nes"
+    nes.mkdir(parents=True)
+    (nes / "linked.nes").symlink_to(elsewhere / "linked.nes")
+    (nes / "broken.nes").symlink_to(elsewhere / "missing.nes")
+    (nes / "directory.nes").symlink_to(elsewhere / "folder.nes")
+    psx = config.rom_root / "psx"
+    psx.mkdir()
+    (psx / "broken.cue").symlink_to(elsewhere / "missing.cue")
+    folders = library.discover(config, library.system_extensions(config))
+    assert folders == {"nes": [nes / "linked.nes"]}
+    status, output = library.report(config, 5)
+    assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
+    assert "psx" not in output
+
+
+def test_linked_rom_the_scraper_omits_gets_a_minimal_entry(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    (config.rom_root / "nes" / "alias.nes").symlink_to("a.nes")
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text(
+            "<gameList><game><path>./a.nes</path><desc>A</desc></game></gameList>"
+        )
+        return 0, b""
+
+    assert library.generate(config, invoke) == 0
+    live = ET.parse(config.gamelist_root / "nes" / "gamelist.xml").getroot()
+    assert [game.findtext("path") for game in live.findall("game")] == ["./a.nes", "./alias.nes"]

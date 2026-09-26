@@ -116,8 +116,8 @@ same meanings.
 | run result `complete` | Every mapped folder was `fetched`, including the case where there are none. |
 | run result `partial` | At least one `fetched` and at least one `fetch-failed`. |
 | run result `failed` | Folders were attempted and none was `fetched`. |
-| run result `interrupted` | A termination signal ended the run. The record keeps the outcomes of the folders the run finished and carries the previous record's outcomes for the rest, so status shows the run did not finish rather than an older run's result. |
-| run result `refused` | Nothing was attempted: wrong account, credentials unusable, or another run holds the lock. A credential refusal replaces the last-run record but carries the previous record's folder outcomes forward, since nothing was attempted that could change them; status therefore keeps naming earlier failures. |
+| run result `interrupted` | A termination signal ended the run. The record keeps the outcomes of the folders the run finished and carries the previous record's outcomes for the rest whose folders still exist, so status shows the run did not finish rather than an older run's result. |
+| run result `refused` | Nothing was attempted: wrong account, credentials unusable, or another run holds the lock. A credential refusal replaces the last-run record but carries the previous record's folder outcomes forward for folders that still exist, since nothing was attempted that could change them; status therefore keeps naming earlier failures. |
 | unscraped | A ROM file, as defined above, whose entry in its folder's gamelist carries no description, or that has no entry at all: a game the household can see in the frontend that lacks a description. |
 
 An empty folder, one with no ROM file directly in it, has no outcome: it is

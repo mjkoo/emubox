@@ -82,7 +82,8 @@ least one fetched and at least one failed; and `failed` when at least one
 was attempted and none fetched. A run prevented from attempting work by the
 account, credentials or concurrency checks is `refused`. A run ended by a
 termination signal SHALL record `interrupted`, keeping the outcomes of the
-folders it finished and the previous record's outcomes for the others. Only
+folders it finished and the previous record's outcomes for the others whose
+folders still exist. Only
 `complete` SHALL exit zero. The account refusal and concurrent-run refusal SHALL leave
 existing records unchanged as their requirements specify.
 
@@ -106,7 +107,7 @@ and SHALL leave the pending set unchanged.
 
 #### Scenario: Placeholder credentials
 - **WHEN** `emubox-scrape` runs as the session account with the committed placeholder credentials
-- **THEN** it exits non-zero naming the placeholder as the cause, the last-run record shows `refused` and keeps the previous record's folder outcomes, and the pending set is unchanged
+- **THEN** it exits non-zero naming the placeholder as the cause, the last-run record shows `refused` and keeps the previous record's folder outcomes for folders that still exist, and the pending set is unchanged
 
 ### Requirement: One run at a time
 While a run is in progress, a second `emubox-scrape` SHALL get the result

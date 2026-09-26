@@ -317,6 +317,14 @@ in
       def library_journal():
           return machine.succeed("journalctl -t emubox-library --no-pager -o cat")
 
+      def session_journal():
+          return machine.succeed("journalctl -u emubox-library-test-session --no-pager -o cat")
+
+      def new_session_journal(before):
+          after = session_journal()
+          assert after.startswith(before), "the session journal was rewritten"
+          return after[len(before):]
+
       def new_library_journal(before):
           after = library_journal()
           assert after.startswith(before), "the library journal was rewritten"
@@ -362,10 +370,16 @@ in
           file_mode = machine.succeed("stat -c '%G:%a' /data/roms/psx/owned.cue").strip()
           assert file_mode == "player:664", file_mode
           assert machine.succeed(player("cat /data/roms/psx/owned.cue")) == "ownership"
+          machine.succeed("runuser -u admin -- mkdir /data/roms/psx/sub")
+          machine.succeed("runuser -u admin -- sh -c 'printf nested > /data/roms/psx/sub/nested.cue'")
+          nested = machine.succeed("stat -c '%G' /data/roms/psx/sub /data/roms/psx/sub/nested.cue").split()
+          assert nested == ["player", "player"], nested
+          assert machine.succeed(player("cat /data/roms/psx/sub/nested.cue")) == "nested"
           machine.succeed(player("mkdir /data/roms/genesis"))
           assert machine.succeed("stat -c '%G' /data/roms/genesis").strip() == "player"
           machine.succeed("runuser -u admin -- sh -c 'printf inherited > /data/roms/genesis/admin.md'")
           assert machine.succeed(player("cat /data/roms/genesis/admin.md")) == "inherited"
+          assert machine.succeed("stat -c '%G' /data/roms/genesis/admin.md").strip() == "player"
 
       with subtest("A first local import deploys resources and populates cache"):
           machine.succeed("test ! -e /data/home/player/.skyscraper")
@@ -374,6 +388,11 @@ in
           machine.succeed("install -d -o player -g player /data/cache/skyscraper/probe-import/covers")
           machine.succeed("install -d -o player -g player /data/cache/skyscraper/probe-import/wheels")
           machine.succeed("install -d -o player -g player /data/cache/skyscraper/probe-import/textual")
+          for kind in ("screenshots", "videos", "manuals"):
+              machine.succeed(f"install -d -o player -g player /data/cache/skyscraper/probe-import/{kind}")
+          machine.succeed("install -o player -g player ${importImage} /data/cache/skyscraper/probe-import/screenshots/fixture.png")
+          machine.succeed("printf 'fixture video' > /data/cache/skyscraper/probe-import/videos/fixture.mp4")
+          machine.succeed("printf '%%PDF-1.4 fixture manual' > /data/cache/skyscraper/probe-import/manuals/fixture.pdf")
           machine.succeed("printf 'fixture rom' > /data/roms/nes/fixture.nes")
           machine.succeed("chown player:player /data/roms/nes/fixture.nes")
           machine.succeed("printf 'uncached rom' > /data/roms/nes/uncached.nes")
@@ -429,6 +448,8 @@ in
           assert fixture.findtext("desc") == "Imported fixture description"
           machine.succeed("test -n \"$(find /data/media/nes/covers -type f -name '*fixture*' -print -quit)\"")
           machine.succeed("test -n \"$(find /data/media/nes/marquees -type f -name '*fixture*' -print -quit)\"")
+          for kind in ("screenshots", "videos", "manuals"):
+              machine.succeed(f"test -n \"$(find /data/media/nes/{kind} -type f -name '*fixture*' -print -quit)\"")
           machine.succeed("test ! -e /data/media/nes/textures")
           machine.succeed("test ! -e /data/media/nes/wheels")
           machine.succeed("pgrep -x es-de")
@@ -503,9 +524,36 @@ in
           successful = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert successful["result"] == "complete", successful
           assert successful["folders"]["nes"] == "fetched", successful
-          assert "screenscraper" in machine.succeed("cat /run/emubox-library-test/fetches")
+          fetches = machine.succeed("cat /run/emubox-library-test/fetches")
+          assert "screenscraper" in fetches, fetches
+          assert "secret" not in fetches, fetches
           assert set(machine.succeed("cat /run/emubox-library-test/fetch-homes").splitlines()) == {"/data/home/player"}
           machine.succeed("test -f /data/home/player/.skyscraper/resources/boxfront.png")
+
+      with subtest("The production fetch vector writes only the scraper cache"):
+          # The real scraper runs the shipped vector with only the scraping
+          # module, its config and the cache swapped for the local import.
+          vectors = json.loads(machine.succeed(
+              "cat ${pkgs.emubox-library}/lib/emubox-library/vectors.json"
+          ))
+          values = {
+              "platform": "nes",
+              "config": "/data/cache/skyscraper/probe.ini",
+              "rom_dir": "/data/roms/nes",
+              "cache_dir": "/data/cache/library-outside/nes",
+              "extensions": ".nes",
+          }
+          argv = [part.format_map(values) for part in vectors["fetch"]]
+          argv[argv.index("screenscraper")] = "import"
+          machine.succeed("install -d -o player -g player /data/cache/library-outside")
+          snapshot = "find /data/es-de/gamelists /data/media -printf '%p %s %T@\\n' | sort"
+          outputs_before = machine.succeed(snapshot)
+          machine.succeed(player(" ".join(
+              shlex.quote(part) for part in ["${pkgs.skyscraper}/bin/Skyscraper", *argv]
+          )), timeout=180)
+          assert machine.succeed(snapshot) == outputs_before
+          cache = ET.fromstring(machine.succeed("cat /data/cache/library-outside/nes/db.xml"))
+          assert cache.findall("resource"), ET.tostring(cache)
 
       with subtest("Account, placeholder and held-claim refusals preserve the right state"):
           before = machine.succeed("cat /data/cache/skyscraper/last-run.json")
@@ -525,6 +573,7 @@ in
           status, output = machine.execute(player("emubox-scrape") + " 2>&1")
           assert status != 0 and "in progress" in output.lower(), output
           assert machine.succeed("cat /data/cache/skyscraper/last-run.json") == before
+          machine.succeed("systemctl is-active emubox-library-lock-holder")
           machine.succeed("systemctl stop emubox-library-lock-holder")
 
           pending_before = machine.succeed("cat /data/cache/skyscraper/pending")
@@ -634,10 +683,15 @@ in
           assert machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip() == window_before
           journal = new_library_journal(journal_before)
           assert "fetch was running" in journal, journal
+          generations_before = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
           machine.succeed("systemctl stop emubox-library-lock-at-capture")
           requested_restart()
           wait_frontend_count(7)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
+          released = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
+          assert released["folders"]["nes"] == "generated", released
+          generations_after = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
+          assert int(generations_after) == int(generations_before) + 1, (generations_before, generations_after)
 
       with subtest("Exit 75 from the test window skips cleanup after a lock handshake"):
           machine.succeed("printf 'nes\\n' > /data/cache/skyscraper/pending")
@@ -808,19 +862,33 @@ in
               ))
               return previous_pid
 
+          sessions_before = session_journal()
           previous_pid = run_tools_entry()
           wait_frontend_count(15)
           assert machine.succeed("pgrep -x es-de").strip() != previous_pid
           machine.succeed("test ! -e /run/emubox-library-test/emubox-frontend-restart")
+          refreshed = next(
+              game for path, game in gamelist_games("nes").items() if path.endswith("fixture.nes")
+          )
+          assert refreshed.findtext("desc") == "Imported fixture description"
           for count in (16, 17):
               run_tools_entry()
               wait_frontend_count(count)
           machine.succeed("systemctl is-active emubox-library-test-session")
+          requested = new_session_journal(sessions_before)
+          assert "(crash " not in requested, requested
 
       with subtest("Three unrequested short exits after a requested restart end the session"):
+          # Nothing is pending here, so these relaunches also show that no
+          # window opens and the gamelist is left alone.
+          assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
+          windows = machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip()
+          live = machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml")
           for count in (18, 19):
               machine.succeed("pkill -TERM -x es-de")
               wait_frontend_count(count)
+          assert machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip() == windows
+          assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == live
           machine.succeed("pkill -TERM -x es-de")
           machine.wait_until_succeeds(
               "test $(systemctl show -P ActiveState emubox-library-test-session) = inactive"
@@ -850,9 +918,10 @@ in
           assert status != 0, output
           machine.succeed("test ! -e /run/emubox-library-test/emubox-frontend-restart")
           machine.succeed("rm /run/emubox-library-test/pgrep-mode")
+          sessions_before = session_journal()
           machine.succeed("pkill -TERM -x es-de")
           wait_frontend_count(25)
-          journal = machine.succeed("journalctl -u emubox-library-test-session --no-pager")
+          journal = new_session_journal(sessions_before)
           assert "crash 2 of 3" in journal, journal
 
       with subtest("Real generation keeps frontend-only formats and distinct nested paths"):

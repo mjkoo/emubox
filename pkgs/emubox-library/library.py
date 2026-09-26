@@ -447,6 +447,8 @@ def _fetch_folders(
 ) -> None:
     """Fetch each mapped folder, recording outcomes and output as each one finishes."""
     for folder, roms in discover(config, extensions).items():
+        # Classification comes before listing: an unlistable folder the frontend does not
+        # know stays without an outcome, and an unlistable unmapped one stays unmapped.
         if folder not in extensions:
             continue
         platform = platforms.get(folder)

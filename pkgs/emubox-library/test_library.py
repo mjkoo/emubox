@@ -1865,6 +1865,24 @@ def test_unlistable_folder_fails_alone_and_the_run_records(config: library.Confi
     assert library.read_pending(config) == ["nes"]
 
 
+@needs_permissions
+def test_unlistable_folder_keeps_its_unmapped_or_unknown_classification(
+    config: library.Config,
+) -> None:
+    for folder, name in (("nes", "a.nes"), ("genesis", "a.md"), ("mystery", "a.bin")):
+        game(config, folder, name)
+    for folder in ("genesis", "mystery"):
+        (config.rom_root / folder).chmod(0)
+    try:
+        assert library.scrape(config, lambda *_args: (0, b"")) == 0
+    finally:
+        for folder in ("genesis", "mystery"):
+            (config.rom_root / folder).chmod(0o755)
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == "complete"
+    assert record["folders"] == {"genesis": "unmapped", "nes": "fetched"}
+
+
 def test_scraper_that_cannot_start_fails_one_folder(config: library.Config) -> None:
     game(config, "nes", "a.nes")
     game(config, "psx", "a.cue")

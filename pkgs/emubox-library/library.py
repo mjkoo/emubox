@@ -270,7 +270,9 @@ def fetch_vector(config: Config, folder: str, platform: str) -> list[str]:
     )
 
 
-def generate_vector(config: Config, folder: str, platform: str, work: Path) -> list[str]:
+def generate_vector(
+    config: Config, folder: str, platform: str, work: Path, extensions: set[str]
+) -> list[str]:
     return vector(
         "generate",
         platform=platform,
@@ -279,7 +281,7 @@ def generate_vector(config: Config, folder: str, platform: str, work: Path) -> l
         cache_dir=str(config.cache_root / folder),
         work_dir=str(work),
         media_dir=str(config.media_root / folder),
-        extensions=" ".join(sorted(system_extensions(config).get(folder, set()))),
+        extensions=" ".join(sorted(extensions)),
     )
 
 
@@ -629,13 +631,16 @@ def _written(path: Path) -> bool:
 
 
 def _reconcile_gamelist(
-    config: Config, folder: str, previous: ET.Element, candidate: ET.Element
+    config: Config,
+    folder: str,
+    previous: ET.Element,
+    candidate: ET.Element,
+    extensions: set[str],
 ) -> None:
     """Keep existing games, family metadata and system settings the scraper did not emit."""
     # Keys stay lexical: a symlinked alias is a game of its own, not a duplicate of its target.
     directory = Path(os.path.normpath(config.rom_root / folder))
     bases = (directory, directory.resolve())
-    extensions = system_extensions(config).get(folder, set())
 
     def contained(entry: ET.Element) -> Path | None:
         """The entry's path relative to the folder, or None when it names nothing inside it."""
@@ -648,6 +653,8 @@ def _reconcile_gamelist(
             if base is None:
                 return None
             path = path.relative_to(base)
+        # Lexical on purpose: a linked subdirectory inside the folder is followed, as the
+        # frontend follows it.
         if not path.parts or path.parts[0] == "..":
             return None
         return path
@@ -714,15 +721,17 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
         pending = read_pending(config)
         platforms = read_json(config.platform_map, {})
         end = time.monotonic() + ALL_FOLDERS_SECONDS
+        # Parsed once per run; an unreadable document fails every pending folder with its cause.
+        known: dict[str, set[str]] | None = None
+        unknown = ""
+        try:
+            known = system_extensions(config)
+        except (OSError, ValueError) as error:
+            unknown = str(error)
         for folder in pending:
             if folder not in read_pending(config):
                 continue
-            reason = ""
-            known: dict[str, set[str]] | None = None
-            try:
-                known = system_extensions(config)
-            except (OSError, ValueError) as error:
-                reason = str(error)
+            reason = unknown
             if time.monotonic() >= end or folder not in platforms or known is None:
                 outcome = "generation-failed"
             elif folder not in known:
@@ -750,13 +759,13 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
                     limit = min(end, time.monotonic() + PER_FOLDER_SECONDS)
                     status, _ = invoke(
                         config,
-                        generate_vector(config, folder, platforms[folder], work),
+                        generate_vector(config, folder, platforms[folder], work, known[folder]),
                         claim,
                         limit,
                     )
                     if status == 0 and time.monotonic() < limit and _written(source):
                         candidate = _read_gamelist(source)
-                        _reconcile_gamelist(config, folder, previous, candidate)
+                        _reconcile_gamelist(config, folder, previous, candidate, known[folder])
                         merged = ET.tostring(candidate, encoding="utf-8")
                         # A value XML cannot carry would publish a file nothing can read.
                         ET.fromstring(merged)

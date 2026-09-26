@@ -451,7 +451,7 @@ def test_generation_uses_fresh_work_and_renames_only_success(config: library.Con
 def test_vectors_include_frontend_extensions(config: library.Config) -> None:
     for argv in (
         library.fetch_vector(config, "psx", "psx"),
-        library.generate_vector(config, "psx", "psx", config.cache_root / "work"),
+        library.generate_vector(config, "psx", "psx", config.cache_root / "work", {".cue"}),
     ):
         assert argv[argv.index("--addext") + 1] == ".cue"
     argv = library.fetch_vector(config, "nes", "nes")
@@ -795,7 +795,7 @@ def test_reconciliation_keeps_all_family_fields(config: library.Config) -> None:
         "<gameList><game><path>./a.nes</path><desc>New metadata</desc>"
         "<favorite>false</favorite></game></gameList>"
     )
-    library._reconcile_gamelist(config, "nes", previous, candidate)
+    library._reconcile_gamelist(config, "nes", previous, candidate, {".nes"})
     assert len(candidate.findall("game")) == 1
     for name, value in fields.items():
         assert candidate.findtext(f"game/{name}") == value
@@ -2289,3 +2289,29 @@ def test_linked_rom_the_scraper_omits_gets_a_minimal_entry(config: library.Confi
     assert library.generate(config, invoke) == 0
     live = ET.parse(config.gamelist_root / "nes" / "gamelist.xml").getroot()
     assert [game.findtext("path") for game in live.findall("game")] == ["./a.nes", "./alias.nes"]
+
+
+def test_generation_parses_the_systems_documents_once_per_run(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    library.write_pending(config, ["nes", "psx"])
+    parse = library.system_extensions
+    calls: list[object] = []
+
+    def counted(settings: library.Config) -> dict[str, set[str]]:
+        calls.append(settings)
+        return parse(settings)
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text("<gameList />")
+        return 0, b""
+
+    monkeypatch.setattr(library, "system_extensions", counted)
+    assert library.generate(config, invoke) == 0
+    assert json.loads(config.record_path.read_text())["folders"] == {
+        "nes": "generated",
+        "psx": "generated",
+    }
+    assert len(calls) == 1

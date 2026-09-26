@@ -85,6 +85,14 @@ def wait_for(path: Path) -> None:
     assert path.exists(), path
 
 
+def journal_log(config: library.Config) -> tuple[library.Config, Path]:
+    log = config.cache_root.parent / "journal.log"
+    cat = config.cache_root.parent / "journal-cat"
+    cat.write_text(f"#!/bin/sh\ncat >> {log}\n")
+    cat.chmod(0o755)
+    return replace(config, systemd_cat=str(cat)), log
+
+
 needs_permissions = pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
 
 
@@ -556,6 +564,7 @@ def test_merged_gamelist_that_does_not_read_back_is_not_published(
 
 @pytest.mark.parametrize("old", ["<gameList><game>", "<wrong />"])
 def test_invalid_previous_gamelist_prevents_generation(config: library.Config, old: str) -> None:
+    config, log = journal_log(config)
     live = config.gamelist_root / "nes" / "gamelist.xml"
     live.parent.mkdir(parents=True)
     live.write_text(old)
@@ -563,6 +572,11 @@ def test_invalid_previous_gamelist_prevents_generation(config: library.Config, o
     assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
     assert live.read_text() == old
     assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
+    line = log.read_text()
+    assert "Generation failed for nes" in line
+    assert "gamelist is unreadable" in line
+    assert "move it aside" in line
+    assert library.read_pending(config) == []
 
 
 def test_reconciliation_preserves_distinct_paths_and_omitted_games(config: library.Config) -> None:
@@ -1713,14 +1727,6 @@ def test_signalled_fetch_keeps_finished_folders_pending_and_old_record(
     assert config.record_path.read_bytes() == before
 
 
-def journal_log(config: library.Config) -> tuple[library.Config, Path]:
-    log = config.cache_root.parent / "journal.log"
-    cat = config.cache_root.parent / "journal-cat"
-    cat.write_text(f"#!/bin/sh\ncat >> {log}\n")
-    cat.chmod(0o755)
-    return replace(config, systemd_cat=str(cat)), log
-
-
 @needs_permissions
 def test_unlistable_folder_fails_alone_and_the_run_records(config: library.Config) -> None:
     game(config, "nes", "a.nes")
@@ -1871,21 +1877,6 @@ def test_generation_prints_a_heading_per_folder(
     library.write_pending(config, ["nes"])
     assert library.generate(config, lambda *args: (1, b"")) == 0
     assert "Generating nes" in capsys.readouterr().out
-
-
-def test_unreadable_gamelist_journal_line_names_the_remedy(config: library.Config) -> None:
-    config, log = journal_log(config)
-    live = config.gamelist_root / "nes" / "gamelist.xml"
-    live.parent.mkdir(parents=True)
-    live.write_text("<gameList><game>")
-    library.write_pending(config, ["nes"])
-    assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
-    assert live.read_text() == "<gameList><game>"
-    line = log.read_text()
-    assert "Generation failed for nes" in line
-    assert "gamelist is unreadable" in line
-    assert "move it aside" in line
-    assert library.read_pending(config) == []
 
 
 def test_journal_never_raises_when_systemd_cat_is_missing_or_hangs(

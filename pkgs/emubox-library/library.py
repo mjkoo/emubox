@@ -524,27 +524,33 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         os.close(claim)
 
 
+def _folder_exists(config: Config, name: str) -> bool:
+    """Whether a ROM folder of that name exists; a path that cannot be checked counts as absent."""
+    if name in ("", ".", "..") or "/" in name:
+        return False
+    try:
+        return stat.S_ISDIR((config.rom_root / name).stat().st_mode)
+    except (OSError, ValueError):
+        return False
+
+
 def _carried_outcomes(config: Config) -> dict[str, Any]:
     """The previous record's outcomes for folders whose directory still exists."""
     previous = read_mapping(config.record_path).get("folders")
     if not isinstance(previous, dict):
         return {}
-    return {
-        name: outcome
-        for name, outcome in previous.items()
-        if name not in ("", ".", "..") and "/" not in name and (config.rom_root / name).is_dir()
-    }
+    return {name: outcome for name, outcome in previous.items() if _folder_exists(config, name)}
 
 
 def _record_interrupted(config: Config, outcomes: dict[str, str], transcript: bytearray) -> None:
-    # Folders the run did not reach keep what the previous record said of them.
-    carried = _carried_outcomes(config)
-    carried.update(outcomes)
     # A failed write must not replace the interruption's exit status, and the
     # record is still attempted when the log cannot be written.
     with contextlib.suppress(OSError):
         atomic_write(config.log_path, bytes(transcript))
     with contextlib.suppress(OSError):
+        # Folders the run did not reach keep what the previous record said of them.
+        carried = _carried_outcomes(config)
+        carried.update(outcomes)
         write_record(config, "interrupted", carried)
 
 

@@ -2186,7 +2186,7 @@ def test_scrape_names_a_failed_priority_change_in_one_line(
     assert library.read_pending(config) == []
 
 
-def scrape_signalled_at(config: library.Config, line: str, prelude: str = "") -> int:
+def scrape_signalled_at(config: library.Config, line: str, prelude: str = "", *extra: str) -> int:
     """Run emubox-scrape's entry point, sending itself SIGTERM as it shows `line`."""
     scraper = config.cache_root.parent / "quick-scraper"
     scraper.write_text("#!/bin/sh\nexit 0\n")
@@ -2207,7 +2207,7 @@ def scrape_signalled_at(config: library.Config, line: str, prelude: str = "") ->
     )
     environment = dict(os.environ, PYTHONPATH=str(Path(__file__).parent))
     result = subprocess.run(
-        [sys.executable, "-c", code, str(settings)],
+        [sys.executable, "-c", code, str(settings), *extra],
         capture_output=True,
         env=environment,
         timeout=30,
@@ -2315,3 +2315,33 @@ def test_generation_parses_the_systems_documents_once_per_run(
         "psx": "generated",
     }
     assert len(calls) == 1
+
+
+@needs_permissions
+def test_untraversable_rom_root_still_records_interrupted_and_refused(
+    config: library.Config,
+) -> None:
+    game(config, "nes", "a.nes")
+    library.write_record(config, "complete", {"nes": "generated"})
+    prelude = (
+        "def signalled_check(config):\n"
+        " os.kill(os.getpid(), signal.SIGTERM)\n"
+        "library.credentials_error=signalled_check\n"
+        "os.chmod(sys.argv[2], 0)\n"
+    )
+    try:
+        status = scrape_signalled_at(config, "", prelude, str(config.rom_root))
+    finally:
+        config.rom_root.chmod(0o755)
+    assert status == 128 + signal.SIGTERM
+    record = json.loads(config.record_path.read_text())
+    assert (record["result"], record["folders"]) == ("interrupted", {})
+
+    config.scraper_config.unlink()
+    config.rom_root.chmod(0)
+    try:
+        assert library.scrape(config) == 1
+    finally:
+        config.rom_root.chmod(0o755)
+    record = json.loads(config.record_path.read_text())
+    assert (record["result"], record["folders"]) == ("refused", {})

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -1993,3 +1994,25 @@ def test_report_marks_an_unlistable_folder_and_counts_the_rest(config: library.C
     assert "psx: counts unavailable" in output
     assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
     assert status == 1
+
+
+@pytest.mark.parametrize("command", ["scrape", "generate", "capture", "cleanup"])
+def test_taking_the_claim_removes_stale_state_temporaries_only(
+    config: library.Config, command: str
+) -> None:
+    config.cache_root.mkdir(parents=True)
+    stale = [".pending.a1b2c3d4", ".revisions.json.x_9y8z7w", ".last-run.json.abcdefgh"]
+    kept = [".pending.short", "pending.a1b2c3d4", ".other.a1b2c3d4", ".last-run.log.a1b2c3d4e"]
+    for name in stale + kept:
+        (config.cache_root / name).write_text("partial")
+    run: dict[str, Callable[[], object]] = {
+        "scrape": lambda: library.scrape(config, lambda *_args: (0, b"")),
+        "generate": lambda: library.generate(config),
+        "capture": lambda: library.capture(config),
+        "cleanup": lambda: library.cleanup(config, {}),
+    }
+    run[command]()
+    for name in stale:
+        assert not (config.cache_root / name).exists(), name
+    for name in kept:
+        assert (config.cache_root / name).exists(), name

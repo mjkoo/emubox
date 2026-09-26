@@ -11,6 +11,7 @@ import functools
 import json
 import os
 import pwd
+import re
 import selectors
 import shutil
 import signal
@@ -159,6 +160,21 @@ def write_pending(config: Config, folders: list[str]) -> None:
     )
 
 
+def _sweep_temporaries(config: Config) -> None:
+    """Remove state-file temporaries a killed writer left behind; only a claim holder writes."""
+    names = "|".join(
+        re.escape(path.name)
+        for path in (config.pending_path, config.revision_path, config.record_path, config.log_path)
+    )
+    # The shape tempfile.mkstemp gives atomic_write's prefix: eight name characters.
+    pattern = re.compile(rf"\.(?:{names})\.[a-z0-9_]{{8}}")
+    with contextlib.suppress(OSError):
+        for entry in config.cache_root.iterdir():
+            if pattern.fullmatch(entry.name):
+                with contextlib.suppress(OSError):
+                    entry.unlink()
+
+
 def lock(config: Config) -> int | None:
     config.cache_root.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(config.lock_path, os.O_CREAT | os.O_RDWR, 0o644)
@@ -167,6 +183,7 @@ def lock(config: Config) -> int | None:
     except BlockingIOError:
         os.close(descriptor)
         return None
+    _sweep_temporaries(config)
     return descriptor
 
 

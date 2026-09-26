@@ -604,14 +604,16 @@ def test_reconciliation_preserves_distinct_paths_and_omitted_games(config: libra
         return 0, b""
 
     assert library.generate(config, invoke) == 0
+    entries = ET.parse(live).getroot().findall("game")
     games = {
         (config.rom_root / "nes" / entry.findtext("path", ""))
         .resolve()
         .relative_to(config.rom_root / "nes")
         .as_posix(): entry
-        for entry in ET.parse(live).getroot().findall("game")
+        for entry in entries
     }
     assert set(games) == {"same.nes", "nested/same.nes", "omitted.nes", "new.nes"}
+    assert len(entries) == len(games)
     for name, count in (("same.nes", "1"), ("nested/same.nes", "2"), ("omitted.nes", "3")):
         assert games[name].findtext("playcount") == count
         assert games[name].findtext("favorite") == "true"
@@ -710,6 +712,7 @@ def test_reconciliation_keeps_all_family_fields(config: library.Config) -> None:
         "<favorite>false</favorite></game></gameList>"
     )
     library._reconcile_gamelist(config, "nes", previous, candidate)
+    assert len(candidate.findall("game")) == 1
     for name, value in fields.items():
         assert candidate.findtext(f"game/{name}") == value
     assert len(candidate.findall("game/favorite")) == 1

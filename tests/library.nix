@@ -964,6 +964,7 @@ in
               for entry in root.findall("game")
           }
           assert set(entries) == {"cached.3ds", "uncached.cxi", "nested/cached.3ds"}, entries
+          assert len(root.findall("game")) == len(entries), ET.tostring(root)
           for name, count in (("cached.3ds", "7"), ("uncached.cxi", "8"), ("nested/cached.3ds", "9")):
               assert entries[name].findtext("favorite") == "true"
               assert entries[name].findtext("playcount") == count

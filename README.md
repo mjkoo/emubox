@@ -309,14 +309,28 @@ and unscraped counts, unmapped systems, the last fetch result, failures and
 pending generation. A game with a gamelist entry but no description still
 counts as unscraped. An incomplete scan reports unavailable counts explicitly.
 
+When status shows a folder's gamelist as unreadable, generation leaves that
+file alone, since it may still hold favourites and play counts worth
+recovering, and the folder fails generation until it is dealt with. Repair
+the XML, or move it aside and fetch again:
+
+```sh
+sudo -u player mv /data/es-de/gamelists/<folder>/gamelist.xml{,.unreadable}
+sudo -u player emubox-scrape
+```
+
+The next frontend start then writes a fresh gamelist for that folder.
+
 `complete` means the scraper processes exited successfully. Skyscraper can
 also exit successfully after a service or quota interruption, so this does
 not guarantee that every game received metadata. Check the unscraped counts
 and scrape output; a later manual fetch retries games absent from the cache.
 
 After deployment, test a small folder of a few ROMs with real credentials:
-run `sudo -u player emubox-scrape`, inspect `emubox-status`, restart the frontend
-and confirm descriptions and art. Then exercise Tools with physical input.
+run `sudo -u player emubox-scrape` and inspect `emubox-status`, then select
+**Tools > Update game art** with physical input. It fetches again, quickly
+since the cache is warm, and restarts the frontend; confirm descriptions and
+art once the frontend returns.
 Record the software revision and results using
 [the hardware checklist](docs/library-hardware-tests.md). CI proves nonvisual
 contracts using local imports and fixtures; it does not prove service-account

@@ -44,6 +44,21 @@ two statuses must be exactly 0 and 75; the missing-executable status must be
 neither. Record actual statuses, including failures. Do not infer visibility
 from a process list. Also check the console-switch key works during progress.
 
+Then check what happens when the outer deadline ends a window whose program
+is still running. Run the same chain with a shortened deadline and a child
+that ignores the terminal closing for a moment:
+
+```sh
+timeout --kill-after=2 5 cage -s -- foot -e sh -c 'trap "sleep 2" HUP; sleep 60'
+printf 'status=%s\n' "$?"
+pgrep -a -u player sleep
+```
+
+Record the status and whether the `sleep` survives `timeout` and for how
+long. Failure cleanup retries the library claim for three seconds; a child
+that outlives that retry only defers cleanup to the next start, which keeps
+the folders pending. Record which of the two happened.
+
 ## Frontend launch and return
 
 Use the deployed Tools system, backed by a read-only store directory outside

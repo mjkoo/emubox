@@ -1048,6 +1048,21 @@ def test_pending_folder_without_platform_fails_without_scraper(config: library.C
     assert json.loads(config.record_path.read_text())["folders"] == {"genesis": "generation-failed"}
 
 
+def test_pending_folder_the_frontend_lists_no_system_for_fails_without_scraper(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(library, "journal", lambda _config, message: messages.append(message))
+    config.platform_map.write_text(json.dumps({"nes": "nes", "arcade": "mame"}))
+    game(config, "arcade", "a.zip")
+    library.write_pending(config, ["arcade"])
+    assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
+    assert library.read_pending(config) == []
+    assert json.loads(config.record_path.read_text())["folders"] == {"arcade": "generation-failed"}
+    assert messages == ["Generation failed for arcade: the frontend lists no system named arcade"]
+    assert not (config.gamelist_root / "arcade").exists()
+
+
 def test_report_counts_extensions_descriptions_and_unknown(config: library.Config) -> None:
     for folder, name in (
         ("psx", "a.cue"),

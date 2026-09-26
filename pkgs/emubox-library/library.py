@@ -642,8 +642,16 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
             if folder not in read_pending(config):
                 continue
             reason = ""
-            if time.monotonic() >= end or folder not in platforms:
+            known: dict[str, set[str]] | None = None
+            try:
+                known = system_extensions(config)
+            except (OSError, ValueError) as error:
+                reason = str(error)
+            if time.monotonic() >= end or folder not in platforms or known is None:
                 outcome = "generation-failed"
+            elif folder not in known:
+                outcome = "generation-failed"
+                reason = f"the frontend lists no system named {folder}"
             else:
                 show(f"Generating {folder}")
                 parent = config.gamelist_root / folder

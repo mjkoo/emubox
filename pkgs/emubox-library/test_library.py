@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import pwd
+import shutil
 import signal
 import stat
 import subprocess
@@ -2016,3 +2017,78 @@ def test_taking_the_claim_removes_stale_state_temporaries_only(
         assert not (config.cache_root / name).exists(), name
     for name in kept:
         assert (config.cache_root / name).exists(), name
+
+
+@pytest.mark.parametrize("content", [None, "{not json", "[]", "{}"])
+@pytest.mark.parametrize(
+    "arguments",
+    [("scrape", []), ("generate", []), ("generate", ["capture"]), ("generate", ["cleanup"])],
+)
+def test_entry_points_name_an_unusable_config_in_one_line(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    content: str | None,
+    arguments: tuple[str, list[str]],
+) -> None:
+    path = tmp_path / "library.json"
+    if content is not None:
+        path.write_text(content)
+    command, rest = arguments
+    main = library.scrape_main if command == "scrape" else library.generate_main
+    assert main(["--config", str(path), *rest]) == 1
+    error = capsys.readouterr().err
+    assert error.count("\n") == 1 and str(path) in error, error
+
+
+def test_report_names_an_unusable_config_without_a_traceback(tmp_path: Path) -> None:
+    path = tmp_path / "missing.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("emubox_library_report.py")),
+            "--config",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr + result.stdout
+    assert str(path) in result.stdout
+
+
+def test_scrape_names_an_unparseable_systems_document_in_one_line(
+    config: library.Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    game(config, "nes", "a.nes")
+    config.bundled_systems.write_text("<systemList><system>")
+    settings = cli_config(config, config.cache_root.parent / "config.json")
+    assert library.scrape_main(["--config", str(settings)]) == 1
+    error = capsys.readouterr().err
+    assert error.count("\n") == 1 and str(config.bundled_systems) in error, error
+
+
+def test_generation_survives_an_unparseable_systems_document(
+    config: library.Config, capsys: pytest.CaptureFixture[str]
+) -> None:
+    game(config, "nes", "a.nes")
+    library.write_pending(config, ["nes"])
+    config.bundled_systems.write_text("<systemList><system>")
+    settings = cli_config(config, config.cache_root.parent / "config.json")
+    assert library.generate_main(["--config", str(settings)]) == 0
+    assert "Traceback" not in capsys.readouterr().err
+    assert json.loads(config.record_path.read_text())["folders"] == {"nes": "generation-failed"}
+    assert library.read_pending(config) == []
+
+
+def test_scrape_names_a_failed_priority_change_in_one_line(
+    config: library.Config, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    game(config, "nes", "a.nes")
+    monkeypatch.setattr(library, "IONICE", shutil.which("false"))
+    settings = cli_config(config, config.cache_root.parent / "config.json")
+    assert library.scrape_main(["--config", str(settings)]) == 1
+    error = capsys.readouterr().err
+    assert error.count("\n") == 1 and "priority" in error, error
+    assert library.read_pending(config) == []

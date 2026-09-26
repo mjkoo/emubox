@@ -70,7 +70,16 @@ class Config:
 
     @classmethod
     def read(cls, path: Path) -> Config:
-        data = json.loads(path.read_text())
+        """Raises ValueError naming the file for any missing, malformed or incomplete config."""
+        try:
+            return cls._parse(json.loads(path.read_text()))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            raise ValueError(
+                f"Cannot use the library configuration {path}: {type(error).__name__}: {error}"
+            ) from error
+
+    @classmethod
+    def _parse(cls, data: dict[str, Any]) -> Config:
         return cls(
             rom_root=Path(data["rom_root"]),
             cache_root=Path(data["cache_root"]),
@@ -192,7 +201,11 @@ def system_extensions(config: Config) -> dict[str, set[str]]:
     for source in (config.bundled_systems, config.custom_systems):
         if source is None:
             continue
-        for system in ET.parse(source).getroot().findall("system"):
+        try:
+            systems = ET.parse(source).getroot().findall("system")
+        except ET.ParseError as error:
+            raise ValueError(f"Cannot parse the systems document {source}: {error}") from error
+        for system in systems:
             name = system.findtext("name")
             extension = system.findtext("extension")
             if name and extension:
@@ -480,7 +493,10 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         with contextlib.suppress(OSError):
             os.nice(19)
         if IONICE and not IONICE.startswith("@"):
-            subprocess.run([IONICE, "-c", "3", "-p", str(os.getpid())], check=True)
+            try:
+                subprocess.run([IONICE, "-c", "3", "-p", str(os.getpid())], check=True)
+            except (OSError, subprocess.CalledProcessError) as error:
+                raise ValueError(f"Cannot lower the scrape's disk priority: {error}") from error
         extensions = system_extensions(config)
         platforms = read_json(config.platform_map, {})
         outcomes: dict[str, str] = {}
@@ -900,12 +916,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _fail(error: Exception) -> int:
+    """An expected failure is one line naming its cause, never a traceback."""
+    print(str(error).replace("\n", " "), file=sys.stderr)
+    return 1
+
+
 def scrape_main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         return scrape(Config.read(args.config))
     except Interrupted as interrupted:
         return 128 + interrupted.number
+    except (OSError, ValueError) as error:
+        return _fail(error)
 
 
 def generate_main(argv: list[str] | None = None) -> int:
@@ -913,7 +937,10 @@ def generate_main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", nargs="?", choices=("capture", "cleanup"))
     parser.add_argument("--batch", default="{}")
     args = parser.parse_args(argv)
-    config = Config.read(args.config)
+    try:
+        config = Config.read(args.config)
+    except ValueError as error:
+        return _fail(error)
     if args.action == "capture":
         status, batch = capture(config)
         if status == 0:

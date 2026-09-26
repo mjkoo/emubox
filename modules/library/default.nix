@@ -78,7 +78,7 @@ in
         platform_map = platformMap;
         session_user = "player";
         skyscraper = "${pkgs.skyscraper}/bin/Skyscraper";
-        systemd_cat = "${pkgs.systemd}/bin/systemd-cat";
+        systemd_cat = "${config.systemd.package}/bin/systemd-cat";
       }
     );
 
@@ -110,6 +110,7 @@ in
     ];
 
     emubox.kiosk.preFrontendStep = ''
+      # emubox-library-generate resolves from the system path so a test can substitute it.
       batch=
       capture_rc=0
       batch=$(${pkgs.coreutils}/bin/timeout --signal=KILL 5 emubox-library-generate capture) || capture_rc=$?

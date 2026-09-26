@@ -28,11 +28,15 @@ flake-check:
 # Evaluate the host closure and the x86_64-linux checks without building (works on macOS)
 eval:
     nix eval --raw .#nixosConfigurations.{{host}}.config.system.build.toplevel.drvPath
+    nix eval --raw .#checks.x86_64-linux.custom-systems.drvPath
     nix eval --raw .#checks.x86_64-linux.vm.drvPath
     nix eval --raw .#checks.x86_64-linux.kiosk.drvPath
     nix eval --raw .#checks.x86_64-linux.mode.drvPath
+    nix eval --raw .#checks.x86_64-linux.library-resources.drvPath
+    nix eval --raw .#checks.x86_64-linux.library-source-contracts.drvPath
     nix eval --raw .#checks.x86_64-linux.library.drvPath
     nix eval --raw .#checks.x86_64-linux.controllers.drvPath
+    nix eval --raw .#checks.x86_64-linux.session-restarts.drvPath
     nix eval --raw .#checks.x86_64-linux.session.drvPath
     nix eval --raw .#checks.x86_64-linux.retroarch-settings.drvPath
     nix eval --raw .#checks.x86_64-linux.closure-no-secrets.drvPath

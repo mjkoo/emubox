@@ -686,7 +686,7 @@ def cleanup(config: Config, batch: dict[str, str | None]) -> int:
         return 1
     claim = lock(config)
     if claim is None:
-        journal(config, "Generation failure cleanup deferred; a fetch was running")
+        journal(config, "Generation failure cleanup deferred; the library claim was held")
         return 1
     try:
         revisions = read_mapping(config.revision_path)

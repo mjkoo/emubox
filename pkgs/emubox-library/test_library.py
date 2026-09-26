@@ -870,6 +870,8 @@ def test_revision_cleanup_preserves_new_fetch_and_missing_identity(config: libra
 def test_cleanup_leaves_pending_when_lock_or_record_write_fails(
     config: library.Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(library, "journal", lambda _config, message: messages.append(message))
     library.write_pending(config, ["nes"])
     library.atomic_json(config.revision_path, {"nes": "r1"})
     before = config.pending_path.read_bytes()
@@ -879,6 +881,7 @@ def test_cleanup_leaves_pending_when_lock_or_record_write_fails(
         assert config.pending_path.read_bytes() == before
     finally:
         os.close(claim)
+    assert messages == ["Generation failure cleanup deferred; the library claim was held"]
 
     original = library.atomic_json
 

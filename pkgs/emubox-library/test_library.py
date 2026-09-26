@@ -1156,6 +1156,13 @@ def test_report_without_records(config: library.Config) -> None:
             "nes: 1 ROMs, 0 gamelist entries, 1 unscraped\n"
             "Last run: refused at fixed\nFailed folders: nes\nGeneration pending: none\n",
         ),
+        (
+            "interrupted",
+            "fetched",
+            False,
+            "nes: 1 ROMs, 0 gamelist entries, 1 unscraped\n"
+            "Last run: interrupted at fixed\nGeneration pending: none\n",
+        ),
     ],
 )
 def test_report_exact_record_outcomes(
@@ -1698,13 +1705,14 @@ def test_refusal_replaces_a_malformed_run_record(config: library.Config, content
 
 
 @pytest.mark.parametrize("ending_signal", [signal.SIGTERM, signal.SIGHUP])
-def test_signalled_fetch_keeps_finished_folders_pending_and_old_record(
+def test_signalled_fetch_records_interrupted_and_keeps_finished_folders_pending(
     config: library.Config, ending_signal: int
 ) -> None:
     game(config, "nes", "a.nes")
     game(config, "psx", "a.cue")
-    library.write_record(config, "complete", {"nes": "fetched"})
-    before = config.record_path.read_bytes()
+    library.write_record(
+        config, "complete", {"nes": "fetch-failed", "psx": "generated", "gone": "fetched"}
+    )
     ready = config.cache_root / "running"
     scraper = config.cache_root.parent / "sleeper"
     scraper.write_text(
@@ -1736,7 +1744,13 @@ def test_signalled_fetch_keeps_finished_folders_pending_and_old_record(
             wrapper.wait()
     assert library.read_pending(config) == ["nes"]
     assert set(json.loads(config.revision_path.read_text())) == {"nes"}
-    assert config.record_path.read_bytes() == before
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == "interrupted"
+    assert record["folders"] == {"nes": "fetched", "psx": "generated", "gone": "fetched"}
+    log = config.log_path.read_bytes()
+    assert b"Fetching nes" in log and b"Fetching psx" in log
+    status, output = library.report(config, 5)
+    assert f"Last run: interrupted at {record['time']}" in output
 
 
 @needs_permissions

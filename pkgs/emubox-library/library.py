@@ -406,6 +406,44 @@ def correct_account(config: Config) -> bool:
     return False
 
 
+def _fetch_folders(
+    config: Config,
+    invoke: Callable[..., tuple[int, bytes]],
+    claim: int,
+    extensions: dict[str, set[str]],
+    platforms: dict[str, str],
+    outcomes: dict[str, str],
+    transcript: bytearray,
+) -> None:
+    """Fetch each mapped folder, recording outcomes and output as each one finishes."""
+    for folder, roms in discover(config, extensions).items():
+        if folder not in extensions:
+            continue
+        platform = platforms.get(folder)
+        if platform is None:
+            outcomes[folder] = "unmapped"
+            continue
+        transcript.extend(show(f"Fetching {folder}"))
+        if roms is None:
+            status, output = 1, show(f"Cannot list {folder}")
+        else:
+            try:
+                status, output = invoke(config, fetch_vector(config, folder, platform), claim)
+            except OSError as error:
+                status, output = 1, show(f"Could not start the scraper for {folder}: {error}")
+        transcript.extend(output)
+        if status == 0:
+            revisions = read_mapping(config.revision_path)
+            revisions[folder] = uuid.uuid4().hex
+            atomic_json(config.revision_path, revisions)
+            pending = read_pending(config)
+            if folder not in pending:
+                write_pending(config, [*pending, folder])
+            outcomes[folder] = "fetched"
+        else:
+            outcomes[folder] = "fetch-failed"
+
+
 def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscraper) -> int:
     if not correct_account(config):
         return 1
@@ -430,32 +468,16 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         platforms = read_json(config.platform_map, {})
         outcomes: dict[str, str] = {}
         transcript = bytearray()
-        for folder, roms in discover(config, extensions).items():
-            if folder not in extensions:
-                continue
-            platform = platforms.get(folder)
-            if platform is None:
-                outcomes[folder] = "unmapped"
-                continue
-            transcript.extend(show(f"Fetching {folder}"))
-            if roms is None:
-                status, output = 1, show(f"Cannot list {folder}")
-            else:
-                try:
-                    status, output = invoke(config, fetch_vector(config, folder, platform), claim)
-                except OSError as error:
-                    status, output = 1, show(f"Could not start the scraper for {folder}: {error}")
-            transcript.extend(output)
-            if status == 0:
-                revisions = read_mapping(config.revision_path)
-                revisions[folder] = uuid.uuid4().hex
-                atomic_json(config.revision_path, revisions)
-                pending = read_pending(config)
-                if folder not in pending:
-                    write_pending(config, [*pending, folder])
-                outcomes[folder] = "fetched"
-            else:
-                outcomes[folder] = "fetch-failed"
+        try:
+            _fetch_folders(config, invoke, claim, extensions, platforms, outcomes, transcript)
+        except Interrupted:
+            # Folders the run did not reach keep what the previous record said of them.
+            previous = read_mapping(config.record_path).get("folders")
+            carried = dict(previous) if isinstance(previous, dict) else {}
+            carried.update(outcomes)
+            atomic_write(config.log_path, bytes(transcript))
+            write_record(config, "interrupted", carried)
+            raise
         fetched = sum(value == "fetched" for value in outcomes.values())
         failed = sum(value == "fetch-failed" for value in outcomes.values())
         unmapped = sum(value == "unmapped" for value in outcomes.values())

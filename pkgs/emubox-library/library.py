@@ -259,14 +259,14 @@ def vector(kind: str, **values: str) -> list[str]:
     return [part.format_map(values) for part in _vectors()[kind]]
 
 
-def fetch_vector(config: Config, folder: str, platform: str) -> list[str]:
+def fetch_vector(config: Config, folder: str, platform: str, extensions: set[str]) -> list[str]:
     return vector(
         "fetch",
         platform=platform,
         config=str(config.scraper_config),
         rom_dir=str(config.rom_root / folder),
         cache_dir=str(config.cache_root / folder),
-        extensions=" ".join(sorted(system_extensions(config).get(folder, set()))),
+        extensions=" ".join(sorted(extensions)),
     )
 
 
@@ -502,7 +502,9 @@ def _fetch_folders(
             status, output = 1, show(f"Cannot list {folder}")
         else:
             try:
-                status, output = invoke(config, fetch_vector(config, folder, platform), claim)
+                status, output = invoke(
+                    config, fetch_vector(config, folder, platform, extensions[folder]), claim
+                )
             except OSError as error:
                 status, output = 1, show(f"Could not start the scraper for {folder}: {error}")
         transcript.extend(output)

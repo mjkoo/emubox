@@ -310,7 +310,7 @@ def test_percent_in_valid_credentials_allows_fetch(config: library.Config) -> No
         return 0, b"ok\n"
 
     assert library.scrape(config, stub) == 0
-    assert seen == [library.fetch_vector(config, "nes", "nes")]
+    assert seen == [library.fetch_vector(config, "nes", "nes", {".nes"})]
     assert json.loads(config.record_path.read_text())["result"] == "complete"
 
 
@@ -334,8 +334,8 @@ def test_fetch_outcomes_vectors_revision_and_modes(config: library.Config) -> No
     finally:
         os.umask(old_umask)
     assert seen == [
-        library.fetch_vector(config, "nes", "nes"),
-        library.fetch_vector(config, "psx", "psx"),
+        library.fetch_vector(config, "nes", "nes", {".nes"}),
+        library.fetch_vector(config, "psx", "psx", {".cue"}),
     ]
     record = json.loads(config.record_path.read_text())
     assert record["result"] == "partial"
@@ -375,8 +375,8 @@ def test_all_mapped_fetches_have_exact_run_result(
 
     assert library.scrape(config, stub) == (0 if status == 0 else 1)
     assert seen == [
-        library.fetch_vector(config, "nes", "nes"),
-        library.fetch_vector(config, "psx", "psx"),
+        library.fetch_vector(config, "nes", "nes", {".nes"}),
+        library.fetch_vector(config, "psx", "psx", {".cue"}),
     ]
     record = json.loads(config.record_path.read_text())
     assert record["result"] == expected_result
@@ -450,11 +450,11 @@ def test_generation_uses_fresh_work_and_renames_only_success(config: library.Con
 
 def test_vectors_include_frontend_extensions(config: library.Config) -> None:
     for argv in (
-        library.fetch_vector(config, "psx", "psx"),
+        library.fetch_vector(config, "psx", "psx", {".cue"}),
         library.generate_vector(config, "psx", "psx", config.cache_root / "work", {".cue"}),
     ):
         assert argv[argv.index("--addext") + 1] == ".cue"
-    argv = library.fetch_vector(config, "nes", "nes")
+    argv = library.fetch_vector(config, "nes", "nes", {".nes"})
     assert argv[argv.index("--addext") + 1] == ".nes"
 
 
@@ -1904,7 +1904,7 @@ def test_scraper_that_cannot_start_fails_one_folder(config: library.Config) -> N
 
 
 def test_fetch_vector_is_exactly_the_cache_only_command(config: library.Config) -> None:
-    assert library.fetch_vector(config, "nes", "nes") == [
+    assert library.fetch_vector(config, "nes", "nes", {".nes"}) == [
         "-p", "nes", "-s", "screenscraper", "-c", str(config.scraper_config),
         "-i", str(config.rom_root / "nes"), "-d", str(config.cache_root / "nes"),
         "--addext", ".nes",
@@ -2381,3 +2381,24 @@ def test_signal_after_the_final_record_keeps_the_run_result(
     assert scrape_signalled_at(config, "", prelude) == (1 if refused else 0)
     record = json.loads(config.record_path.read_text())
     assert record["result"] == ("refused" if refused else "complete")
+
+
+def test_scrape_parses_the_systems_documents_once_per_run(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    parse = library.system_extensions
+    calls: list[object] = []
+
+    def counted(settings: library.Config) -> dict[str, set[str]]:
+        calls.append(settings)
+        return parse(settings)
+
+    monkeypatch.setattr(library, "system_extensions", counted)
+    assert library.scrape(config, lambda *_args: (0, b"")) == 0
+    assert json.loads(config.record_path.read_text())["folders"] == {
+        "nes": "fetched",
+        "psx": "fetched",
+    }
+    assert len(calls) == 1

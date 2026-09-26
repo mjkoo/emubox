@@ -581,13 +581,9 @@ def _reconcile_gamelist(
     directory = Path(os.path.normpath(config.rom_root / folder))
     bases = (directory, directory.resolve())
     extensions = system_extensions(config).get(folder, set())
-    # The frontend keeps system-wide settings, such as its alternative emulator, at the root.
-    present = {child.tag for child in candidate}
-    settings = [child for child in previous if child.tag != "game" and child.tag not in present]
-    for index, child in enumerate(settings):
-        candidate.insert(index, copy.deepcopy(child))
 
-    def identity(entry: ET.Element) -> Path | None:
+    def contained(entry: ET.Element) -> Path | None:
+        """The entry's path relative to the folder, or None when it names nothing inside it."""
         value = entry.findtext("path")
         if not value:
             return None
@@ -599,9 +595,27 @@ def _reconcile_gamelist(
             path = path.relative_to(base)
         if not path.parts or path.parts[0] == "..":
             return None
-        if path.suffix.casefold() not in extensions or not (directory / path).is_file():
-            return None
         return path
+
+    def identity(entry: ET.Element) -> Path | None:
+        path = contained(entry)
+        if path is None or path.suffix.casefold() not in extensions:
+            return None
+        return path if (directory / path).is_file() else None
+
+    def carried(child: ET.Element) -> bool:
+        if child.tag == "game" or child.tag in present:
+            return False
+        if child.tag != "folder":
+            return True
+        path = contained(child)
+        return path is not None and (directory / path).is_dir()
+
+    # The frontend keeps system-wide settings, such as its alternative emulator, at the root.
+    present = {child.tag for child in candidate}
+    settings = [child for child in previous if carried(child)]
+    for index, child in enumerate(settings):
+        candidate.insert(index, copy.deepcopy(child))
 
     entries: dict[Path, ET.Element] = {}
     for entry in candidate.findall("game"):

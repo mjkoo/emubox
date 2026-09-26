@@ -652,6 +652,35 @@ def test_reconciliation_preserves_distinct_paths_and_omitted_games(config: libra
     assert games["new.nes"].find("desc") is None
 
 
+def test_carried_folder_entries_need_their_directory(config: library.Config) -> None:
+    (config.rom_root / "nes" / "kept").mkdir(parents=True)
+    game(config, "nes", "a.nes")
+    (config.rom_root / "outside").mkdir()
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    live.write_text(
+        "<gameList>"
+        "<folder><path>./kept</path><name>Kept</name></folder>"
+        "<folder><path>./gone</path><name>Gone</name></folder>"
+        "<folder><path>../outside</path><name>Outside</name></folder>"
+        "<folder><path>./a.nes</path><name>File</name></folder>"
+        "<alternativeEmulator><label>Chosen</label></alternativeEmulator>"
+        "<game><path>./a.nes</path></game></gameList>"
+    )
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text(
+            "<gameList><game><path>./a.nes</path><desc>New</desc></game></gameList>"
+        )
+        return 0, b""
+
+    assert library.generate(config, invoke) == 0
+    root = ET.parse(live).getroot()
+    assert [child.findtext("name") for child in root.findall("folder")] == ["Kept"]
+    assert root.findtext("alternativeEmulator/label") == "Chosen"
+
+
 def test_symlinked_alias_is_its_own_game(config: library.Config) -> None:
     real = config.rom_root.parent / "real-roms"
     (real / "nes").mkdir(parents=True)

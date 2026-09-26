@@ -862,6 +862,10 @@ in
               ))
               return previous_pid
 
+          # Only a fetch and the regeneration it queues can restore the description.
+          machine.succeed("printf '<gameList><game><path>./fixture.nes</path><name>tools sentinel</name></game></gameList>' > /data/es-de/gamelists/nes/gamelist.xml")
+          machine.succeed("chown player:player /data/es-de/gamelists/nes/gamelist.xml")
+          windows = int(machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip())
           sessions_before = session_journal()
           previous_pid = run_tools_entry()
           wait_frontend_count(15)
@@ -871,6 +875,9 @@ in
               game for path, game in gamelist_games("nes").items() if path.endswith("fixture.nes")
           )
           assert refreshed.findtext("desc") == "Imported fixture description"
+          tools_run = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
+          assert tools_run["folders"]["nes"] == "generated", tools_run
+          assert int(machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip()) > windows
           for count in (16, 17):
               run_tools_entry()
               wait_frontend_count(count)

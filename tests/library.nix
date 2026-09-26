@@ -939,14 +939,18 @@ in
               "roms/n3ds/cached.3ds": "cached fixture ROM",
               "import/definitions.dat": "Description: ###DESCRIPTION###\n",
               "import/textual/cached.txt": "Description: Imported preservation description\n",
+              "roms/n3ds/scanned.3dsx": "scanned fixture ROM",
+              "import/textual/scanned.txt": "Description: Imported frontend-only description\n",
               "import.ini": f"[main]\nimportFolder={base}/import\n",
           }
           for name, content in files.items():
               machine.succeed("printf %s " + shlex.quote(content) + " > " + shlex.quote(base + "/" + name))
           machine.succeed(f"chown -R player:player {base}")
+          # The 3ds platform's own formats omit .3dsx, which the frontend lists.
           machine.succeed(player(
               "${pkgs.skyscraper}/bin/Skyscraper -p 3ds -s import "
-              f"-c {base}/import.ini -i {base}/roms/n3ds -d {base}/cache/n3ds --flags unattend"
+              f"-c {base}/import.ini -i {base}/roms/n3ds -d {base}/cache/n3ds "
+              "--addext .3dsx --flags unattend"
           ))
           machine.succeed(f"install -d -o player -g player {base}/roms/n3ds/nested")
           for name in ("uncached.cxi", "nested/cached.3ds"):
@@ -970,7 +974,7 @@ in
               (entry.findtext("path") or "").removeprefix(base + "/roms/n3ds/").removeprefix("./"): entry
               for entry in root.findall("game")
           }
-          assert set(entries) == {"cached.3ds", "uncached.cxi", "nested/cached.3ds"}, entries
+          assert set(entries) == {"cached.3ds", "uncached.cxi", "nested/cached.3ds", "scanned.3dsx"}, entries
           assert len(root.findall("game")) == len(entries), ET.tostring(root)
           for name, count in (("cached.3ds", "7"), ("uncached.cxi", "8"), ("nested/cached.3ds", "9")):
               assert entries[name].findtext("favorite") == "true"
@@ -978,6 +982,8 @@ in
               assert entries[name].findtext("altemulator") == "custom-" + count
           assert entries["cached.3ds"].findtext("desc") == "Imported preservation description"
           assert not entries["uncached.cxi"].findtext("desc")
+          # With no earlier entry, only the scraper scanning the file can supply this.
+          assert entries["scanned.3dsx"].findtext("desc") == "Imported frontend-only description"
           record = json.loads(machine.succeed(f"cat {base}/cache/last-run.json"))
           assert record["folders"] == {"n3ds": "generated"}, record
           machine.succeed(f"test ! -s {base}/cache/pending")

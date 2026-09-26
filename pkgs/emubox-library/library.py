@@ -681,13 +681,13 @@ def cleanup(config: Config, batch: dict[str, str | None]) -> int:
 
 
 def _gamelist_counts(config: Config, folder: str, roms: list[Path]) -> tuple[int, int] | None:
-    """Entry and unscraped counts, or None when the gamelist cannot be parsed."""
+    """Entry and unscraped counts, or None when the gamelist cannot be read as one."""
     path = config.gamelist_root / folder / "gamelist.xml"
     try:
-        games = ET.parse(path).getroot().findall("game")
+        games = _read_gamelist(path).findall("game")
     except FileNotFoundError:
         games = []
-    except ET.ParseError:
+    except (OSError, ValueError, ET.ParseError):
         return None
     directory = config.rom_root / folder
     described = set()

@@ -85,6 +85,9 @@ def wait_for(path: Path) -> None:
     assert path.exists(), path
 
 
+needs_permissions = pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+
+
 def test_discovery_uses_frontend_extensions_and_ignores_empty_directories(
     config: library.Config,
 ) -> None:
@@ -936,6 +939,36 @@ def test_report_keeps_counting_past_a_malformed_gamelist(config: library.Config)
     )
 
 
+@pytest.mark.parametrize(
+    "damage", ["wrong root", "directory", pytest.param("unreadable", marks=needs_permissions)]
+)
+def test_report_marks_only_the_damaged_gamelist_unreadable(
+    config: library.Config, damage: str
+) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    if damage == "directory":
+        live.mkdir()
+    else:
+        live.write_text(
+            "<wrong><game><path>./a.nes</path><desc>Art</desc></game></wrong>"
+            if damage == "wrong root"
+            else "<gameList />"
+        )
+    if damage == "unreadable":
+        live.chmod(0)
+    status, output = library.report(config, 5)
+    assert status == 0
+    assert output == (
+        "nes: 1 ROMs, gamelist unreadable\n"
+        "psx: 1 ROMs, 0 gamelist entries, 1 unscraped\n"
+        "No scrape has run\n"
+        "Generation pending: none\n"
+    )
+
+
 @pytest.mark.parametrize("record", [[], {"time": "fixed"}, {"result": "complete", "folders": []}])
 def test_report_tolerates_malformed_run_record(config: library.Config, record: object) -> None:
     game(config, "nes", "a.nes")
@@ -1557,9 +1590,6 @@ def journal_log(config: library.Config) -> tuple[library.Config, Path]:
     cat.write_text(f"#!/bin/sh\ncat >> {log}\n")
     cat.chmod(0o755)
     return replace(config, systemd_cat=str(cat)), log
-
-
-needs_permissions = pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
 
 
 @needs_permissions

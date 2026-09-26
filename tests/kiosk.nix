@@ -30,9 +30,9 @@ let
 
   # The document `modules/emulators` actually ships, read from
   # the real host config rather than this file's own node - whose
-  # `emubox.kiosk.customSystems` below is `mkForce`d to a 10-line test
-  # document so the kiosk subtests can prove the custom-systems mechanism
-  # against something they control. That `mkForce` is exactly
+  # `emubox.kiosk.customSystems` below is `mkForce`d to a one-element list
+  # holding a single test `<system>` fragment so the kiosk subtests can prove
+  # the custom-systems mechanism against something they control. That `mkForce` is exactly
   # why nothing else in this file, or anywhere else, ever parsed the
   # shipped 218-line document - the one `modules/emulators` actually
   # contributes to a real box went unparsed by any check in this
@@ -643,8 +643,8 @@ assert lib.assertMsg
       MOCK_TOKEN = ${py mockToken}
 
       # The document `modules/emulators` actually ships, distinct from this
-      # node's own `emubox.kiosk.customSystems` (below,
-      # `mkForce`d to a 10-line test document) - see `shippedCustomSystems`'s
+      # node's own `emubox.kiosk.customSystems` (below, `mkForce`d to a
+      # one-element list holding a single test fragment) - see `shippedCustomSystems`'s
       # own comment at the top of this file for why the two have to differ.
       SHIPPED_CUSTOM_SYSTEMS = ${py shippedCustomSystems}
 

@@ -97,9 +97,11 @@ lint-actions:
 # check, evaluation) plus the workflow lint
 check-all: fmt-check flake-check eval lint-actions install-guard-test
 
-# Prove optional off-site credential placeholders are accepted only while the
-# off-site service is disabled. Kept in the local check gate with the other
-# non-KVM shell behavior.
+# Prove the install placeholder guard: optional off-site credential
+# placeholders are accepted only while the off-site service is disabled,
+# unresolved scraping keys are always refused, and a bad argument gets the
+# usage message. Kept in the local check gate with the other non-KVM shell
+# behavior.
 install-guard-test:
     bash tests/test-install-placeholder-guard.sh
 

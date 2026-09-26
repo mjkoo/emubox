@@ -2,7 +2,7 @@
 
 Status: deferred until a future hardware installation. No hardware
 installation has been performed yet. These checks are post-installation
-follow-up work and do not block completion of the current implementation. Run
+follow-up work and are not a precondition for merging. Run
 them when the project is ready for hardware testing; they require the target
 appliance, its display and physical keyboard or controller. A green CI run
 does not establish that they pass. CI covers source contracts, local scraper

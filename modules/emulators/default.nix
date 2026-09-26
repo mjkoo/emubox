@@ -612,9 +612,9 @@ let
   # requires firmware to run anything at all and has a citable checksum
   # at all.
   #
-  # D6's first draft fixed the digest field at sha256; corrected because
-  # nobody publishes a sha256 for any of these files, which would have kept
-  # this inventory permanently empty. `algorithm` is named per entry
+  # The digest field is not fixed at sha256, because nobody publishes a
+  # sha256 for any of these files, which would keep this inventory
+  # permanently empty. `algorithm` is named per entry
   # (`"md5"`, `"sha256"` or `"crc32"`) rather than inferred from digest
   # length, since a 32-hex MD5 and a 32-hex digest from some other algorithm
   # are indistinguishable by length alone - `emubox-check-bios` treats an

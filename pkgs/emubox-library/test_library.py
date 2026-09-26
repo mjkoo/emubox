@@ -485,6 +485,75 @@ def test_identical_rewrite_is_successful(config: library.Config) -> None:
     assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generated"
 
 
+class _CoarseStat:
+    """A stat result from a file system that keeps whole thousands of seconds."""
+
+    def __init__(self, result: os.stat_result) -> None:
+        self._result = result
+        self.st_mtime_ns = result.st_mtime_ns // 10**12 * 10**12
+        self.st_ctime_ns = result.st_ctime_ns // 10**12 * 10**12
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._result, name)
+
+
+def test_rewrite_is_detected_on_coarse_timestamps(
+    config: library.Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    game(config, "nes", "a.nes")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    old = b"<gameList><game><path>./a.nes</path><name>A</name></game></gameList>"
+    live.write_bytes(old)
+    now = time.time_ns()
+    os.utime(live, ns=(now, now))
+    library.write_pending(config, ["nes"])
+    original = Path.stat
+
+    def coarse(path: Path, *, follow_symlinks: bool = True) -> object:
+        return _CoarseStat(original(path, follow_symlinks=follow_symlinks))
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_bytes(old)
+        return 0, b""
+
+    monkeypatch.setattr(Path, "stat", coarse)
+    assert library.generate(config, invoke) == 0
+    monkeypatch.undo()
+    assert live.read_bytes() == old
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generated"
+
+
+@pytest.mark.parametrize("name", ["control\x01.nes", b"undecodable\xff.nes"])
+def test_merged_gamelist_that_does_not_read_back_is_not_published(
+    config: library.Config, name: str | bytes
+) -> None:
+    directory = config.rom_root / "nes"
+    directory.mkdir(parents=True)
+    try:
+        if isinstance(name, bytes):
+            with open(os.path.join(os.fsencode(directory), name), "wb") as stream:
+                stream.write(b"ROM")
+        else:
+            (directory / name).write_text("ROM")
+    except (OSError, ValueError):
+        pytest.skip("the file system rejects this name")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    old = b"<gameList><game><path>./other.nes</path><favorite>true</favorite></game></gameList>"
+    live.write_bytes(old)
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text("<gameList />")
+        return 0, b""
+
+    assert library.generate(config, invoke) == 0
+    assert live.read_bytes() == old
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
+    assert library.read_pending(config) == []
+
+
 @pytest.mark.parametrize("old", ["<gameList><game>", "<wrong />"])
 def test_invalid_previous_gamelist_prevents_generation(config: library.Config, old: str) -> None:
     live = config.gamelist_root / "nes" / "gamelist.xml"

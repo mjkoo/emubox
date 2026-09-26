@@ -29,6 +29,8 @@ from typing import Any
 PER_FOLDER_SECONDS = 600
 ALL_FOLDERS_SECONDS = 1800
 REPORT_SECONDS = 45
+# The work copy of the live gamelist carries this time, so any write replaces it.
+SENTINEL_MTIME_NS = 0
 CONFIG_PATH = Path("/etc/emubox/library.json")
 VECTORS_PATH = Path(__file__).with_name("vectors.json")
 IONICE = "@IONICE@"
@@ -503,12 +505,13 @@ def _read_gamelist(path: Path) -> ET.Element:
     return root
 
 
-def _file_signature(path: Path) -> tuple[int, int, int] | None:
+def _written(path: Path) -> bool:
+    """Whether the scraper left a gamelist that is not the untouched sentinel copy."""
     try:
         info = path.stat()
     except FileNotFoundError:
-        return None
-    return info.st_ino, info.st_mtime_ns, info.st_ctime_ns
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_mtime_ns != SENTINEL_MTIME_NS
 
 
 def _reconcile_gamelist(
@@ -590,12 +593,12 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
                     previous = ET.Element("gameList")
                     if live.exists():
                         shutil.copy2(live, source)
+                        os.utime(source, ns=(SENTINEL_MTIME_NS, SENTINEL_MTIME_NS))
                         try:
                             previous = _read_gamelist(source)
                         except (ValueError, ET.ParseError):
                             reason = "its gamelist is unreadable; repair it or move it aside"
                             raise
-                    before = _file_signature(source)
                     limit = min(end, time.monotonic() + PER_FOLDER_SECONDS)
                     status, _ = invoke(
                         config,
@@ -603,15 +606,13 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
                         claim,
                         limit,
                     )
-                    if (
-                        status == 0
-                        and time.monotonic() < limit
-                        and source.is_file()
-                        and _file_signature(source) != before
-                    ):
+                    if status == 0 and time.monotonic() < limit and _written(source):
                         candidate = _read_gamelist(source)
                         _reconcile_gamelist(config, folder, previous, candidate)
-                        ET.ElementTree(candidate).write(source, encoding="utf-8")
+                        merged = ET.tostring(candidate, encoding="utf-8")
+                        # A value XML cannot carry would publish a file nothing can read.
+                        ET.fromstring(merged)
+                        source.write_bytes(merged)
                         if time.monotonic() >= limit:
                             raise ValueError("Generation deadline expired before publication")
                         _publish_gamelist(work, live)

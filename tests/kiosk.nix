@@ -28,16 +28,16 @@ let
   pkgs = self.nixosConfigurations.emubox.pkgs;
   inherit (pkgs) lib;
 
-  # The document `modules/emulators` actually ships, read from
-  # the real host config rather than this file's own node - whose
-  # `emubox.kiosk.customSystems` below is `mkForce`d to a one-element list
-  # holding a single test `<system>` fragment so the kiosk subtests can prove
-  # the custom-systems mechanism against something they control. That `mkForce` is exactly
-  # why nothing else in this file, or anywhere else, ever parsed the
-  # shipped 218-line document - the one `modules/emulators` actually
-  # contributes to a real box went unparsed by any check in this
-  # repository. `shippedCustomSystems` exists so the standalone check near
-  # the top of `testScript` below can do that, with no VM node needed.
+  # The `<system>` fragments the real host's modules contribute to
+  # `emubox.kiosk.customSystems` (`modules/emulators`' overrides and
+  # `modules/library`'s Tools system), read from the real host config and
+  # wrapped in a `<systemList>` here, rather than from this file's own
+  # node - whose `emubox.kiosk.customSystems` below is `mkForce`d to a
+  # one-element list holding a single test `<system>` fragment so the kiosk
+  # subtests can prove the custom-systems mechanism against something they
+  # control. That `mkForce` is why this node never parses the shipped
+  # fragments. `shippedCustomSystems` exists so the standalone check near
+  # the top of `testScript` below can, with no VM node needed.
   shippedCustomSystems = ''
     <?xml version="1.0"?>
     <systemList>
@@ -642,8 +642,8 @@ assert lib.assertMsg
       RA_PASSWORD = ${py values.raPassword}
       MOCK_TOKEN = ${py mockToken}
 
-      # The document `modules/emulators` actually ships, distinct from this
-      # node's own `emubox.kiosk.customSystems` (below, `mkForce`d to a
+      # The real host's custom-system fragments wrapped in one list,
+      # distinct from this node's own `emubox.kiosk.customSystems` (below, `mkForce`d to a
       # one-element list holding a single test fragment) - see `shippedCustomSystems`'s
       # own comment at the top of this file for why the two have to differ.
       SHIPPED_CUSTOM_SYSTEMS = ${py shippedCustomSystems}
@@ -812,16 +812,15 @@ assert lib.assertMsg
               if rc == 0:
                   assert RA_PASSWORD not in out, f"{path} contains the RA password"
 
-      # --- emulators: the shipped custom-systems document parses ------------
+      # --- emulators: the shipped custom-system fragments parse -------------
       #
       # No node, no boot: this runs on the driver host, before
       # `machine.wait_for_unit` below ever touches the VM, because the
       # `mkForce` on this node's own `emubox.kiosk.customSystems` (further
       # down this file) is deliberate for what the kiosk subtests prove, and
-      # that leaves the 218-line document `modules/emulators` actually
-      # contributes to a real box unparsed by anything else in this
-      # repository. A malformed `<system>` block in it would otherwise
-      # surface only as a file ES-DE silently ignores on hardware.
+      # that leaves the fragment list the real host's modules contribute
+      # unparsed by this node. A malformed `<system>` fragment would
+      # otherwise surface only as a file ES-DE silently ignores on hardware.
       with subtest("The shipped custom-systems document is well-formed and PS1 offers DuckStation first"):
           root = ET.fromstring(SHIPPED_CUSTOM_SYSTEMS)
           assert root.tag == "systemList", root.tag

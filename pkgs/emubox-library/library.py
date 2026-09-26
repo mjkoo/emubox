@@ -577,7 +577,9 @@ def _reconcile_gamelist(
     config: Config, folder: str, previous: ET.Element, candidate: ET.Element
 ) -> None:
     """Keep existing games, family metadata and system settings the scraper did not emit."""
-    directory = (config.rom_root / folder).resolve()
+    # Keys stay lexical: a symlinked alias is a game of its own, not a duplicate of its target.
+    directory = Path(os.path.normpath(config.rom_root / folder))
+    bases = (directory, directory.resolve())
     extensions = system_extensions(config).get(folder, set())
     # The frontend keeps system-wide settings, such as its alternative emulator, at the root.
     present = {child.tag for child in candidate}
@@ -589,12 +591,17 @@ def _reconcile_gamelist(
         value = entry.findtext("path")
         if not value:
             return None
-        path = (directory / value).resolve()
-        if not path.is_relative_to(directory):
+        path = Path(os.path.normpath(value))
+        if path.is_absolute():
+            base = next((base for base in bases if path.is_relative_to(base)), None)
+            if base is None:
+                return None
+            path = path.relative_to(base)
+        if not path.parts or path.parts[0] == "..":
             return None
-        if path.suffix.casefold() not in extensions or not path.is_file():
+        if path.suffix.casefold() not in extensions or not (directory / path).is_file():
             return None
-        return path.relative_to(directory)
+        return path
 
     entries: dict[Path, ET.Element] = {}
     for entry in candidate.findall("game"):
@@ -621,7 +628,7 @@ def _reconcile_gamelist(
                     current.append(copy.deepcopy(saved))
     if directory.exists():
         for rom in rom_files(directory, extensions):
-            if rom.resolve().relative_to(directory) not in entries:
+            if rom.relative_to(directory) not in entries:
                 entry = ET.SubElement(candidate, "game")
                 ET.SubElement(entry, "path").text = f"./{rom.name}"
                 ET.SubElement(entry, "name").text = rom.stem

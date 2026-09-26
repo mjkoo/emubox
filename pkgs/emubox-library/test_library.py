@@ -652,6 +652,28 @@ def test_reconciliation_preserves_distinct_paths_and_omitted_games(config: libra
     assert games["new.nes"].find("desc") is None
 
 
+def test_symlinked_alias_is_its_own_game(config: library.Config) -> None:
+    real = config.rom_root.parent / "real-roms"
+    (real / "nes").mkdir(parents=True)
+    (real / "nes" / "a.nes").write_text("ROM")
+    (real / "nes" / "alias.nes").symlink_to("a.nes")
+    config.rom_root.symlink_to(real)
+    library.write_pending(config, ["nes"])
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text(
+            f"<gameList><game><path>{real.resolve() / 'nes' / 'a.nes'}</path><desc>A</desc></game>"
+            f"<game><path>{config.rom_root / 'nes' / 'alias.nes'}</path><desc>B</desc></game>"
+            "</gameList>"
+        )
+        return 0, b""
+
+    assert library.generate(config, invoke) == 0
+    assert json.loads(config.record_path.read_text())["folders"] == {"nes": "generated"}
+    live = ET.parse(config.gamelist_root / "nes" / "gamelist.xml").getroot()
+    assert [game.findtext("desc") for game in live.findall("game")] == ["A", "B"]
+
+
 def test_publication_failure_keeps_live_file(
     config: library.Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:

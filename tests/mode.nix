@@ -50,9 +50,8 @@ in
         "d /data/roms/emuboxtest 0755 player player -"
         "f /data/roms/emuboxtest/dummy.test 0644 player player -"
       ];
-      emubox.kiosk.customSystems = lib.mkForce ''
-        <?xml version="1.0"?>
-        <systemList>
+      emubox.kiosk.customSystems = lib.mkForce [
+        ''
           <system>
             <name>emuboxtest</name>
             <fullname>emubox test system</fullname>
@@ -62,8 +61,8 @@ in
             <platform>test</platform>
             <theme>emuboxtest</theme>
           </system>
-        </systemList>
-      '';
+        ''
+      ];
     };
 
   testScript =

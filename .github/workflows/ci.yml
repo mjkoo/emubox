@@ -21,7 +21,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Both VM tests need KVM. The runner has /dev/kvm, but as 0660
+      # The VM tests need KVM. The runner has /dev/kvm, but as 0660
       # root:kvm, which the nix build users cannot open: nix still
       # advertises the `kvm` feature and schedules them, QEMU's
       # accel=kvm:tcg silently falls back to TCG, and the run crawls into
@@ -58,6 +58,9 @@ jobs:
 
       - name: Format check
         run: nix fmt -- --ci
+
+      - name: Library nonvisual integration
+        run: nix build .#checks.x86_64-linux.library --no-link -L
 
       - name: Flake check
         run: nix flake check -L

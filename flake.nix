@@ -34,10 +34,10 @@
         allowUnfree = true;
         # FreeImage (pkgs/freeimage) is the derivation nixpkgs removed over
         # its unpatched CVEs; ES-DE has no other image backend. The risk is
-        # accepted because FreeImage only ever decodes images the admin put
-        # on the box (art scraped from ScreenScraper, bundled theme assets):
-        # no untrusted input reaches it. CI builds it whenever its inputs
-        # change, so a library bump that breaks it surfaces before the box.
+        # accepted even though external ScreenScraper artwork reaches the
+        # vulnerable decoder, including household-triggered downloads, as
+        # do local images and bundled theme assets. CI detects build
+        # regressions; it does not make downloaded images trusted.
         # If the source build becomes unmaintainable, the fallback is
         # wrapping ES-DE's own AppImage and dropping this permission. The
         # name is pname-version, as nixpkgs matches it. The overlay puts
@@ -157,6 +157,11 @@
           perSystem.emubox-restic-backup =
             (pkgsFor system).callPackage ./pkgs/emubox-restic-backup/package.nix
               { };
+          perSystem.emubox-library = (pkgsFor system).callPackage ./pkgs/emubox-library/package.nix { };
+          perSystem.library-config = import ./tests/library-config.nix {
+            inherit self;
+            pkgs = pkgsFor system;
+          };
           perSystem.emubox-status = (pkgsFor system).callPackage ./pkgs/emubox-status/package.nix { };
           perSystem.emubox-controllers-status =
             (pkgsFor system).callPackage ./pkgs/emubox-controllers-status/package.nix
@@ -204,7 +209,6 @@
             inherit self;
             pkgs = pkgsFor system;
           };
-
           # The host configuration extended with the test module: the VM
           # test installs and boots its toplevel, and the closure check greps
           # that same toplevel, so a test override reaches both.
@@ -214,6 +218,12 @@
           # nixpkgsConfig and overlay included.
           hostOnly = {
             toplevel = self.nixosConfigurations.emubox.config.system.build.toplevel;
+            # Custom system fragments merge into one document, and the
+            # session carries a pre-frontend step only when a module sets one.
+            custom-systems = import ./tests/custom-systems.nix {
+              inherit self;
+              pkgs = hostPkgs;
+            };
             # disko's install test: format the real layout, install, boot
             # through the boot loader, then run tests/default.nix's checks.
             vm = testHost.config.system.build.installTest;
@@ -223,11 +233,40 @@
             # The live round trip between the frontend and Plasma, including
             # refusal paths and teardown of the old graphical session.
             mode = hostPkgs.testers.runNixOSTest (import ./tests/mode.nix { inherit self; });
+            # The bundled systems document the library reads its extension
+            # lists from exists at the path the module passes.
+            library-resources = hostPkgs.runCommand "emubox-library-resources" { } ''
+              test -f ${hostPkgs.es-de}/share/es-de/resources/systems/linux/es_systems.xml
+              touch "$out"
+            '';
+            # Every platform and scraper option the library passes exists in
+            # the pinned Skyscraper and ES-DE sources. Host-only because those
+            # sources are the host package set's pins.
+            library-source-contracts =
+              hostPkgs.runCommand "emubox-library-source-contracts" { nativeBuildInputs = [ hostPkgs.python3 ]; }
+                ''
+                  python3 ${./tests/library-source-contracts.py} \
+                    --skyscraper-source ${hostPkgs.skyscraper.src} \
+                    --esde-source ${hostPkgs.es-de.src} \
+                    --nixpkgs-source ${nixpkgs} \
+                    --platform-map ${host.config.environment.etc."emubox/library-platforms.json".source} \
+                    --vectors ${hostPkgs.emubox-library}/lib/emubox-library/vectors.json
+                  touch "$out"
+                '';
+            # Nonvisual scraper and library integration assertions.
+            # Display and frontend interaction are checked on hardware.
+            library = hostPkgs.testers.runNixOSTest (import ./tests/library.nix { inherit self; });
             # The host's software modules as a plain node with fixture
             # controller ports and fixture pad identities: the port-to-player
             # mapping, the session hint, the owned controller keys and the
             # status aggregation.
             controllers = hostPkgs.testers.runNixOSTest (import ./tests/controllers.nix { inherit self; });
+            # The session loop's control flow run with stub processes: the
+            # crash count, requested restarts and the pre-frontend step.
+            session-restarts = import ./tests/session-restarts.nix {
+              inherit self;
+              pkgs = hostPkgs;
+            };
             # The kiosk session script on its own, because building it is
             # what runs its shellcheck: `writeShellApplication` does that in
             # its check phase, and nothing the admin's Mac can run reaches

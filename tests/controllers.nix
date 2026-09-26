@@ -1113,14 +1113,15 @@ in
 
       with subtest(
           "One emubox-status run carries the switchable reporter, the controllers section"
-          " and the backups section together, and no section for an unregistered capability"
+          " and the backups and library sections together, and no unregistered section"
       ):
           # Not asserted successful: this node has no btrfs snapshot layer,
           # so its backups section warns that the local layer has not yet
-          # run, whatever the other two sections report.
+          # run, whatever the other sections report.
           _, output = run_status()
           sections = status_sections(output)
-          assert set(sections) == {"backups", "controllers", "switchable"}, sections
+          assert set(sections) == {"backups", "controllers", "library", "switchable"}, sections
+          assert sections["library"].startswith("library: ok\n"), sections["library"]
           assert sections["switchable"].splitlines()[0] == "switchable: ok", sections["switchable"]
           # This node leaves off-site backup off, so its backups section
           # carries the local snapshot layer and neither off-site layer -

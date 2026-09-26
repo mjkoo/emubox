@@ -102,14 +102,22 @@ hardware acceptance checks.
 
 ## 8. Gate and reviews
 
-- [ ] 8.1 `just check-all` passes at the final implementation commit, and the host toplevel, the session script, `pkgs/emubox-library` and the library and kiosk test drivers build on the x86_64-linux builder; the commands' final lines are recorded under this task
-- [ ] 8.2 A green CI run of every check at the final implementation commit, its run number recorded under this task, since the session script's text changes and with it every VM check
+- [x] 8.1 `just check-all` passes at the final implementation commit, and the host toplevel, the session script, `pkgs/emubox-library` and the library and kiosk test drivers build on the x86_64-linux builder; the commands' final lines are recorded under this task
+- [x] 8.2 A green CI run of every check at the final implementation commit, its run number recorded under this task, since the session script's text changes and with it every VM check
 - [x] 8.3 Per-group evidencing reviews and the closing review wave the implementation workflow requires, with findings and their resolutions recorded under this task
 
 
-8.1 and 8.2 are reopened for the commit that closes group 9. The evidence
-below names `4b3af66` and run 36044891955; a later run, 36169570415, was
-green at `82eaaf2` before group 9 began.
+8.1 and 8.2 were reopened for group 9 and are now evidenced at `fa85495`,
+the commit that closes it. CI run
+[36251211018](https://github.com/mjkoo/emubox/actions/runs/36251211018)
+completed successfully there: format check, library nonvisual integration,
+full flake checks and host closure build. `direnv exec . just check-all`
+exited 0 at the same commit, ending with `zizmor` ("No findings to report")
+and `bash tests/test-install-placeholder-guard.sh`. The builder build of the
+host toplevel, the session check, the `emubox-library` package and the
+library and kiosk test drivers exited 0, the drivers reporting "All checks
+passed!". The evidence below for `4b3af66` and run 36044891955 describes the
+gate before group 9.
 
 ## 9. Verification fix round
 

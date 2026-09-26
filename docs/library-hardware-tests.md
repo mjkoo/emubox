@@ -89,6 +89,11 @@ state and terminate its Cage parent. Record which route preserves the state
 and relaunches; a changed PID alone is insufficient. Feed the observed route
 back into the implementation before accepting its restart behavior.
 
+Also run the Tools entry's "Update game art" and record the time from the
+request (the scrape window closing) to the frontend's exit. It must be
+under 15 seconds: the session honours a restart request only within that
+time, and a slower exit is counted as a crash.
+
 ## Integrated generation and real account
 
 After hardware installation, prepare a disposable cached game with generation

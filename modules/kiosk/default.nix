@@ -189,6 +189,9 @@ let
       fi
 
       restart_mark="''${XDG_RUNTIME_DIR:?}/emubox-frontend-restart"
+      # Seconds a restart request stays valid: a frontend that has not
+      # exited this long after the request is treated as having ignored it.
+      restart_lapse=15
       rm -f "$restart_mark"
 
       while true; do
@@ -229,12 +232,13 @@ let
         cage -s -- es-de || rc=$?
         ran=$(( SECONDS - started ))
         # A Tools entry's request covers only the exit it asked for: a mark
-        # written more than the window before this exit has lapsed, because
+        # written more than the lapse before this exit has lapsed, because
         # a frontend that ignored the signal and failed later must count.
+        # The mark's time is wall-clock, so a clock step can move it.
         requested=false
         if [ -e "$restart_mark" ]; then
           marked=$(stat -c %Y "$restart_mark" 2>/dev/null || echo 0)
-          if [ $(( $(date +%s) - marked )) -le "$window" ]; then
+          if [ $(( $(date +%s) - marked )) -le "$restart_lapse" ]; then
             requested=true
           fi
           rm -f "$restart_mark"

@@ -32,8 +32,8 @@ Keys this layer consumes:
 | `b2_key_id`                     | `sops.templates."restic.env"` as `AWS_ACCESS_KEY_ID`, used only by enabled restic services |
 | `b2_application_key`            | same template as `AWS_SECRET_ACCESS_KEY`; restricted to the dedicated backup bucket |
 | `restic_password`               | root-only `RESTIC_PASSWORD_FILE` in the same template |
-| `screenscraper_username`        | player-only Skyscraper config rendered by `modules/library` |
-| `screenscraper_password`        | same config; never passed on the command line |
+| `screenscraper_username`        | player-only Skyscraper config rendered by `modules/library`, inside its quoted `userCreds="user:password"` entry, so it cannot contain `:`, `"` or a newline |
+| `screenscraper_password`        | same entry, so it cannot contain `"` or a newline; never passed on the command line |
 
 **WiFi values.** `wifi_ssid` and `wifi_psk` reach NetworkManager through a
 systemd `EnvironmentFile`, which unquotes like a shell: a value containing

@@ -716,6 +716,37 @@ def test_reconciliation_keeps_all_family_fields(config: library.Config) -> None:
     assert candidate.findtext("game/desc") == "New metadata"
 
 
+@pytest.mark.parametrize("generated", [None, "Generated"])
+def test_regeneration_keeps_the_system_alternative_emulator(
+    config: library.Config, generated: str | None
+) -> None:
+    game(config, "nes", "a.nes")
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.parent.mkdir(parents=True)
+    live.write_text(
+        "<gameList><alternativeEmulator><label>Chosen</label></alternativeEmulator>"
+        "<game><path>./a.nes</path></game></gameList>"
+    )
+    library.write_pending(config, ["nes"])
+    output = (
+        ""
+        if generated is None
+        else f"<alternativeEmulator><label>{generated}</label></alternativeEmulator>"
+    )
+
+    def invoke(_config: library.Config, argv: list[str], *_args: object) -> tuple[int, bytes]:
+        (Path(argv[argv.index("-g") + 1]) / "gamelist.xml").write_text(
+            f"<gameList>{output}<game><path>./a.nes</path><desc>New</desc></game></gameList>"
+        )
+        return 0, b""
+
+    assert library.generate(config, invoke) == 0
+    root = ET.parse(live).getroot()
+    assert [child.tag for child in root] == ["alternativeEmulator", "game"]
+    assert root.findtext("alternativeEmulator/label") == (generated or "Chosen")
+    assert root.findtext("game/desc") == "New"
+
+
 def test_generation_creates_missing_parent_and_keeps_appended_pending(
     config: library.Config,
 ) -> None:

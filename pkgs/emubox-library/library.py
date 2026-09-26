@@ -517,9 +517,14 @@ def _written(path: Path) -> bool:
 def _reconcile_gamelist(
     config: Config, folder: str, previous: ET.Element, candidate: ET.Element
 ) -> None:
-    """Keep existing games and family metadata the scraper did not emit."""
+    """Keep existing games, family metadata and system settings the scraper did not emit."""
     directory = (config.rom_root / folder).resolve()
     extensions = system_extensions(config).get(folder, set())
+    # The frontend keeps system-wide settings, such as its alternative emulator, at the root.
+    present = {child.tag for child in candidate}
+    settings = [child for child in previous if child.tag != "game" and child.tag not in present]
+    for index, child in enumerate(settings):
+        candidate.insert(index, copy.deepcopy(child))
 
     def identity(entry: ET.Element) -> Path | None:
         value = entry.findtext("path")

@@ -2181,17 +2181,52 @@ def test_scrape_names_a_failed_priority_change_in_one_line(
     assert library.read_pending(config) == []
 
 
+def scrape_signalled_at(config: library.Config, line: str, prelude: str = "") -> int:
+    """Run emubox-scrape's entry point, sending itself SIGTERM as it shows `line`."""
+    scraper = config.cache_root.parent / "quick-scraper"
+    scraper.write_text("#!/bin/sh\nexit 0\n")
+    scraper.chmod(0o755)
+    settings = cli_config(
+        replace(config, skyscraper=str(scraper)), config.cache_root.parent / "config.json"
+    )
+    code = (
+        "import library, os, signal, sys\n"
+        "show=library.show\n"
+        "def signalled(line):\n"
+        f" if line == {line!r}:\n"
+        "  os.kill(os.getpid(), signal.SIGTERM)\n"
+        " return show(line)\n"
+        "library.show=signalled\n"
+        + prelude
+        + "sys.exit(library.scrape_main(['--config', sys.argv[1]]))\n"
+    )
+    environment = dict(os.environ, PYTHONPATH=str(Path(__file__).parent))
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(settings)],
+        capture_output=True,
+        env=environment,
+        timeout=30,
+    )
+    return result.returncode
+
+
+def test_signal_outside_the_scraper_records_interrupted(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    library.write_record(config, "complete", {"psx": "generated"})
+    assert scrape_signalled_at(config, "Fetching psx") == 128 + signal.SIGTERM
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == "interrupted"
+    assert record["folders"] == {"nes": "fetched", "psx": "generated"}
+    assert library.read_pending(config) == ["nes"]
+
+
 def test_interruption_keeps_its_status_when_the_record_cannot_be_written(
-    config: library.Config, monkeypatch: pytest.MonkeyPatch
+    config: library.Config,
 ) -> None:
     game(config, "nes", "a.nes")
-
-    def invoke(*_args: object) -> tuple[int, bytes]:
-        raise library.Interrupted(signal.SIGTERM)
-
-    def fail(path: Path, content: bytes) -> None:
-        raise PermissionError(f"read-only {path}")
-
-    monkeypatch.setattr(library, "atomic_write", fail)
-    with pytest.raises(library.Interrupted):
-        library.scrape(config, invoke)
+    library.write_record(config, "complete", {"nes": "generated"})
+    before = config.record_path.read_bytes()
+    prelude = "def fail(path, content):\n raise PermissionError(path)\nlibrary.atomic_write=fail\n"
+    assert scrape_signalled_at(config, "Fetching nes", prelude) == 128 + signal.SIGTERM
+    assert config.record_path.read_bytes() == before

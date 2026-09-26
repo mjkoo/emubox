@@ -22,7 +22,7 @@ import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -291,6 +291,7 @@ class Interrupted(Exception):
         self.number = number
 
 
+TERMINATIONS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 _interrupt_armed = True
 
 
@@ -307,13 +308,25 @@ def _interrupt(number: int, _frame: object) -> None:
         raise Interrupted(number)
 
 
+@contextlib.contextmanager
+def _terminations() -> Iterator[None]:
+    """Turn a termination signal anywhere in the enclosed section into Interrupted."""
+    _arm_interrupt()
+    previous = {number: signal.signal(number, _interrupt) for number in TERMINATIONS}
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
 def run_skyscraper(
     config: Config, argv: list[str], lock_fd: int, deadline: float | None = None
 ) -> tuple[int, bytes]:
     """Run and stream one scraper child; the inherited descriptor pins its claim."""
     account = pwd.getpwnam(config.session_user)
     environment = dict(os.environ, HOME=account.pw_dir)
-    signals = {signal.SIGTERM, signal.SIGINT, signal.SIGHUP}
+    signals = set(TERMINATIONS)
     old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, signals)
     _arm_interrupt()
     previous_term = signal.signal(signal.SIGTERM, _interrupt)
@@ -483,52 +496,67 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
     if claim is None:
         print("A scrape or generation run is in progress", file=sys.stderr)
         return 1
+    outcomes: dict[str, str] = {}
+    transcript = bytearray()
     try:
-        error = credentials_error(config)
-        if error:
-            print(error, file=sys.stderr)
-            # Nothing was attempted, so earlier outcomes still describe the folders.
-            previous = read_mapping(config.record_path).get("folders")
-            write_record(config, "refused", previous if isinstance(previous, dict) else {}, error)
-            atomic_write(config.log_path, (error + "\n").encode())
-            return 1
-        with contextlib.suppress(OSError):
-            os.nice(19)
-        if IONICE and not IONICE.startswith("@"):
+        # A termination signal anywhere under the claim, not only while the scraper
+        # runs, ends the run as interrupted.
+        with _terminations():
             try:
-                subprocess.run([IONICE, "-c", "3", "-p", str(os.getpid())], check=True)
-            except (OSError, subprocess.CalledProcessError) as error:
-                raise ValueError(f"Cannot lower the scrape's disk priority: {error}") from error
-        extensions = system_extensions(config)
-        platforms = read_json(config.platform_map, {})
-        outcomes: dict[str, str] = {}
-        transcript = bytearray()
-        try:
-            _fetch_folders(config, invoke, claim, extensions, platforms, outcomes, transcript)
-        except Interrupted:
-            # Folders the run did not reach keep what the previous record said of them.
-            previous = read_mapping(config.record_path).get("folders")
-            carried = dict(previous) if isinstance(previous, dict) else {}
-            carried.update(outcomes)
-            # A failed write must not replace the interruption's exit status.
-            with contextlib.suppress(OSError):
-                atomic_write(config.log_path, bytes(transcript))
-                write_record(config, "interrupted", carried)
-            raise
-        fetched = sum(value == "fetched" for value in outcomes.values())
-        failed = sum(value == "fetch-failed" for value in outcomes.values())
-        unmapped = sum(value == "unmapped" for value in outcomes.values())
-        result = "partial" if fetched and failed else "failed" if failed else "complete"
-        transcript.extend(
-            show(
-                f"Scrape result: {result} ({fetched} fetched, {failed} failed, {unmapped} unmapped)"
-            )
-        )
-        atomic_write(config.log_path, bytes(transcript))
-        write_record(config, result, outcomes)
-        return 0 if result == "complete" else 1
+                return _scrape_claimed(config, invoke, claim, outcomes, transcript)
+            except Interrupted:
+                _record_interrupted(config, outcomes, transcript)
+                raise
     finally:
         os.close(claim)
+
+
+def _record_interrupted(config: Config, outcomes: dict[str, str], transcript: bytearray) -> None:
+    # Folders the run did not reach keep what the previous record said of them.
+    previous = read_mapping(config.record_path).get("folders")
+    carried = dict(previous) if isinstance(previous, dict) else {}
+    carried.update(outcomes)
+    # A failed write must not replace the interruption's exit status.
+    with contextlib.suppress(OSError):
+        atomic_write(config.log_path, bytes(transcript))
+        write_record(config, "interrupted", carried)
+
+
+def _scrape_claimed(
+    config: Config,
+    invoke: Callable[..., tuple[int, bytes]],
+    claim: int,
+    outcomes: dict[str, str],
+    transcript: bytearray,
+) -> int:
+    error = credentials_error(config)
+    if error:
+        print(error, file=sys.stderr)
+        # Nothing was attempted, so earlier outcomes still describe the folders.
+        previous = read_mapping(config.record_path).get("folders")
+        write_record(config, "refused", previous if isinstance(previous, dict) else {}, error)
+        atomic_write(config.log_path, (error + "\n").encode())
+        return 1
+    with contextlib.suppress(OSError):
+        os.nice(19)
+    if IONICE and not IONICE.startswith("@"):
+        try:
+            subprocess.run([IONICE, "-c", "3", "-p", str(os.getpid())], check=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise ValueError(f"Cannot lower the scrape's disk priority: {error}") from error
+    extensions = system_extensions(config)
+    platforms = read_json(config.platform_map, {})
+    _fetch_folders(config, invoke, claim, extensions, platforms, outcomes, transcript)
+    fetched = sum(value == "fetched" for value in outcomes.values())
+    failed = sum(value == "fetch-failed" for value in outcomes.values())
+    unmapped = sum(value == "unmapped" for value in outcomes.values())
+    result = "partial" if fetched and failed else "failed" if failed else "complete"
+    transcript.extend(
+        show(f"Scrape result: {result} ({fetched} fetched, {failed} failed, {unmapped} unmapped)")
+    )
+    atomic_write(config.log_path, bytes(transcript))
+    write_record(config, result, outcomes)
+    return 0 if result == "complete" else 1
 
 
 def _record_generation(config: Config, folder: str, outcome: str, reason: str = "") -> None:

@@ -892,17 +892,33 @@ def test_cleanup_leaves_pending_when_lock_or_record_write_fails(
     assert config.pending_path.read_bytes() == before
 
 
-def test_capture_reports_pending_without_revision_and_cleanup_keeps_it(
+def test_capture_reports_pending_without_revision_and_cleanup_retires_it(
     config: library.Config,
 ) -> None:
     library.write_pending(config, ["nes", "psx"])
     library.atomic_json(config.revision_path, {"psx": "r1"})
     status, batch = library.capture(config)
     assert (status, batch) == (0, {"nes": None, "psx": "r1"})
+    assert library.cleanup(config, {"nes": "unknown"}) == 0
+    assert library.read_pending(config) == ["nes", "psx"]
+    assert library.cleanup(config, batch) == 0
+    assert library.read_pending(config) == []
+    assert json.loads(config.record_path.read_text())["folders"] == {
+        "nes": "generation-failed",
+        "psx": "generation-failed",
+    }
+
+
+def test_cleanup_keeps_a_folder_without_captured_revision_once_one_is_written(
+    config: library.Config,
+) -> None:
+    library.write_pending(config, ["nes"])
+    status, batch = library.capture(config)
+    assert (status, batch) == (0, {"nes": None})
+    library.atomic_json(config.revision_path, {"nes": "fetched-since"})
     assert library.cleanup(config, batch) == 0
     assert library.read_pending(config) == ["nes"]
-    assert library.cleanup(config, {"nes": "unknown"}) == 0
-    assert library.read_pending(config) == ["nes"]
+    assert not config.record_path.exists()
 
 
 def test_capture_cli_prints_null_for_missing_revision(

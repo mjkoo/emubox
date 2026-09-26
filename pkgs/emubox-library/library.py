@@ -674,7 +674,8 @@ def capture(config: Config) -> tuple[int, dict[str, str | None]]:
         return 75, {}
     try:
         revisions = read_mapping(config.revision_path)
-        # A folder with no identity is still attempted; cleanup never retires it.
+        # A folder with no identity is still attempted; cleanup retires it only while
+        # it still has none.
         return 0, {folder: revisions.get(folder) for folder in read_pending(config)}
     finally:
         os.close(claim)
@@ -691,11 +692,9 @@ def cleanup(config: Config, batch: dict[str, str | None]) -> int:
         revisions = read_mapping(config.revision_path)
         failed = False
         for folder, revision in batch.items():
-            if (
-                revision is None
-                or folder not in read_pending(config)
-                or revisions.get(folder) != revision
-            ):
+            # A folder captured without a revision is retired only while it still has none:
+            # every fetch stores a revision before it marks the folder pending.
+            if folder not in read_pending(config) or revisions.get(folder) != revision:
                 continue
             _record_generation(config, folder, "generation-failed")
             write_pending(config, [item for item in read_pending(config) if item != folder])

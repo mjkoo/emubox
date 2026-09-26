@@ -1289,7 +1289,7 @@ def test_generation_without_a_run_record_invents_no_run_result(
     assert json.loads(config.record_path.read_text()) == {"folders": {"nes": outcome}}
     code, output = library.report(config, 5)
     assert code == 0
-    assert "complete" not in output
+    assert "Last run:" not in output
     assert output.endswith(
         "No completed fetch recorded\n"
         + ("" if status == 0 else "Failed folders: nes\n")

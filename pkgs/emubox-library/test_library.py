@@ -246,8 +246,9 @@ def test_credentials_replace_record_keeping_outcomes_without_touching_pending(
     assert config.pending_path.read_bytes() == before
 
 
-@pytest.mark.parametrize("value", ['":secret"', '"person:"'])
-def test_empty_credential_component_refuses_before_scraper(
+# Skyscraper drops credentials that do not split into exactly two parts.
+@pytest.mark.parametrize("value", ['":secret"', '"person:"', '"person:pa:ss"'])
+def test_unusable_credential_value_refuses_before_scraper(
     config: library.Config, value: str
 ) -> None:
     game(config, "nes", "a.nes")
@@ -577,6 +578,17 @@ def test_invalid_previous_gamelist_prevents_generation(config: library.Config, o
     assert "gamelist is unreadable" in line
     assert "move it aside" in line
     assert library.read_pending(config) == []
+
+
+def test_uncopyable_previous_gamelist_names_the_remedy(config: library.Config) -> None:
+    config, log = journal_log(config)
+    live = config.gamelist_root / "nes" / "gamelist.xml"
+    live.mkdir(parents=True)
+    library.write_pending(config, ["nes"])
+    assert library.generate(config, lambda *args: pytest.fail("unexpected scraper")) == 0
+    assert live.is_dir()
+    assert json.loads(config.record_path.read_text())["folders"]["nes"] == "generation-failed"
+    assert "gamelist is unreadable" in log.read_text()
 
 
 def test_reconciliation_preserves_distinct_paths_and_omitted_games(config: library.Config) -> None:

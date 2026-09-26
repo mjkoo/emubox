@@ -328,13 +328,16 @@ def run_skyscraper(
         except subprocess.TimeoutExpired:
             return 124, bytes(output)
     finally:
-        signal.pthread_sigmask(signal.SIG_BLOCK, signals)
-        if child is not None:
-            terminate_group(child)
-        signal.signal(signal.SIGTERM, previous_term)
-        signal.signal(signal.SIGINT, previous_int)
-        signal.signal(signal.SIGHUP, previous_hup)
-        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        # Nested so a signal raised before the mask takes hold still ends the group.
+        try:
+            signal.pthread_sigmask(signal.SIG_BLOCK, signals)
+        finally:
+            if child is not None:
+                terminate_group(child)
+            signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGINT, previous_int)
+            signal.signal(signal.SIGHUP, previous_hup)
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
 
 def credentials_error(config: Config) -> str | None:
@@ -357,7 +360,8 @@ def credentials_error(config: Config) -> str | None:
         username, password = value.split(":", 1)
     except (KeyError, ValueError, configparser.Error):
         return "missing ScreenScraper credentials"
-    if not username.strip() or not password.strip():
+    # Skyscraper ignores credentials that do not split into exactly two parts.
+    if not username.strip() or not password.strip() or ":" in password:
         return "missing ScreenScraper credentials"
     # The committed secrets file's marker, as the install guard checks it.
     if any(PLACEHOLDER_MARKER in part.upper() for part in (username, password)):
@@ -597,11 +601,11 @@ def generate(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skys
                     source = work / "gamelist.xml"
                     previous = ET.Element("gameList")
                     if live.exists():
-                        shutil.copy2(live, source)
-                        os.utime(source, ns=(SENTINEL_MTIME_NS, SENTINEL_MTIME_NS))
                         try:
+                            shutil.copy2(live, source)
+                            os.utime(source, ns=(SENTINEL_MTIME_NS, SENTINEL_MTIME_NS))
                             previous = _read_gamelist(source)
-                        except (ValueError, ET.ParseError):
+                        except (OSError, ValueError, ET.ParseError):
                             reason = "its gamelist is unreadable; repair it or move it aside"
                             raise
                     limit = min(end, time.monotonic() + PER_FOLDER_SECONDS)

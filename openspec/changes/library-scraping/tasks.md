@@ -117,15 +117,15 @@ green at `82eaaf2` before group 9 began.
 - [x] 9.2 Status reads the run record and the pending file independently: an unreadable or non-JSON record marks only itself unavailable, and an unlistable folder shows counts unavailable while others are counted (design D10); unit tests for `{bad`, mode 000 and an unlistable folder
 - [x] 9.3 An unparseable live gamelist is left byte-identical, records `generation-failed`, and the journal line names the folder, says its gamelist is unreadable and says to repair it or move it aside (design D6); the existing invalid-gamelist unit test asserts the journal text
 - [x] 9.4 Journal writes never raise, whether `systemd-cat` is missing or hangs; unit tests for both
-- [ ] 9.5 Failure cleanup keeps taking the claim without waiting; a generation program that outlives the window's deadline only defers cleanup (design, accepted risks), and the hardware runbook records how long it lives; the existing held-lock cleanup test still proves the deferral
+- [x] 9.5 Failure cleanup keeps taking the claim without waiting; a generation program that outlives the window's deadline only defers cleanup (design, accepted risks), and the hardware runbook records how long it lives; the existing held-lock cleanup test still proves the deferral
 - [x] 9.6 Status matches gamelist entries to ROM files by relative path (design D10); unit test with a nested entry sharing a top-level ROM's file name
 - [x] 9.7 Generation prints a heading per folder, as fetch does
 - [x] 9.8 Unit tests: the literal fetch vector (with `onlymissing`, and no `-g`, `-o` or `-f`) written out by hand rather than read from the vectors file; a folder whose platform name differs from its folder name; the mixed-folders run with an empty and a sidecar-only directory; a refused second run while a live first run finishes and records its own result; nothing pending leaves the gamelist tree untouched
 - [x] 9.9 VM test: the failed-termination and held-claim assertions read only their own subtest's evidence and prove generation ran; a real-Skyscraper run of the production fetch vector (with only the scraping module and config swapped for the local import) leaves gamelists and `/data/media` unchanged; nothing pending opens no window and leaves the gamelist byte-identical; screenshots, videos and manuals from the import fixture land under `/data/media/nes` (the pinned import scraper reads no textures folder, so texture non-emission keeps its source-contract evidence); the Tools-triggered restart carries the fixture description; credentials never appear in fetch arguments; the lock holder is still active when a concurrent run is refused; requested restarts log no crash count; a nested admin directory and an admin file in a session-account folder carry the `player` group
 - [x] 9.10 README gives the unreadable-gamelist recovery and the smoke test's exact restart route; the hardware runbook records whether cleanup's retry covers the generation program outliving the outer deadline
-- [ ] 9.11 A scoped fresh review of `2ef007a`, `ef1a210`, `82eaaf2` and this group's commits, recorded below with the test count
-- [ ] 9.12 Wave fixes: generation serializes and re-parses the merged gamelist before publishing, detects Skyscraper's write by a sentinel modification time, carries the previous file's system-level elements (the system alternative emulator) when the output lacks them, and records outcomes without inventing a run result when no record exists; status treats a gamelist with no `gameList` root or an unreadable one as unreadable for that folder alone; a second termination signal cannot skip ending the scraper's process group; unit tests for each, and duplicate-entry counts in the merge assertions
-- [ ] 9.13 Wave test fixes: the Tools restart proves regeneration from a gamelist with no description, the VM shows a frontend-only format with no previous entry gaining the scraper's description, the unreadable-gamelist journal check covers both unparseable and wrong-root files, and redundant negative controls and duplicated test halves are removed
+- [x] 9.11 A scoped fresh review of `2ef007a`, `ef1a210`, `82eaaf2` and this group's commits, recorded below with the test count
+- [x] 9.12 Wave fixes: generation serializes and re-parses the merged gamelist before publishing, detects Skyscraper's write by a sentinel modification time, carries the previous file's system-level elements (the system alternative emulator) when the output lacks them, and records outcomes without inventing a run result when no record exists; status treats a gamelist with no `gameList` root or an unreadable one as unreadable for that folder alone; a second termination signal cannot skip ending the scraper's process group; unit tests for each, and duplicate-entry counts in the merge assertions
+- [x] 9.13 Wave test fixes: the Tools restart proves regeneration from a gamelist with no description, the VM shows a frontend-only format with no previous entry gaining the scraper's description, the unreadable-gamelist journal check covers both unparseable and wrong-root files, and redundant negative controls and duplicated test halves are removed
 
 ### Implementation review evidence
 
@@ -228,3 +228,26 @@ host toplevel pass. The library VM test awaits its next CI run.
 Graphical acceptance remains explicitly deferred to manual tasks 1.2,
 1.3, 1.4 and 1.6. Green CI establishes no result for those checks. The
 separate verification and archive workflows have not been invoked.
+
+### Verification fix round review
+
+A verification pass found no missing requirement; its findings became
+group 9. A fresh scoped review of `2ef007a`, `ef1a210` and `82eaaf2` found
+no critical issue and five to fix: a merged gamelist that the next run
+would refuse as unparseable, the system-level alternative emulator dropped
+on regeneration, timestamp-granularity change detection, a VM test that did
+not exercise `--addext`, and design text that overstated carry-over. The
+group's evidencing review confirmed all ten boxes. A wave of three
+reviewers (failure modes, test proportionality, idiom and public surface)
+found no critical issue. It led to reverting a cleanup claim retry that
+contradicted the no-wait rule, a once-only termination handler, a shared
+readability rule for status and generation, no invented run result, the
+merge hardening, and removal of redundant tests; the texture import it
+suggested was refuted, since the pinned import scraper reads no textures
+folder. One fix round landed in `3427a73`..`32b12e9`, and its scoped
+re-review confirmed every fix. Its remaining finding, a password containing
+`:` that Skyscraper silently ignores, was fixed in `6bd5f5f` together with
+two minor hardening items. The package passes Ruff, formatting, ty and 114
+tests (one skipped on macOS); the library driver, package, source-contract
+and session-restart checks build on the Linux builder. The library VM test
+awaits its next CI run.

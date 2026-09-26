@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 
 
@@ -32,11 +33,12 @@ def main():
         ["crash"] * 3,
         ["request"] * 3 + ["crash"] * 3,
         ["crash", "crash", "request", "crash", "crash", "crash"],
-        # A request the frontend ignored for more than the lapse, and then
-        # an exit of its own still inside the launch window, counts as a
-        # crash.
-        ["ignored"] * 3,
-        ["request", "crash", "ignored", "crash"],
+        # A request the frontend ignored for more than the 15 second lapse,
+        # and then an exit of its own still inside the launch window, counts
+        # as a crash; one exactly 15 seconds old is still honoured.
+        ["aged-16"] * 3,
+        ["request", "crash", "aged-16", "crash"],
+        ["crash", "crash", "aged-15", "crash", "crash", "crash"],
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -51,6 +53,11 @@ def main():
             )
             executable(commands / "systemd-cat", "cat >/dev/null\n")
             executable(commands / "sleep", "true\n")
+            # The session's clock is pinned, so a mark's age is exact.
+            executable(
+                commands / "date",
+                '[ "$*" = +%s ] || exit 97\necho "$TEST_NOW"\n',
+            )
             executable(
                 commands / "cage",
                 """
@@ -58,9 +65,13 @@ count=$(cat "$TEST_ROOT/count" 2>/dev/null || echo 0)
 count=$((count + 1))
 echo "$count" > "$TEST_ROOT/count"
 echo frontend >> "$TEST_ROOT/events"
-case "$(sed -n "${count}p" "$TEST_ROOT/sequence")" in
-  request) touch "$XDG_RUNTIME_DIR/emubox-frontend-restart" ;;
-  ignored) touch -d "@$(( $(date +%s) - 20 ))" "$XDG_RUNTIME_DIR/emubox-frontend-restart" ;;
+entry=$(sed -n "${count}p" "$TEST_ROOT/sequence")
+case "$entry" in
+  request) touch -d "@$TEST_NOW" "$XDG_RUNTIME_DIR/emubox-frontend-restart" ;;
+  # The loop compares a mark's age only with the time of the exit, never
+  # with the run's length, so an aged mark followed by an immediate exit
+  # models a request the frontend ignored earlier in a short run.
+  aged-*) touch -d "@$(( TEST_NOW - ${entry#aged-} ))" "$XDG_RUNTIME_DIR/emubox-frontend-restart" ;;
   crash) ;;
   *) echo 'unexpected extra frontend launch' >&2; exit 99 ;;
 esac
@@ -72,6 +83,7 @@ exit 1
                 "TEST_BIN": str(commands),
                 "XDG_RUNTIME_DIR": str(runtime),
                 "EMUBOX_CRASH_WINDOW": "60",
+                "TEST_NOW": str(int(time.time())),
             }
             result = subprocess.run(
                 ["bash", str(root / "session")],

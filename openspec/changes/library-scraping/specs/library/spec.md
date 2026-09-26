@@ -153,7 +153,8 @@ once; the pending folders are generated at a later start after the fetch has
 ended. Generation SHALL
 preserve metadata the family has set on a game through the frontend:
 favourite, hidden, kid-game, completed, play count, last played, sort name
-and alternative emulator. A game the cache holds nothing for SHALL keep an
+and alternative emulator, and the alternative emulator the family has chosen
+for the whole system. A game the cache holds nothing for SHALL keep an
 entry in the regenerated gamelist, with no metadata, so those fields survive
 for it too. The live gamelist SHALL never be written in place: generation
 SHALL write a folder's new gamelist in a work area of its own, reading the

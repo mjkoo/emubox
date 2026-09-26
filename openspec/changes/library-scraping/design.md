@@ -326,17 +326,29 @@ tags ES-DE stored on such a game survive regeneration instead of being
 dropped with the entry.
 
 The wrapper does not rely on Skyscraper alone for that preservation. Before
-the run it parses the copied previous gamelist; after a zero exit it
-requires that Skyscraper wrote a new `gamelist.xml` (a changed file, with a
+the run it parses the copied previous gamelist and resets the copy's
+modification time to a sentinel value; after a zero exit it requires that
+Skyscraper wrote a new `gamelist.xml` (a file whose modification time left
+the sentinel, so the test holds at any timestamp granularity, with a
 `gameList` root) and merges the previous file into it before the rename:
 for each game present in both, matched by its path relative to the folder,
 every family field the frontend stores (favorite, hidden, kid game, last
 played, play count, sort name, alternative emulator, completed, broken,
 controller, collection sort name, and the hide-metadata, no-game-count and
-no-multiscrape flags) is taken from the previous entry; a game the previous file held and the output omits is carried over
-whole; and a ROM file with no entry at all gets a minimal entry. A duplicate
+no-multiscrape flags) is taken from the previous entry; a game the previous
+file held and the output omits is carried over whole when its ROM file still
+exists with an extension the frontend lists, so entries for removed games do
+not accumulate; a ROM file with no entry at all gets a minimal entry; and the
+previous file's system-level elements other than games, such as the
+alternative emulator chosen for the whole system, are carried over when the
+output lacks them. The merged result is serialized and parsed again before
+the rename, so a name that cannot be represented in XML fails the folder
+rather than publishing a file the next generation would refuse. A duplicate
 path in the output, an output that does not parse, or the limit expiring
-during the merge is `generation-failed`, and nothing is renamed.
+during the merge is `generation-failed`, and nothing is renamed. When no run
+record exists yet, generation records its folder outcomes without inventing
+a run result, so status never reports a fetch that did not finish as
+complete.
 
 A live gamelist that does not parse, or whose root is not `gameList`, is
 never replaced: the folder records `generation-failed` without running the
@@ -631,10 +643,11 @@ later; product requirements for visible progress and reliable skips are unchange
   outlive `timeout` briefly] -> under the real foot it runs in foot's own
   terminal session, outside `timeout`'s process group, and ends on the
   hangup that follows, while its Skyscraper child still holds the inherited
-  claim. Failure cleanup therefore retries the claim for up to three seconds
-  before deferring; a longer straggler only defers cleanup, which keeps the
-  folders pending for the next start. Hardware acceptance records whether
-  the retry suffices.
+  claim. Failure cleanup still takes the claim without waiting, because it
+  cannot tell that straggler from a fetch it must not wait for; finding the
+  claim held, it defers, which keeps the folders pending and costs one more
+  progress window at the next start. Hardware acceptance records how long
+  the straggler lives.
 - [Ending ES-DE from a child may skip its own gamelist write] -> probe whether
   SIGTERM to `es-de` is treated as a normal quit; if not, signal its `cage`
   after ES-DE's launch wrapper has returned. The Tools system's own play

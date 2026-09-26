@@ -116,6 +116,7 @@ same meanings.
 | run result `complete` | Every mapped folder was `fetched`, including the case where there are none. |
 | run result `partial` | At least one `fetched` and at least one `fetch-failed`. |
 | run result `failed` | Folders were attempted and none was `fetched`. |
+| run result `interrupted` | A termination signal ended the run. The record keeps the outcomes of the folders the run finished and carries the previous record's outcomes for the rest, so status shows the run did not finish rather than an older run's result. |
 | run result `refused` | Nothing was attempted: wrong account, credentials unusable, or another run holds the lock. A credential refusal replaces the last-run record but carries the previous record's folder outcomes forward, since nothing was attempted that could change them; status therefore keeps naming earlier failures. |
 | unscraped | A ROM file, as defined above, whose entry in its folder's gamelist carries no description, or that has no entry at all: a game the household can see in the frontend that lacks a description. |
 
@@ -410,10 +411,14 @@ only fails still-pending entries with those identities, preserving any newer
 fetch even for the same folder. Pending membership remains a file of folder
 names; revision identities live in `/data/cache/skyscraper/revisions.json`,
 a file of their own beside the lock, changed under the same lock. Each successful fetch stores a fresh revision before
-publishing its pending entry. A missing or inconsistent revision is treated
-conservatively as newer work and is not removed by failure cleanup;
-capture still reports such a folder, with a null identity, so a pending
-folder always opens the progress window and generation still works it; revision
+publishing its pending entry. A revision that differs from the captured one is treated as newer work and
+is not removed by failure cleanup. Capture reports a pending folder with no
+revision with a null identity, so it still opens the progress window and
+generation still works it; failure cleanup retires such a folder only while
+its revision is still absent, which is safe because every fetch stores a
+revision before it publishes the pending entry, so a folder fetched since
+capture always has one. Without that retirement a folder whose revision was
+lost would reopen a failing window at every start; revision
 state survives replacement of the last-run summary. If the claim cannot be taken, cleanup leaves state alone and
 logs that cleanup was deferred. The session externally bounds record-only
 cleanup to five seconds, ends its process group on expiry, and launches the
@@ -463,10 +468,11 @@ count: two unrequested short exits, a requested restart, and one more
 unrequested short exit leave the count at one, not three. The mark is
 honoured once per exit. If the termination request returns failure, the
 entry removes its own mark before returning; the next genuine crash counts.
-A successful signal delivery does not prove the frontend will exit: if it
-ignores the signal, the mark can still excuse one later crash. That bounded
-race remains an accepted limitation; there is no restart acknowledgement
-protocol in this change.
+A successful signal delivery does not prove the frontend will exit, so the
+loop honours a mark only when the frontend exits within 60 seconds of the
+mark being written; an older mark is removed and the exit is counted as
+usual. A frontend that ignores the signal and crashes later therefore
+counts, and a request cannot outlive the exit it asked for.
 
 Rejected: hiding the entry from the household (ES-DE shows a system whenever
 its folder holds a matching file in the kiosk and full UI modes, and the
@@ -537,7 +543,7 @@ counting stalls; an unavailable record is identified as unavailable. The run
 record and the pending file are read independently, and a record that is
 unreadable or not JSON marks only itself unavailable: pending state and
 folder counts are still reported. A folder the reporter cannot list is shown
-with counts unavailable while the other folders are counted. The parent
+with counts unavailable while the other folders are counted. Any folder whose counts are unavailable makes the section exit 1, as an incomplete scan does. A run record with folder outcomes but no run result, which generation writes before any fetch has recorded one, is reported as no completed fetch. The parent
 retains completed folder results, stops the worker on expiry without an
 unbounded wait, and returns within 50 seconds including reporting and
 cleanup. Incomplete counts are labelled "counts unavailable" rather than

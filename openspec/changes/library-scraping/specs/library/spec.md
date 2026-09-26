@@ -80,8 +80,10 @@ A completed fetch run SHALL report `complete` when every mapped folder
 was fetched, including when there are no mapped folders; `partial` when at
 least one fetched and at least one failed; and `failed` when at least one
 was attempted and none fetched. A run prevented from attempting work by the
-account, credentials or concurrency checks is `refused`. Only `complete`
-SHALL exit zero. The account refusal and concurrent-run refusal SHALL leave
+account, credentials or concurrency checks is `refused`. A run ended by a
+termination signal SHALL record `interrupted`, keeping the outcomes of the
+folders it finished and the previous record's outcomes for the others. Only
+`complete` SHALL exit zero. The account refusal and concurrent-run refusal SHALL leave
 existing records unchanged as their requirements specify.
 
 #### Scenario: Mixed folders
@@ -140,6 +142,10 @@ therefore continue the work rather than repeat it.
 #### Scenario: Interrupted after the first folder
 - **WHEN** a run is killed after one folder is `fetched` and before the next finishes
 - **THEN** the first folder is pending, and the next run asks the scraping service about none of that folder's cached games
+
+#### Scenario: Stopped by a signal
+- **WHEN** a run receives a termination signal after one folder is `fetched`
+- **THEN** the last-run record shows `interrupted` with that folder `fetched`, the other folders keep their previous outcomes, and the first folder is pending
 
 ### Requirement: Generation happens at frontend start and never while the frontend runs
 When any folder is pending and the frontend is about to launch, the session

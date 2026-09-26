@@ -311,15 +311,17 @@ counts as unscraped. An incomplete scan reports unavailable counts explicitly.
 
 When status shows a folder's gamelist as unreadable, generation leaves that
 file alone, since it may still hold favourites and play counts worth
-recovering, and the folder fails generation until it is dealt with. Repair
-the XML, or move it aside and fetch again:
+recovering, and records the folder as failed. The folder then leaves the
+pending list, so generation tries it again only after a later fetch. Repair
+the XML or move it aside, then fetch again:
 
 ```sh
 sudo -u player mv /data/es-de/gamelists/<folder>/gamelist.xml{,.unreadable}
 sudo -u player emubox-scrape
 ```
 
-The next frontend start then writes a fresh gamelist for that folder.
+The next frontend start then regenerates that folder: from the repaired file,
+or as a fresh gamelist when it was moved aside.
 
 `complete` means the scraper processes exited successfully. Skyscraper can
 also exit successfully after a service or quota interruption, so this does

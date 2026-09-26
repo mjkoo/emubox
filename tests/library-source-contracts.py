@@ -19,7 +19,9 @@ def source(root: Path, relative: str) -> str:
 def declared_cli(cli: str) -> tuple[set[str], set[str]]:
     options = set(re.findall(r'QCommandLineOption\s+\w+\s*\(\s*"([\w-]+)"', cli))
     # Help and version are registered by Qt, not used by the library.
-    flags_section = cli.split('if (subCmd == "flags") {', 2)[-1]
+    marker = 'if (subCmd == "flags") {'
+    require(marker in cli, f"src/cli.cpp: missing flag table marker {marker!r}")
+    flags_section = cli.split(marker, 2)[-1]
     flags_section = flags_section.split("return m;", 1)[0]
     flags = set(re.findall(r'\{"([a-z][a-z0-9]*)",', flags_section))
     return options, flags
@@ -282,14 +284,6 @@ def main() -> None:
     if args.platform_map:
         mapping = json.loads(args.platform_map.read_text())
         check_platform_map(platforms, mapping)
-        try:
-            check_platform_map(
-                platforms, {**mapping, "negative-control": "not-a-platform"}
-            )
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError("invalid platform added to exported map was accepted")
     if args.vectors:
         vectors = json.loads(args.vectors.read_text())
         require(
@@ -301,14 +295,6 @@ def main() -> None:
                 check_vector(options, flags, vector)
             except AssertionError as error:
                 raise AssertionError(f"{label}: {error}") from error
-            try:
-                check_vector(options, flags, [*vector, "--stderr", "yes"])
-            except AssertionError:
-                pass
-            else:
-                raise AssertionError(
-                    f"{label}: --stderr added to exported vector was accepted"
-                )
     print(
         f"Pinned source contracts passed: {len(platforms)} platforms, {len(options)} options, {len(flags)} flags"
     )

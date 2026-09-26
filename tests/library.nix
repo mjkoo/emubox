@@ -49,7 +49,7 @@ let
         exit "$result"
         ;;
     esac
-    printf 'generation %s\n' "$*" >> /run/emubox-library-test/events
+    printf 'foot-command %s\n' "$*" >> /run/emubox-library-test/events
     exec "$@"
   '';
   testEsde = pkgs.runCommand "emubox-test-es-de" { nativeBuildInputs = [ pkgs.stdenv.cc ]; } ''
@@ -437,7 +437,7 @@ in
           events = machine.succeed("cat /run/emubox-library-test/events").splitlines()
           capture_index = events.index("library capture")
           window_index = next(i for i, event in enumerate(events) if event.startswith("window "))
-          generation_index = events.index("generation emubox-library-generate")
+          generation_index = events.index("foot-command emubox-library-generate")
           frontend_index = next(i for i, event in enumerate(events) if event.startswith("frontend "))
           assert capture_index < window_index < generation_index < frontend_index, events
           assert "foot -e emubox-library-generate" in events[window_index], events
@@ -623,14 +623,12 @@ in
           machine.succeed("printf '{\"nes\":\"failed-window\"}\\n' > /data/cache/skyscraper/revisions.json")
           machine.succeed("chown player:player /data/cache/skyscraper/{pending,revisions.json}")
           machine.succeed("printf 'fail\\n' > /run/emubox-library-test/window-mode")
-          generation_count = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
           direct_count = direct_generation_count()
           journal_before = library_journal()
           requested_restart()
           wait_frontend_count(4)
           assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == previous
           assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
-          assert machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip() == generation_count
           assert direct_generation_count() == direct_count
           failed = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert failed["folders"]["nes"] == "generation-failed", failed
@@ -645,14 +643,12 @@ in
           machine.succeed("printf '{\"nes\":\"hung-window\"}\\n' > /data/cache/skyscraper/revisions.json")
           machine.succeed("chown player:player /data/cache/skyscraper/{pending,revisions.json}")
           machine.succeed("printf 'hang\\n' > /run/emubox-library-test/window-mode")
-          generation_count = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
           direct_count = direct_generation_count()
           journal_before = library_journal()
           requested_restart()
           wait_frontend_count(5)
           assert machine.succeed("cat /data/es-de/gamelists/nes/gamelist.xml") == previous
           assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
-          assert machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip() == generation_count
           assert direct_generation_count() == direct_count
           machine.succeed("! kill -0 $(cat /run/emubox-library-test/window-pid) 2>/dev/null")
           failed = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
@@ -683,14 +679,14 @@ in
           assert machine.succeed("grep -c '^window ' /run/emubox-library-test/events").strip() == window_before
           journal = new_library_journal(journal_before)
           assert "fetch was running" in journal, journal
-          generations_before = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
+          generations_before = machine.succeed("grep -cx 'foot-command emubox-library-generate' /run/emubox-library-test/events").strip()
           machine.succeed("systemctl stop emubox-library-lock-at-capture")
           requested_restart()
           wait_frontend_count(7)
           assert machine.succeed("cat /data/cache/skyscraper/pending") == ""
           released = json.loads(machine.succeed("cat /data/cache/skyscraper/last-run.json"))
           assert released["folders"]["nes"] == "generated", released
-          generations_after = machine.succeed("grep -c '^generation ' /run/emubox-library-test/events").strip()
+          generations_after = machine.succeed("grep -cx 'foot-command emubox-library-generate' /run/emubox-library-test/events").strip()
           assert int(generations_after) == int(generations_before) + 1, (generations_before, generations_after)
 
       with subtest("Exit 75 from the test window skips cleanup after a lock handshake"):

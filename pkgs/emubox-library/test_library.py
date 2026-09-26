@@ -210,9 +210,14 @@ def test_fetch_log_matches_streamed_terminal_output(
 def test_credentials_replace_record_keeping_outcomes_without_touching_pending(
     config: library.Config, cause: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    game(config, "psx", "a.cue")
     library.atomic_json(
         config.record_path,
-        {"result": "complete", "time": "old", "folders": {"psx": "generation-failed"}},
+        {
+            "result": "complete",
+            "time": "old",
+            "folders": {"psx": "generation-failed", "gone": "fetched"},
+        },
     )
     library.write_pending(config, ["nes"])
     before = config.pending_path.read_bytes()
@@ -1836,7 +1841,7 @@ def test_signalled_fetch_records_interrupted_and_keeps_finished_folders_pending(
     assert set(json.loads(config.revision_path.read_text())) == {"nes"}
     record = json.loads(config.record_path.read_text())
     assert record["result"] == "interrupted"
-    assert record["folders"] == {"nes": "fetched", "psx": "generated", "gone": "fetched"}
+    assert record["folders"] == {"nes": "fetched", "psx": "generated"}
     log = config.log_path.read_bytes()
     assert b"Fetching nes" in log and b"Fetching psx" in log
     status, output = library.report(config, 5)

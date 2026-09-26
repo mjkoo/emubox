@@ -511,10 +511,21 @@ def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscr
         os.close(claim)
 
 
+def _carried_outcomes(config: Config) -> dict[str, Any]:
+    """The previous record's outcomes for folders whose directory still exists."""
+    previous = read_mapping(config.record_path).get("folders")
+    if not isinstance(previous, dict):
+        return {}
+    return {
+        name: outcome
+        for name, outcome in previous.items()
+        if name not in ("", ".", "..") and "/" not in name and (config.rom_root / name).is_dir()
+    }
+
+
 def _record_interrupted(config: Config, outcomes: dict[str, str], transcript: bytearray) -> None:
     # Folders the run did not reach keep what the previous record said of them.
-    previous = read_mapping(config.record_path).get("folders")
-    carried = dict(previous) if isinstance(previous, dict) else {}
+    carried = _carried_outcomes(config)
     carried.update(outcomes)
     # A failed write must not replace the interruption's exit status, and the
     # record is still attempted when the log cannot be written.
@@ -535,8 +546,7 @@ def _scrape_claimed(
     if error:
         print(error, file=sys.stderr)
         # Nothing was attempted, so earlier outcomes still describe the folders.
-        previous = read_mapping(config.record_path).get("folders")
-        write_record(config, "refused", previous if isinstance(previous, dict) else {}, error)
+        write_record(config, "refused", _carried_outcomes(config), error)
         atomic_write(config.log_path, (error + "\n").encode())
         return 1
     with contextlib.suppress(OSError):

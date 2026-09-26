@@ -32,6 +32,10 @@ def main():
         ["crash"] * 3,
         ["request"] * 3 + ["crash"] * 3,
         ["crash", "crash", "request", "crash", "crash", "crash"],
+        # A request older than the window when the frontend exits has lapsed,
+        # so each of these exits counts as a crash.
+        ["stale"] * 3,
+        ["request", "crash", "stale", "crash"],
     ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -55,6 +59,7 @@ echo "$count" > "$TEST_ROOT/count"
 echo frontend >> "$TEST_ROOT/events"
 case "$(sed -n "${count}p" "$TEST_ROOT/sequence")" in
   request) touch "$XDG_RUNTIME_DIR/emubox-frontend-restart" ;;
+  stale) touch -d "@$(( $(date +%s) - 120 ))" "$XDG_RUNTIME_DIR/emubox-frontend-restart" ;;
   crash) ;;
   *) echo 'unexpected extra frontend launch' >&2; exit 99 ;;
 esac

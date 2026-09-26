@@ -55,8 +55,10 @@ let
   # value, and a per-command prefix is exactly the shape in which prepare
   # would assert settings into a directory the frontend never reads.
   #
-  # cage and systemd are runtimeInputs, so the compositor and journal client
-  # are pinned to the exact store paths this module was built against.
+  # cage, systemd and coreutils are runtimeInputs, so the compositor, the
+  # journal client and the clock and file-time tools the restart mark is
+  # aged with are pinned to the exact store paths this module was built
+  # against.
   # emubox-prepare and es-de are deliberately not: they resolve from the
   # system path (they are in environment.systemPackages below), so that the
   # session and any outside caller - the test driver, an admin who reached
@@ -65,6 +67,7 @@ let
     name = "emubox-session";
     runtimeInputs = [
       pkgs.cage
+      pkgs.coreutils
       pkgs.systemd
     ];
     text = ''
@@ -225,8 +228,18 @@ let
         rc=0
         cage -s -- es-de || rc=$?
         ran=$(( SECONDS - started ))
+        # A Tools entry's request covers only the exit it asked for: a mark
+        # written more than the window before this exit has lapsed, because
+        # a frontend that ignored the signal and failed later must count.
+        requested=false
         if [ -e "$restart_mark" ]; then
+          marked=$(stat -c %Y "$restart_mark" 2>/dev/null || echo 0)
+          if [ $(( $(date +%s) - marked )) -le "$window" ]; then
+            requested=true
+          fi
           rm -f "$restart_mark"
+        fi
+        if [ "$requested" = true ]; then
           crashes=0
         elif [ "$ran" -lt "$window" ]; then
           crashes=$(( crashes + 1 ))

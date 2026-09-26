@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Exercise the rendered session with deterministic frontend process boundaries."""
+"""Exercise the rendered session with deterministic frontend process boundaries.
+
+This needs no virtual machine, so it is the local pre-CI gate for the restart
+counting the library VM test also checks, and it alone checks the prepare,
+step and frontend ordering on every relaunch.
+"""
 
 import os
 from pathlib import Path

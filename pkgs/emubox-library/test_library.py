@@ -2354,6 +2354,7 @@ def test_untraversable_rom_root_still_records_interrupted_and_refused(
     assert (record["result"], record["folders"]) == ("interrupted", {})
 
     config.scraper_config.unlink()
+    library.write_record(config, "complete", {"nes": "generated"})
     config.rom_root.chmod(0)
     try:
         assert library.scrape(config) == 1

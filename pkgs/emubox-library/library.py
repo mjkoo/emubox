@@ -313,6 +313,12 @@ def _arm_interrupt() -> None:
     _interrupt_armed = True
 
 
+def _disarm_interrupt() -> None:
+    """Ignore any later termination request: the run's outcome is settled."""
+    global _interrupt_armed
+    _interrupt_armed = False
+
+
 def _interrupt(number: int, _frame: object) -> None:
     # A later signal must not unwind the cleanup the first one started.
     global _interrupt_armed
@@ -324,13 +330,23 @@ def _interrupt(number: int, _frame: object) -> None:
 @contextlib.contextmanager
 def _terminations() -> Iterator[None]:
     """Turn a termination signal anywhere in the enclosed section into Interrupted."""
-    _arm_interrupt()
-    previous = {number: signal.signal(number, _interrupt) for number in TERMINATIONS}
+    previous: dict[int, Any] = {}
     try:
+        _arm_interrupt()
+        for number in TERMINATIONS:
+            previous[number] = signal.signal(number, _interrupt)
         yield
     finally:
-        for number, handler in previous.items():
-            signal.signal(number, handler)
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATIONS)
+        try:
+            # Once the outcome is recorded, a request still pending is ignored rather
+            # than left to end the process after the handlers are restored.
+            while not _interrupt_armed and signal.sigpending() & set(TERMINATIONS):
+                signal.sigwait(TERMINATIONS)
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
 
 
 def run_skyscraper(
@@ -505,23 +521,30 @@ def _fetch_folders(
 def scrape(config: Config, invoke: Callable[..., tuple[int, bytes]] = run_skyscraper) -> int:
     if not correct_account(config):
         return 1
-    claim = lock(config)
-    if claim is None:
-        print("A scrape or generation run is in progress", file=sys.stderr)
-        return 1
-    outcomes: dict[str, str] = {}
-    transcript = bytearray()
+    # Blocked until the handlers are in place: a request that arrives once the claim is
+    # taken reaches them, and one that arrives without a claim still ends the process.
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATIONS)
     try:
-        # A termination signal anywhere under the claim, not only while the scraper
-        # runs, ends the run as interrupted.
-        with _terminations():
-            try:
-                return _scrape_claimed(config, invoke, claim, outcomes, transcript)
-            except Interrupted:
-                _record_interrupted(config, outcomes, transcript)
-                raise
+        claim = lock(config)
+        if claim is None:
+            print("A scrape or generation run is in progress", file=sys.stderr)
+            return 1
+        outcomes: dict[str, str] = {}
+        transcript = bytearray()
+        try:
+            # A termination signal anywhere under the claim, not only while the scraper
+            # runs, ends the run as interrupted.
+            with _terminations():
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+                    return _scrape_claimed(config, invoke, claim, outcomes, transcript)
+                except Interrupted:
+                    _record_interrupted(config, outcomes, transcript)
+                    raise
+        finally:
+            os.close(claim)
     finally:
-        os.close(claim)
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
 
 def _folder_exists(config: Config, name: str) -> bool:
@@ -564,9 +587,11 @@ def _scrape_claimed(
     error = credentials_error(config)
     if error:
         print(error, file=sys.stderr)
+        atomic_write(config.log_path, (error + "\n").encode())
+        # From here the refusal is the outcome, so a late request cannot relabel it.
+        _disarm_interrupt()
         # Nothing was attempted, so earlier outcomes still describe the folders.
         write_record(config, "refused", _carried_outcomes(config), error)
-        atomic_write(config.log_path, (error + "\n").encode())
         return 1
     with contextlib.suppress(OSError):
         os.nice(19)
@@ -586,6 +611,8 @@ def _scrape_claimed(
         show(f"Scrape result: {result} ({fetched} fetched, {failed} failed, {unmapped} unmapped)")
     )
     atomic_write(config.log_path, bytes(transcript))
+    # Every folder is finished, so a late request cannot relabel the run as interrupted.
+    _disarm_interrupt()
     write_record(config, result, outcomes)
     return 0 if result == "complete" else 1
 

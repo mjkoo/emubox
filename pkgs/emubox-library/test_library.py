@@ -2345,3 +2345,39 @@ def test_untraversable_rom_root_still_records_interrupted_and_refused(
         config.rom_root.chmod(0o755)
     record = json.loads(config.record_path.read_text())
     assert (record["result"], record["folders"]) == ("refused", {})
+
+
+def test_signal_right_after_the_claim_records_interrupted(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    library.write_record(config, "complete", {"nes": "generated"})
+    prelude = (
+        "take=library.lock\n"
+        "def signalled_lock(config):\n"
+        " claim=take(config)\n"
+        " os.kill(os.getpid(), signal.SIGTERM)\n"
+        " return claim\n"
+        "library.lock=signalled_lock\n"
+    )
+    assert scrape_signalled_at(config, "", prelude) == 128 + signal.SIGTERM
+    record = json.loads(config.record_path.read_text())
+    assert (record["result"], record["folders"]) == ("interrupted", {"nes": "generated"})
+    assert library.read_pending(config) == []
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_signal_after_the_final_record_keeps_the_run_result(
+    config: library.Config, refused: bool
+) -> None:
+    game(config, "nes", "a.nes")
+    if refused:
+        config.scraper_config.unlink()
+    prelude = (
+        "write=library.write_record\n"
+        "def signalled_write(config, result, *args):\n"
+        " write(config, result, *args)\n"
+        " os.kill(os.getpid(), signal.SIGTERM)\n"
+        "library.write_record=signalled_write\n"
+    )
+    assert scrape_signalled_at(config, "", prelude) == (1 if refused else 0)
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == ("refused" if refused else "complete")

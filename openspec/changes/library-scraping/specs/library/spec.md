@@ -58,7 +58,7 @@ session account no new privilege for it.
 - **THEN** they are the ones that existed before this capability, with none naming a scrape or generation command
 
 ### Requirement: A fetch covers every folder that has games
-A ROM file is a regular file whose extension is in the frontend's extension
+A ROM file is a regular file, or a symbolic link to one, whose extension is in the frontend's extension
 list for its system, taken from the frontend's bundled systems document as
 overridden by the custom systems the box declares. A folder is a directory
 directly under `/data/roms` that holds at least one ROM file directly in it;
@@ -312,7 +312,7 @@ files, the number of gamelist entries, the number unscraped, and a note when
 the folder is `unmapped` or is named for no system the frontend knows; then
 the last run's result and time, each folder whose latest outcome is
 `fetch-failed` or `generation-failed`, and whether any folder is pending. A
-ROM file is a regular file directly in the folder whose extension is in the
+ROM file is a regular file, or a symbolic link to one, directly in the folder whose extension is in the
 frontend's extension list for that system, taken from the frontend's bundled
 systems document as overridden by the custom systems the box declares, so the
 count mirrors what the household sees in the frontend: a

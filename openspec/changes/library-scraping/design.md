@@ -103,7 +103,7 @@ same meanings.
 
 | Term | Meaning |
 |---|---|
-| ROM file | A regular file directly in a folder whose extension is in the frontend's extension list for that system: the list from the frontend's bundled `es_systems.xml`, as overridden by the custom systems the box declares. A sidecar file whose extension is not in the list is not a ROM file. |
+| ROM file | A regular file, or a symbolic link to one, directly in a folder whose extension is in the frontend's extension list for that system: the list from the frontend's bundled `es_systems.xml`, as overridden by the custom systems the box declares. A sidecar file whose extension is not in the list is not a ROM file. |
 | folder | A directory directly under `/data/roms` that holds at least one ROM file directly in it. A directory with no ROM file directly in it is empty: it is neither visited nor reported. The test is for a ROM file rather than for any regular file, chosen once here, because a folder holding only sidecar files has no games. |
 | fetch | Filling the cache for one ROM folder from ScreenScraper. Safe while the frontend or a game runs. |
 | generation | Writing one folder's gamelist and media from the cache. Only while the frontend is not running. |
@@ -469,10 +469,16 @@ unrequested short exit leave the count at one, not three. The mark is
 honoured once per exit. If the termination request returns failure, the
 entry removes its own mark before returning; the next genuine crash counts.
 A successful signal delivery does not prove the frontend will exit, so the
-loop honours a mark only when the frontend exits within 60 seconds of the
+loop honours a mark only when the frontend exits within 15 seconds of the
 mark being written; an older mark is removed and the exit is counted as
-usual. A frontend that ignores the signal and crashes later therefore
-counts, and a request cannot outlive the exit it asked for.
+usual. The case this closes is a frontend that ignores the signal and then
+crashes on its own inside the 60-second window: a longer run already resets
+the count, so only a short lapse changes an outcome. Fifteen seconds is
+ample for the frontend to save and quit; manual hardware acceptance records
+the actual time from request to exit. The comparison uses the wall clock
+(the mark's modification time against the time of exit), so a clock step
+of more than fifteen seconds between the two can turn one genuine request
+into one counted crash, which three are needed to act on.
 
 Rejected: hiding the entry from the household (ES-DE shows a system whenever
 its folder holds a matching file in the kiosk and full UI modes, and the

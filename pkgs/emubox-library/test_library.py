@@ -2186,8 +2186,14 @@ def test_scrape_names_a_failed_priority_change_in_one_line(
     assert library.read_pending(config) == []
 
 
-def scrape_signalled_at(config: library.Config, line: str, prelude: str = "", *extra: str) -> int:
-    """Run emubox-scrape's entry point, sending itself SIGTERM as it shows `line`."""
+def scrape_signalled_at(
+    config: library.Config,
+    line: str,
+    prelude: str = "",
+    *extra: str,
+    number: int = signal.SIGTERM,
+) -> int:
+    """Run emubox-scrape's entry point, sending itself `number` as it shows `line`."""
     scraper = config.cache_root.parent / "quick-scraper"
     scraper.write_text("#!/bin/sh\nexit 0\n")
     scraper.chmod(0o755)
@@ -2199,7 +2205,7 @@ def scrape_signalled_at(config: library.Config, line: str, prelude: str = "", *e
         "show=library.show\n"
         "def signalled(line):\n"
         f" if line == {line!r}:\n"
-        "  os.kill(os.getpid(), signal.SIGTERM)\n"
+        f"  os.kill(os.getpid(), {int(number)})\n"
         " return show(line)\n"
         "library.show=signalled\n"
         + prelude
@@ -2215,11 +2221,14 @@ def scrape_signalled_at(config: library.Config, line: str, prelude: str = "", *e
     return result.returncode
 
 
-def test_signal_outside_the_scraper_records_interrupted(config: library.Config) -> None:
+@pytest.mark.parametrize("number", [signal.SIGTERM, signal.SIGINT, signal.SIGHUP])
+def test_signal_outside_the_scraper_records_interrupted(
+    config: library.Config, number: int
+) -> None:
     game(config, "nes", "a.nes")
     game(config, "psx", "a.cue")
     library.write_record(config, "complete", {"psx": "generated"})
-    assert scrape_signalled_at(config, "Fetching psx") == 128 + signal.SIGTERM
+    assert scrape_signalled_at(config, "Fetching psx", number=number) == 128 + number
     record = json.loads(config.record_path.read_text())
     assert record["result"] == "interrupted"
     assert record["folders"] == {"nes": "fetched", "psx": "generated"}
@@ -2265,13 +2274,20 @@ def test_linked_rom_counts_and_broken_or_directory_links_do_not(config: library.
     (nes / "linked.nes").symlink_to(elsewhere / "linked.nes")
     (nes / "broken.nes").symlink_to(elsewhere / "missing.nes")
     (nes / "directory.nes").symlink_to(elsewhere / "folder.nes")
+    (nes / "loop.nes").symlink_to("loop.nes")
     psx = config.rom_root / "psx"
     psx.mkdir()
     (psx / "broken.cue").symlink_to(elsewhere / "missing.cue")
+    # A directory named for no known system takes any regular file, linked or not.
+    mystery = config.rom_root / "mystery"
+    mystery.mkdir()
+    (mystery / "linked.bin").symlink_to(elsewhere / "linked.nes")
+    (mystery / "loop.bin").symlink_to("loop.bin")
     folders = library.discover(config, library.system_extensions(config))
-    assert folders == {"nes": [nes / "linked.nes"]}
+    assert folders == {"mystery": [mystery / "linked.bin"], "nes": [nes / "linked.nes"]}
     status, output = library.report(config, 5)
     assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
+    assert "mystery: 1 ROMs, 0 gamelist entries, 1 unscraped (unknown system)" in output
     assert "psx" not in output
 
 

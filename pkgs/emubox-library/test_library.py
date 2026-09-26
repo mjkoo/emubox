@@ -1193,6 +1193,9 @@ def test_report_tolerates_malformed_run_record(config: library.Config, record: o
     assert status == 0
     assert "nes: 1 ROMs, 0 gamelist entries, 1 unscraped" in output
     assert "Generation pending: none" in output
+    if record == {"time": "fixed"}:
+        assert "No completed fetch recorded\n" in output
+        assert "No scrape has run" not in output
 
 
 def test_report_counts_bin_when_bundled_system_lists_it(config: library.Config) -> None:
@@ -1288,7 +1291,7 @@ def test_generation_without_a_run_record_invents_no_run_result(
     assert code == 0
     assert "complete" not in output
     assert output.endswith(
-        "No scrape has run\n"
+        "No completed fetch recorded\n"
         + ("" if status == 0 else "Failed folders: nes\n")
         + "Generation pending: none\n"
     )

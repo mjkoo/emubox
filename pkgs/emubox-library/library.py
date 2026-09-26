@@ -916,7 +916,7 @@ def report(config: Config | Path, deadline_seconds: float = REPORT_SECONDS) -> t
         lines.append(
             f"Last run: {record['result']} at {record.get('time', 'unknown time')}"
             if "result" in record
-            else "No scrape has run"
+            else "No completed fetch recorded"
         )
         outcomes = record.get("folders")
         failures = [

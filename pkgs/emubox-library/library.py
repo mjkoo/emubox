@@ -516,9 +516,11 @@ def _record_interrupted(config: Config, outcomes: dict[str, str], transcript: by
     previous = read_mapping(config.record_path).get("folders")
     carried = dict(previous) if isinstance(previous, dict) else {}
     carried.update(outcomes)
-    # A failed write must not replace the interruption's exit status.
+    # A failed write must not replace the interruption's exit status, and the
+    # record is still attempted when the log cannot be written.
     with contextlib.suppress(OSError):
         atomic_write(config.log_path, bytes(transcript))
+    with contextlib.suppress(OSError):
         write_record(config, "interrupted", carried)
 
 

@@ -2230,3 +2230,21 @@ def test_interruption_keeps_its_status_when_the_record_cannot_be_written(
     prelude = "def fail(path, content):\n raise PermissionError(path)\nlibrary.atomic_write=fail\n"
     assert scrape_signalled_at(config, "Fetching nes", prelude) == 128 + signal.SIGTERM
     assert config.record_path.read_bytes() == before
+
+
+def test_interrupted_record_is_written_when_the_log_cannot_be(config: library.Config) -> None:
+    game(config, "nes", "a.nes")
+    game(config, "psx", "a.cue")
+    prelude = (
+        "real=library.atomic_write\n"
+        "def fail_log(path, content):\n"
+        " if path.name == 'last-run.log':\n"
+        "  raise PermissionError(path)\n"
+        " real(path, content)\n"
+        "library.atomic_write=fail_log\n"
+    )
+    assert scrape_signalled_at(config, "Fetching psx", prelude) == 128 + signal.SIGTERM
+    record = json.loads(config.record_path.read_text())
+    assert record["result"] == "interrupted"
+    assert record["folders"] == {"nes": "fetched"}
+    assert not config.log_path.exists()

@@ -773,6 +773,8 @@ in
             (${py (secretFacts "b2_key_id")}, ${py values.b2KeyId}),
             (${py (secretFacts "b2_application_key")}, ${py values.b2ApplicationKey}),
             (${py (secretFacts "restic_password")}, ${py values.resticPassword}),
+            (${py (secretFacts "screenscraper_username")}, ${py values.screenscraperUsername}),
+            (${py (secretFacts "screenscraper_password")}, ${py values.screenscraperPassword}),
         ]:
             path = secret["path"]
             assert path.startswith("/run/secrets"), f"secret off the runtime path: {path}"
@@ -780,6 +782,15 @@ in
             expected = f"{int(secret['mode'], 8):o} {secret['owner']}"
             assert out == expected, f"{path}: {out!r} != {expected!r}"
             assert machine.succeed(f"cat {path}").strip() == value, path
+
+    with subtest("Scraper credentials are rendered only for the session account"):
+        path = ${py config.sops.templates."skyscraper.ini".path}
+        assert path.startswith("/run/secrets/rendered/")
+        assert machine.succeed(f"stat -c '%a %U' {path}").strip() == "400 player"
+        text = machine.succeed(f"cat {path}")
+        assert ${py values.screenscraperUsername} in text
+        assert ${py values.screenscraperPassword} in text
+        machine.fail(f"su admin -s /bin/sh -c 'cat {path}'")
 
     with subtest("admin logs in on tty1 with the test password"):
         # No display manager in the test, so tty1 carries a getty.

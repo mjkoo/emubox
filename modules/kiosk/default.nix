@@ -24,17 +24,26 @@ let
     inherit value;
   };
 
-  # The empty string, not a store path to an empty file: the empty value
-  # itself is what selects prepare's removal branch, so writing an empty
-  # document to the store and passing its path would leave that branch
-  # unreachable for every configuration, whatever `customSystems` held.
-  # Not "unreachable on the box as shipped" - the shipped box
-  # takes the other branch, since `modules/emulators` sets `customSystems`
-  # to a real document. The removal branch is what a box whose
-  # configuration drops back to the empty default relies on, and it is the
-  # kiosk spec's own "Definition empty" scenario.
+  # An empty list selects prepare's removal branch. A path to an empty
+  # document would leave that branch unreachable when a configuration drops
+  # all custom systems.
   customSystemsPath =
-    if cfg.customSystems == "" then "" else pkgs.writeText "emubox-es_systems.xml" cfg.customSystems;
+    if cfg.customSystems == [ ] then
+      ""
+    else
+      "${pkgs.writeText "emubox-es_systems.xml" ''
+        <?xml version="1.0"?>
+        <systemList>
+        ${lib.concatStringsSep "\n" cfg.customSystems}
+        </systemList>
+      ''}";
+  forbiddenCustomSystemsFragments = lib.filter (
+    fragment:
+    lib.any (pattern: builtins.length (builtins.split pattern fragment) > 1) [
+      "<[[:space:]]*/?[[:space:]]*systemList([[:space:]>])"
+      "<\\?[[:space:]]*xml([[:space:]?])"
+    ]
+  ) cfg.customSystems;
 
   # The session script. Runs as `player`. Normally it is the frontend's loop:
   # it relaunches ES-DE if it exits, and gives up at the greeter if it cannot
@@ -46,8 +55,10 @@ let
   # value, and a per-command prefix is exactly the shape in which prepare
   # would assert settings into a directory the frontend never reads.
   #
-  # cage and systemd are runtimeInputs, so the compositor and journal client
-  # are pinned to the exact store paths this module was built against.
+  # cage, systemd and coreutils are runtimeInputs, so the compositor, the
+  # journal client and the clock and file-time tools the restart mark is
+  # aged with are pinned to the exact store paths this module was built
+  # against.
   # emubox-prepare and es-de are deliberately not: they resolve from the
   # system path (they are in environment.systemPackages below), so that the
   # session and any outside caller - the test driver, an admin who reached
@@ -56,6 +67,7 @@ let
     name = "emubox-session";
     runtimeInputs = [
       pkgs.cage
+      pkgs.coreutils
       pkgs.systemd
     ];
     text = ''
@@ -176,6 +188,12 @@ let
         printf 'could not clear the desktop selection; starting the frontend instead\n' | systemd-cat -t emubox-session || true
       fi
 
+      restart_mark="''${XDG_RUNTIME_DIR:?}/emubox-frontend-restart"
+      # Seconds a restart request stays valid: a frontend that has not
+      # exited this long after the request is treated as having ignored it.
+      restart_lapse=15
+      rm -f "$restart_mark"
+
       while true; do
         # Not guarded, and what that does and does not cover is worth
         # stating exactly. prepare's recreate policy absorbs the runtime
@@ -195,6 +213,7 @@ let
         # log into is the right destination, because no relaunch of the same
         # call would do any better.
         emubox-prepare ${cfg.ownedValuesFile} "${customSystemsPath}"
+        ${cfg.preFrontendStep}
 
         # The loop needs the run's length, not its status, but the status is
         # captured rather than discarded with `|| true` so that `set -e` does
@@ -212,9 +231,21 @@ let
         rc=0
         cage -s -- es-de || rc=$?
         ran=$(( SECONDS - started ))
-        # TODO: emubox-leakcheck after each session.
-
-        if [ "$ran" -lt "$window" ]; then
+        # A Tools entry's request covers only the exit it asked for: a mark
+        # written more than the lapse before this exit has lapsed, because
+        # a frontend that ignored the signal and failed later must count.
+        # The mark's time is wall-clock, so a clock step can move it.
+        requested=false
+        if [ -e "$restart_mark" ]; then
+          marked=$(stat -c %Y "$restart_mark" 2>/dev/null || echo 0)
+          if [ $(( $(date +%s) - marked )) -le "$restart_lapse" ]; then
+            requested=true
+          fi
+          rm -f "$restart_mark"
+        fi
+        if [ "$requested" = true ]; then
+          crashes=0
+        elif [ "$ran" -lt "$window" ]; then
           crashes=$(( crashes + 1 ))
           echo "emubox-session: es-de exited with $rc after ''${ran}s (crash $crashes of 3)" >&2
           if [ "$crashes" -ge 3 ]; then
@@ -355,15 +386,26 @@ in
     };
 
     customSystems = lib.mkOption {
-      type = lib.types.str;
-      default = "";
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
       description = ''
-        The complete contents of an ES-DE custom `es_systems.xml`, the
-        `<systemList>` wrapper included: it is written verbatim and no
-        wrapper is added. Empty means no custom systems file exists, and a
-        stale one left by an earlier configuration is removed before the
-        frontend launches.
+        ES-DE `<system>` fragments contributed by modules. The kiosk wraps
+        them in one `<systemList>` document, preserving each fragment's text.
+        An empty list removes a stale custom systems file before launch.
       '';
+    };
+
+    customSystemsFile = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      internal = true;
+      description = "The rendered custom systems document's store path, or an empty string when no systems are contributed.";
+    };
+
+    preFrontendStep = lib.mkOption {
+      type = lib.types.lines;
+      default = "";
+      description = "Shell step text to run before each frontend launch; empty runs nothing.";
     };
 
     appdataDir = lib.mkOption {
@@ -610,7 +652,13 @@ in
   };
 
   config = {
+    emubox.kiosk.customSystemsFile = customSystemsPath;
+
     assertions = [
+      {
+        assertion = forbiddenCustomSystemsFragments == [ ];
+        message = "emubox.kiosk.customSystems accepts only <system> fragments, without a <systemList> wrapper or XML declaration";
+      }
       {
         assertion = ownedFileTierOverlaps == [ ];
         message = ''

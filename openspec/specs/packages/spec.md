@@ -43,7 +43,7 @@ FreeImage SHALL be the last derivation nixpkgs carried before removal, with its 
 
 #### Scenario: Insecure package is permitted deliberately
 - **WHEN** the host configuration or the standalone package is evaluated
-- **THEN** FreeImage builds only because the flake's nixpkgs configuration lists that exact package name as permitted, and the reason (only admin-supplied images are decoded; CI builds it whenever its inputs change) is recorded where the permission is granted
+- **THEN** FreeImage builds only because the flake's nixpkgs configuration lists that exact package name as permitted, and the accepted risk is recorded where the permission is granted: FreeImage decodes externally downloaded ScreenScraper artwork as well as locally supplied images and theme assets, including art fetched through the household entry; its known vulnerabilities remain accepted, and CI build checks do not establish that downloaded images are safe
 
 #### Scenario: Permission is what admits it
 - **WHEN** the package name is removed from the flake's permitted list and `nix build .#freeimage` runs

@@ -28,17 +28,22 @@ let
   pkgs = self.nixosConfigurations.emubox.pkgs;
   inherit (pkgs) lib;
 
-  # The document `modules/emulators` actually ships, read from
-  # the real host config rather than this file's own node - whose
-  # `emubox.kiosk.customSystems` below is `mkForce`d to a 10-line test
-  # document so the kiosk subtests can prove the custom-systems mechanism
-  # against something they control. That `mkForce` is exactly
-  # why nothing else in this file, or anywhere else, ever parsed the
-  # shipped 218-line document - the one `modules/emulators` actually
-  # contributes to a real box went unparsed by any check in this
-  # repository. `shippedCustomSystems` exists so the standalone check near
-  # the top of `testScript` below can do that, with no VM node needed.
-  shippedCustomSystems = self.nixosConfigurations.emubox.config.emubox.kiosk.customSystems;
+  # The `<system>` fragments the real host's modules contribute to
+  # `emubox.kiosk.customSystems` (`modules/emulators`' overrides and
+  # `modules/library`'s Tools system), read from the real host config and
+  # wrapped in a `<systemList>` here, rather than from this file's own
+  # node - whose `emubox.kiosk.customSystems` below is `mkForce`d to a
+  # one-element list holding a single test `<system>` fragment so the kiosk
+  # subtests can prove the custom-systems mechanism against something they
+  # control. That `mkForce` is why this node never parses the shipped
+  # fragments. `shippedCustomSystems` exists so the standalone check near
+  # the top of `testScript` below can, with no VM node needed.
+  shippedCustomSystems = ''
+    <?xml version="1.0"?>
+    <systemList>
+    ${lib.concatStringsSep "\n" self.nixosConfigurations.emubox.config.emubox.kiosk.customSystems}
+    </systemList>
+  '';
 
   # The single source for every plaintext test value (tests/values.nix's own
   # header); `raUsername`/`raPassword` are the mock RetroAchievements
@@ -545,17 +550,13 @@ assert lib.assertMsg
       # default would pass whether or not the option is wired to anything.
       emubox.kiosk.passkey = "ablrablrud";
 
-      # A complete es_systems.xml document, <systemList> wrapper included,
-      # because the module writes the option verbatim and adds no wrapper.
-      #
       # mkForce, load-bearing: `modules/emulators` contributes its own
       # (non-empty) definition of this same option, so two plain definitions would conflict and the kiosk
       # check would stop evaluating. This node deliberately proves the
-      # custom-systems mechanism against a document it controls, not against
+      # custom-systems mechanism against a fragment it controls, not against
       # the shipped override list.
-      emubox.kiosk.customSystems = lib.mkForce ''
-        <?xml version="1.0"?>
-        <systemList>
+      emubox.kiosk.customSystems = lib.mkForce [
+        ''
           <system>
             <name>emuboxtest</name>
             <fullname>emubox test system</fullname>
@@ -565,8 +566,8 @@ assert lib.assertMsg
             <platform>test</platform>
             <theme>emuboxtest</theme>
           </system>
-        </systemList>
-      '';
+        ''
+      ];
 
       # Prepare's login2 call is pointed at the mock server
       # above instead of the real service, with no patching. The service
@@ -599,6 +600,7 @@ assert lib.assertMsg
         ownedValuesFile
         passkey
         customSystems
+        customSystemsFile
         ;
       inherit (nodes.machine.emubox.retroachievements) apiUrl;
       inherit (nodes.machine.users.users.player) home;
@@ -608,16 +610,12 @@ assert lib.assertMsg
       saveBindMappingsJson = builtins.toJSON saveBindMappings;
       py = builtins.toJSON;
 
-      # The store path `modules/kiosk`'s own `customSystemsPath` computes
-      # internally for this exact node (same `writeText` name, same
-      # content) - recomputed here rather than exposed as a new option,
-      # since this is the only place outside that module that ever needs a
-      # custom-systems argument for a manual `emubox-prepare` invocation,
-      # and it has to be the real one: passing "" here instead would repeat
-      # the existing "empty definition removes the file" subtest by
-      # accident, which is not what any of the group 5 subtests below are
-      # about.
-      customSystemsPath = pkgs.writeText "emubox-es_systems.xml" customSystems;
+      customSystemsDocument = ''
+        <?xml version="1.0"?>
+        <systemList>
+        ${lib.concatStringsSep "\n" customSystems}
+        </systemList>
+      '';
       bindings = import ./lib/controller-bindings.nix;
     in
     ''
@@ -636,7 +634,7 @@ assert lib.assertMsg
       OWNED_VALUES = ${py ownedValuesFile}
       SETTINGS = f"{APPDATA}/settings/es_settings.xml"
       CUSTOM_SYSTEMS = f"{APPDATA}/custom_systems/es_systems.xml"
-      CUSTOM_SYSTEMS_PATH = ${py customSystemsPath}
+      CUSTOM_SYSTEMS_PATH = ${py customSystemsFile}
       PLAYER_HOME = ${py home}
 
       RA_API_URL = ${py apiUrl}
@@ -644,9 +642,9 @@ assert lib.assertMsg
       RA_PASSWORD = ${py values.raPassword}
       MOCK_TOKEN = ${py mockToken}
 
-      # The document `modules/emulators` actually ships, distinct from this
-      # node's own `emubox.kiosk.customSystems` (below,
-      # `mkForce`d to a 10-line test document) - see `shippedCustomSystems`'s
+      # The real host's custom-system fragments wrapped in one list,
+      # distinct from this node's own `emubox.kiosk.customSystems` (below, `mkForce`d to a
+      # one-element list holding a single test fragment) - see `shippedCustomSystems`'s
       # own comment at the top of this file for why the two have to differ.
       SHIPPED_CUSTOM_SYSTEMS = ${py shippedCustomSystems}
 
@@ -814,16 +812,15 @@ assert lib.assertMsg
               if rc == 0:
                   assert RA_PASSWORD not in out, f"{path} contains the RA password"
 
-      # --- emulators: the shipped custom-systems document parses ------------
+      # --- emulators: the shipped custom-system fragments parse -------------
       #
       # No node, no boot: this runs on the driver host, before
       # `machine.wait_for_unit` below ever touches the VM, because the
       # `mkForce` on this node's own `emubox.kiosk.customSystems` (further
       # down this file) is deliberate for what the kiosk subtests prove, and
-      # that leaves the 218-line document `modules/emulators` actually
-      # contributes to a real box unparsed by anything else in this
-      # repository. A malformed `<system>` block in it would otherwise
-      # surface only as a file ES-DE silently ignores on hardware.
+      # that leaves the fragment list the real host's modules contribute
+      # unparsed by this node. A malformed `<system>` fragment would
+      # otherwise surface only as a file ES-DE silently ignores on hardware.
       with subtest("The shipped custom-systems document is well-formed and PS1 offers DuckStation first"):
           root = ET.fromstring(SHIPPED_CUSTOM_SYSTEMS)
           assert root.tag == "systemList", root.tag
@@ -1345,7 +1342,7 @@ assert lib.assertMsg
       # --- kiosk: custom systems, both branches -----------------------------
 
       with subtest("The custom systems file holds exactly the definition"):
-          assert machine.succeed(f"cat {CUSTOM_SYSTEMS}") == ${py customSystems}
+          assert machine.succeed(f"cat {CUSTOM_SYSTEMS}") == ${py customSystemsDocument}
 
       with subtest("An empty definition removes the file"):
           # Before any kill: a later loop iteration re-runs prepare with the

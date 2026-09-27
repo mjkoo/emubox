@@ -28,10 +28,15 @@ flake-check:
 # Evaluate the host closure and the x86_64-linux checks without building (works on macOS)
 eval:
     nix eval --raw .#nixosConfigurations.{{host}}.config.system.build.toplevel.drvPath
+    nix eval --raw .#checks.x86_64-linux.custom-systems.drvPath
     nix eval --raw .#checks.x86_64-linux.vm.drvPath
     nix eval --raw .#checks.x86_64-linux.kiosk.drvPath
     nix eval --raw .#checks.x86_64-linux.mode.drvPath
+    nix eval --raw .#checks.x86_64-linux.library-resources.drvPath
+    nix eval --raw .#checks.x86_64-linux.library-source-contracts.drvPath
+    nix eval --raw .#checks.x86_64-linux.library.drvPath
     nix eval --raw .#checks.x86_64-linux.controllers.drvPath
+    nix eval --raw .#checks.x86_64-linux.session-restarts.drvPath
     nix eval --raw .#checks.x86_64-linux.session.drvPath
     nix eval --raw .#checks.x86_64-linux.retroarch-settings.drvPath
     nix eval --raw .#checks.x86_64-linux.closure-no-secrets.drvPath
@@ -51,6 +56,10 @@ kiosk-test:
 # Build and run the mode-switch VM test (x86_64-linux builder with KVM)
 mode-test:
     nix build .#checks.x86_64-linux.mode --no-link
+
+# Build and run the library VM test (x86_64-linux builder with KVM)
+library-test:
+    nix build .#checks.x86_64-linux.library --no-link
 
 # Build and run the controllers VM test (x86_64-linux builder with KVM)
 controllers-test:
@@ -92,9 +101,11 @@ lint-actions:
 # check, evaluation) plus the workflow lint
 check-all: fmt-check flake-check eval lint-actions install-guard-test
 
-# Prove optional off-site credential placeholders are accepted only while the
-# off-site service is disabled. Kept in the local check gate with the other
-# non-KVM shell behavior.
+# Prove the install placeholder guard: optional off-site credential
+# placeholders are accepted only while the off-site service is disabled,
+# unresolved scraping keys are always refused, and a bad argument gets the
+# usage message. Kept in the local check gate with the other non-KVM shell
+# behavior.
 install-guard-test:
     bash tests/test-install-placeholder-guard.sh
 
@@ -142,9 +153,14 @@ install target *args:
     # Refuse to install placeholder secrets. Decrypting into a variable
     # first makes a failed decrypt a loud failure, not a skipped check.
     plain="$(SOPS_AGE_KEY_FILE={{quote(age_key)}} sops decrypt secrets/secrets.yaml)"
-    backup_enabled="$(nix eval --raw .#nixosConfigurations.{{host}}.config.emubox.backups.enable)"
-    if ! printf '%s' "$plain" | bash scripts/emubox-install-placeholder-guard "$backup_enabled"; then
+    backup_enabled="$(nix eval --json .#nixosConfigurations.{{host}}.config.emubox.backups.enable)"
+    guard=0
+    printf '%s' "$plain" | bash scripts/emubox-install-placeholder-guard "$backup_enabled" || guard=$?
+    if [ "$guard" -eq 1 ]; then
         echo "secrets/secrets.yaml still holds placeholders; run: just secrets-edit" >&2
+        exit 1
+    elif [ "$guard" -ne 0 ]; then
+        echo "emubox.backups.enable evaluated to '$backup_enabled', not true or false" >&2
         exit 1
     fi
     staging="$(mktemp -d)"
